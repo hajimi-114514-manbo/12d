@@ -1,0 +1,160 @@
+{
+  "width": 1024,
+  "height": 1024,
+  "fps": 30,
+  "nodes": [
+    {
+      "name": "body",
+      "parent": "root",
+      "pivot": [
+        587.5,
+        1023.0
+      ],
+      "tags": [
+        "Body",
+        "Neck"
+      ],
+      "layers": [
+        "neck",
+        "topwear"
+      ]
+    },
+    {
+      "name": "brow_left",
+      "parent": "head",
+      "pivot": [
+        518.5,
+        276.5
+      ],
+      "tags": [
+        "+Left Eyebrow"
+      ],
+      "layers": [
+        "eyebrow-l"
+      ]
+    },
+    {
+      "name": "brow_right",
+      "parent": "head",
+      "pivot": [
+        396.0,
+        232.0
+      ],
+      "tags": [
+        "+Right Eyebrow"
+      ],
+      "layers": [
+        "eyebrow-r"
+      ]
+    },
+    {
+      "name": "eye_left",
+      "parent": "head",
+      "pivot": [
+        526.0,
+        381.0
+      ],
+      "tags": [
+        "+Left Pupil",
+        "Left Eye"
+      ],
+      "layers": [
+        "eyewhite-l",
+        "irides-l"
+      ]
+    },
+    {
+      "name": "eye_right",
+      "parent": "head",
+      "pivot": [
+        397.5,
+        331.0
+      ],
+      "tags": [
+        "+Right Pupil",
+        "Right Eye"
+      ],
+      "layers": [
+        "eyewhite-r",
+        "irides-r"
+      ]
+    },
+    {
+      "name": "hair_back",
+      "parent": "head",
+      "pivot": [
+        521.0,
+        74.0
+      ],
+      "tags": [
+        "+Hair Back"
+      ],
+      "layers": [
+        "back hair"
+      ]
+    },
+    {
+      "name": "hair_front",
+      "parent": "head",
+      "pivot": [
+        521.0,
+        74.0
+      ],
+      "tags": [
+        "+Hair Front"
+      ],
+      "layers": [
+        "front hair"
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "body",
+      "pivot": [
+        525.0,
+        413.0
+      ],
+      "tags": [
+        "Head",
+        "Head_ears",
+        "Mouth",
+        "Nose"
+      ],
+      "layers": [
+        "ears-r",
+        "face",
+        "mouth",
+        "ears-l",
+        "nose"
+      ]
+    },
+    {
+      "name": "lid_left",
+      "parent": "head",
+      "pivot": [
+        528.0,
+        388.0
+      ],
+      "tags": [
+        "Left Eyelid Top"
+      ],
+      "layers": [
+        "eyelash-l"
+      ]
+    },
+    {
+      "name": "lid_right",
+      "parent": "head",
+      "pivot": [
+        390.5,
+        331.0
+      ],
+      "tags": [
+        "Right Eyelid Top"
+      ],
+      "layers": [
+        "eyelash-r"
+      ]
+    }
+  ]
+}

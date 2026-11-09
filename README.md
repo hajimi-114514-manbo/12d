@@ -1,1 +1,221 @@
-# 12d
+# 木偶工作室（Muppet Studio）
+
+> **伪L2D 骨架工作室 V2.0** —— 把动漫立绘自动拆成分层骨架并做动画的 PySide6 桌面应用。
+>
+> 语义规范采用 **Adobe Character Animator（CA）官方图层命名规范**，所以导出的 PSD 既能被
+> Character Animator 全自动绑定，也能被 Live2D Cubism Editor 自动转成部件。
+
+---
+
+## 启动
+
+双击 **`木偶工作室.exe`**（无黑窗，异常时弹窗并写 launcher.log）
+
+也可命令行直接跑：
+
+或命令行（工作目录设为 `D:\work\puppet\muppet_studio`）：
+
+```
+D:\Python312\python.exe l2d_rig_qt.py
+```
+
+- 启动后为**空白工作台**（不自动载入工程）；可从菜单「最近打开」、把图片拖入画布拆分，或载入应用自带的示例工程 `示例工程\`
+- 界面为深色主题，左侧有「工作台」导航栏（可用标题栏最左的折叠按钮收起/展开）
+- 需要 **NVIDIA GPU**：本地拆分引擎走 CUDA，显存峰值约 **3.3GB**（nf4 量化）
+
+---
+
+## 目录结构
+
+```
+D:\work\puppet\muppet_studio\
+├─ l2d_rig_qt.py          主程序（PySide6 + qfluentwidgets 界面 / 菜单 / 导出）
+├─ l2d_rig_core.py        骨架引擎（CA 标签映射 / 支点 / 渲染 / PSD·AE·JSON 导出）
+├─ seethrough_local.py    本地拆分引擎（进程内直接跑，无需 ComfyUI）
+├─ decompose.py           ComfyUI 拆分引擎（HTTP 提交，作为回退）
+├─ see-through\           SeeThrough 核心库（随应用自包含：common/ annotators/ inference/）
+├─ models\                本地 nf4 模型目录（5.3GB，随应用自包含）
+├─ 示例工程\               自带示例（17 层 + layers_meta.json，可作演示/试用）
+├─ laowu_icon.png / .ico  应用图标
+├─ 木偶工作室.exe          启动器（配 launcher.ini，无控制台窗口）
+├─ launcher.ini           启动器配置（python/script 两行）
+└─ README.md              本文档
+```
+
+### 模型目录
+
+本地引擎 `seethrough_local.py` 按以下顺序找模型：
+
+1. **优先**：自带 `models\`（本目录，已就位）
+2. **否则**：回退到相对位置 `../l2d_rig/models`（兼容旧部署）
+
+用到的两个模型：
+
+- `24yearsold\seethroughv0.0.2_layerdiff3d_nf4`（分层扩散模型）
+- `24yearsold\seethroughv0.0.1_marigold_nf4`（深度估计模型）
+
+---
+
+## 界面操作
+
+### 标题栏
+
+从左到右：
+
+- **折叠按钮**（布局图标）：显示/隐藏最左侧的「工作台」导航栏
+- **菜单**下拉：撤销 / 重做 / 新建 / 打开工程 / 最近打开（子菜单，最多 5 个）/ 导入 PSD / 保存 / 另存为
+  - **打开工程**：选择含 `layers_meta.json` 的文件夹载入（如自带 `示例工程\`，或拆分输出目录）
+  - **最近打开**：hover 向右展开最近 5 个工程，点击直接载入；目录失效自动过滤
+- **导出**下拉：导出 PSD / 导出 AE 脚本 / 导出 JSON / 导出 MP4 / 导出 GIF
+
+### 三列可拖宽
+
+左中右三列用分隔条隔开，**拖动分隔条即可改变列宽**（外层导航栏与内容区也可拖）。
+
+### 左列：图层列表
+
+- 从上到下 = 从最前到最后（顶层在最上面）
+- **拖动图层可重排叠放顺序**
+- **双击图层切换显隐**（● 显示 / ○ 隐藏）
+- 底部按钮 **「显示/隐藏全部」** 一键切换所有图层
+
+### 中列：画布 + 播放
+
+- **预览画布**：红圈是支点，黄字是节点名，**按住支点直接拖动即可调位**
+- 空白时画布上有提示文字：把图片拖进来开始，或点「拆分图片」
+- **播放 / 暂停**：内置动画（呼吸、头部摆动、头发摆动、眨眼）
+- **时间滑块**：拖动可逐帧预览（播放时自动同步）
+- **拆分图片**（主按钮）：弹出文件选择框选图开始拆分
+- **本地引擎**复选框（默认勾选）：勾选 = 用进程内本地引擎；取消勾选 = 直接走 ComfyUI
+- 下方进度文字：显示拆分 / 导出进度
+
+### 右列：骨架节点表
+
+- 列：节点 / 父 / 支点 / 层数
+- 双击「支点」单元格可微调该支点
+- 底部 **「保存当前帧」** 把当前画面存为 `preview_tXX.png`
+
+### 拖图入画布
+
+直接把图片文件拖进预览画布即可触发拆分（支持 `png / jpg / jpeg / webp / bmp / tif / tiff`）。
+
+---
+
+## 双引擎拆分
+
+界面提供两种 SeeThrough 拆分引擎，**输出格式完全相同**
+（`layers_meta.json` + `layer_<名>.png` + `layer_<名>_depth.png` + `seethrough_preview.png`）。
+
+### 本地引擎（默认，勾选「本地引擎」）
+
+- 进程内直接调用随附的 `see-through\` 核心库，**不需要 ComfyUI**
+- 模型用 nf4 量化权重，**显存峰值约 3.3GB**，单张约 **14 分钟**
+- **失败自动回退**：本地引擎报错时会自动改用 ComfyUI 引擎重试
+
+### ComfyUI 引擎（取消勾选「本地引擎」）
+
+- 通过 HTTP 提交到 `http://127.0.0.1:8188` 的 ComfyUI
+- 启动时若 ComfyUI 不在跑，会自动拉起（约 **50 秒**就绪），随后提交工作流并轮询
+- 单张约 **15 分钟**（1024 分辨率）
+- 只用标准库 + numpy + Pillow，无额外 Python 依赖，但需要 ComfyUI 环境
+
+### 拆分成功后
+
+- 输出目录：`D:\视频\26114\seethrough_out\<图片名>\`
+- 自动载入新图层并建骨架（图层列表、节点表、预览同步刷新），弹窗提示成功
+- 拆分在后台线程执行，界面不卡死；任务进行中「拆分图片」按钮自动禁用，防重复触发
+- 失败时弹窗显示原因
+
+---
+
+## 菜单功能
+
+### 撤销 / 重做（Ctrl+Z / Ctrl+Y）
+
+快照式历史栈（最多 60 步），记录图层顺序、叠放顺序和各节点支点。
+
+### 新建
+
+清空当前工作台，回到空白状态（拖入图片重新开始）。
+
+### 导入 PSD
+
+支持 `*.psd / *.psb`：
+
+- **CA 标签名和 SeeThrough 原始层名都认**：先过 `CA_TAG` 归一化，再查 `TAG_DEPTH`；配饰类（handwear / eyewear / wings…）走 `RAW_DEPTH`
+- **空层自动剔除**：不含有效像素（alpha 阈值内的像素少于 64 个）的层直接跳过
+- **叠放顺序按语义深度表自动排**：不依赖 PSD 图层序，避免顺序错乱
+- 递归进入 PSD 分组（SeeThrough 导出的 Head / Mouth 组），跳过不可见图层
+- 导入后自动建骨架并载入
+
+### 保存 / 另存为
+
+- **保存**：写 `rig_project.json`（宽高、draw_order、节点、支点）并把各图层 PNG 复制到当前工程目录
+- **另存为**：选择目录后同样写出
+
+---
+
+## 导出格式
+
+| 格式 | 产物 | 说明 |
+|---|---|---|
+| PSD | `rig_character.psd` | 按 CA 分组结构导出（`Body` 组 / `Head` 组 / `Head→Mouth` 子组），标签含 `+` 前缀（=可独立形变）。可丢进 Character Animator 全自动绑定，或 Live2D Cubism 自动转部件 |
+| AE 脚本 | `rig_build.jsx` | 生成 AE 工程：节点预合成 + 父子嵌套 + 动画表达式 |
+| JSON | `rig_spec.json` | 自研骨架描述，供任意播放器读取 |
+| MP4 | `rig_anim.mp4` | 10 秒 / 30fps 动画视频（cv2 写 mp4v；写不了时回退到 Vocal2Midi 自带的 `ffmpeg.exe` 合成） |
+| GIF | `rig_anim.gif` | 15fps 动图，半分辨率直出 + 全局调色板（体积更小） |
+
+导出弹窗默认保存在当前工程目录。MP4 / GIF 在后台线程渲染，进度实时显示，不阻塞界面。
+
+---
+
+## 已知限制
+
+1. **SeeThrough 是生成式分解**：拆出的层拼回后与原画在细节上有差异（发丝、边缘等），不是无损切分
+2. **输入图背景要干净**：SeeThrough 会把复杂背景误当部件，白底 / 纯色底效果最好；复杂背景容易拆出碎片层
+3. **静态平面层，无网格形变**：每层只能旋转 / 位移 / 缩放，做不了 mesh 形变（SeeThrough 不输出网格）
+4. **眨眼是压扁近似**：眼睛/眼睑通过纵向缩放（支点在框底）模拟闭合，不是逐像素的眼皮形变
+
+---
+
+## 依赖
+
+全部已安装在 `D:\Python312`。
+
+### 界面
+
+| 包名 | 用途 |
+|---|---|
+| `PySide6` | Qt6 图形框架 |
+| `PySide6-Fluent-Widgets`（import `qfluentwidgets`） | fluent 风格控件 |
+| `PySideSix-Frameless-Window` | 无边框窗口 |
+
+### 骨架引擎（l2d_rig_core）
+
+| 包名 | 用途 |
+|---|---|
+| `numpy` | 图像/数组运算 |
+| `scipy` | 距离变换等 |
+| `opencv-python`（`cv2`） | 图像处理、MP4 编码 |
+| `pillow` | 图像读写、GIF 导出 |
+| `psd-tools` | PSD 导入/导出 |
+
+### 本地拆分引擎（seethrough_local）
+
+| 包名 | 用途 |
+|---|---|
+| `torch`（CUDA） | 深度学习后端 |
+| `diffusers` | 扩散模型 pipeline |
+| `peft` / `accelerate` | 模型加载/显存优化 |
+| `bitsandbytes` | nf4 量化 |
+| `scikit-learn` | 后处理聚类 |
+
+### ComfyUI 引擎（decompose.py）
+
+无额外 Python 依赖（仅标准库 + numpy + Pillow），但需要本机 ComfyUI 在 `127.0.0.1:8188` 运行。
+
+### 随附核心库
+
+`see-through\` 是完整的 SeeThrough 仓库，其 `requirements.txt` 另列了 `einops` / `transformers` /
+`huggingface-hub` / `safetensors` / `matplotlib` 等；本机已全部安装。`annotators\` 用到的
+`timm` / `pycocotools` 在本应用的拆分路径上不加载，`pycocotools` 缺失时会自动 mock，不是必需依赖。

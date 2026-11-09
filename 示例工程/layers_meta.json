@@ -1,0 +1,178 @@
+{
+  "prefix": "anon_seethrough",
+  "timestamp": "20261105_001901_489d00e1",
+  "layers": [
+    {
+      "name": "back hair",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_back hair.png",
+      "left": 102,
+      "top": 0,
+      "right": 875,
+      "bottom": 1024,
+      "depth_median": 0.890625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_back hair_depth.png"
+    },
+    {
+      "name": "neck",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_neck.png",
+      "left": 448,
+      "top": 412,
+      "right": 629,
+      "bottom": 658,
+      "depth_median": 0.63702392578125,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_neck_depth.png"
+    },
+    {
+      "name": "topwear",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_topwear.png",
+      "left": 307,
+      "top": 570,
+      "right": 870,
+      "bottom": 1024,
+      "depth_median": 0.59375,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_topwear_depth.png"
+    },
+    {
+      "name": "ears-r",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_ears-r.png",
+      "left": 362,
+      "top": 302,
+      "right": 444,
+      "bottom": 428,
+      "depth_median": 0.54296875,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_ears-r_depth.png"
+    },
+    {
+      "name": "face",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_face.png",
+      "left": 348,
+      "top": 73,
+      "right": 711,
+      "bottom": 508,
+      "depth_median": 0.53515625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_face_depth.png"
+    },
+    {
+      "name": "mouth",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_mouth.png",
+      "left": 377,
+      "top": 417,
+      "right": 426,
+      "bottom": 444,
+      "depth_median": 0.53415625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_mouth_depth.png"
+    },
+    {
+      "name": "ears-l",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_ears-l.png",
+      "left": 579,
+      "top": 405,
+      "right": 686,
+      "bottom": 491,
+      "depth_median": 0.52734375,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_ears-l_depth.png"
+    },
+    {
+      "name": "nose",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_nose.png",
+      "left": 372,
+      "top": 332,
+      "right": 434,
+      "bottom": 383,
+      "depth_median": 0.465057373046875,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_nose_depth.png"
+    },
+    {
+      "name": "eyebrow-r",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_eyebrow-r.png",
+      "left": 372,
+      "top": 222,
+      "right": 416,
+      "bottom": 245,
+      "depth_median": 0.4288482666015625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_eyebrow-r_depth.png"
+    },
+    {
+      "name": "eyebrow-l",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_eyebrow-l.png",
+      "left": 474,
+      "top": 257,
+      "right": 570,
+      "bottom": 302,
+      "depth_median": 0.3775634765625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_eyebrow-l_depth.png"
+    },
+    {
+      "name": "eyewhite-r",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_eyewhite-r.png",
+      "left": 377,
+      "top": 270,
+      "right": 418,
+      "bottom": 333,
+      "depth_median": 0.337799072265625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_eyewhite-r_depth.png"
+    },
+    {
+      "name": "eyewhite-l",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_eyewhite-l.png",
+      "left": 492,
+      "top": 317,
+      "right": 560,
+      "bottom": 383,
+      "depth_median": 0.337799072265625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_eyewhite-l_depth.png"
+    },
+    {
+      "name": "irides-r",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_irides-r.png",
+      "left": 389,
+      "top": 276,
+      "right": 419,
+      "bottom": 333,
+      "depth_median": 0.317291259765625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_irides-r_depth.png"
+    },
+    {
+      "name": "irides-l",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_irides-l.png",
+      "left": 505,
+      "top": 320,
+      "right": 561,
+      "bottom": 383,
+      "depth_median": 0.3010406494140625,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_irides-l_depth.png"
+    },
+    {
+      "name": "eyelash-r",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_eyelash-r.png",
+      "left": 362,
+      "top": 257,
+      "right": 419,
+      "bottom": 333,
+      "depth_median": 0.2884368896484375,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_eyelash-r_depth.png"
+    },
+    {
+      "name": "eyelash-l",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_eyelash-l.png",
+      "left": 476,
+      "top": 294,
+      "right": 581,
+      "bottom": 390,
+      "depth_median": 0.2412872314453125,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_eyelash-l_depth.png"
+    },
+    {
+      "name": "front hair",
+      "filename": "anon_seethrough_20261105_001901_489d00e1_front hair.png",
+      "left": 239,
+      "top": 6,
+      "right": 876,
+      "bottom": 712,
+      "depth_median": 0.1424560546875,
+      "depth_filename": "anon_seethrough_20261105_001901_489d00e1_front hair_depth.png"
+    }
+  ],
+  "width": 1024,
+  "height": 1024
+}
