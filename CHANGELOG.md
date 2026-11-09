@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-11-10（凌晨）应用内集成 ComfyUI 路线（A 卡一键拆图）
+
+- **动机**：A 卡无 CUDA，进程内 nf4 引擎（bitsandbytes 专属）跑不了。新增 `comfy_decompose.py`，通过本机 ComfyUI 的 HTTP API 提交 See-through 插件工作流，A 卡用户应用内一键拆图，体验对齐 N 卡。
+- **引擎自动选路** `l2d_rig_qt.py _engine_mode()`：有 CUDA→local（进程内 nf4，最快）；无 CUDA→comfy（`quant_mode=none` 即 bf16，`auto_download=True`）。环境变量 `MUPPET_ENGINE=local|comfy` 可强制（N 卡想跑全精度更高画质时用 comfy）；`COMFY_API` 可指定服务地址（默认试 `127.0.0.1` 的 8188/8000/8189）。
+- **关键事实（别再搞错）**：插件 v0.2.2 的 `SeeThrough_SavePSD` 节点**不产出 PSD**，它写分层 PNG + `*_layers.json`，PSD 是插件前端 "Download PSD" 按钮在浏览器里用 ag-psd 合成的。我们要的正是 PNG+json，与 `load_layers` 契约一致，所以根本不需要 PSD 中间格式。安装器旧指引里"工作流末尾导出分层 PSD"那句是错的，已改。
+- **收集方案（零目录依赖）**：`/view?filename=seethrough_psd_info.log&type=output` 拿到本次 json 名 → 再 `/view` 拿 json → 逐层 `/view` 取 PNG。好处是**不需要知道 ComfyUI 装在哪**，官方绿色版/Desktop/自装版通吃；上传用 `/upload/image`，同理不猜 input 目录。
+- **归属双校验（踩坑）**：`/history` 拿不到 SavePSD 的 json 路径——实测本次成功 prompt 的 outputs 是空 `{}`（ComfyUI 只把注册了 ui 的图像类输出写进 history）。而插件写的 `output/seethrough_psd_info.log` 是"最后一次跑"的状态 → `comfy_decompose.collect()` 已加**归属双校验**：json 里的 `prefix` 必须等于本次前缀、`timestamp` 不得早于提交时刻（留 120s 余量），任一不符就放弃收集并提示"ComfyUI 可能被别的任务同时使用"，绝不静默导入别人的分层。实测三分支：正确前缀收 29 层 / 错前缀拒绝 / 未来 since 判陈旧拒绝，全对。
+- **节点签名 ground truth（实测自本机 `custom_nodes/ComfyUI-See-through/nodes.py` v0.2.2，非网查）**：`QUANT_MODES=["none","nf4"]` 默认 none；`DEFAULT_LAYERDIFF_REPO=layerdifforg/seethroughv0.0.2_layerdiff3d`、`DEFAULT_DEPTH_REPO=layerdifforg/seethroughv0.0.1_marigold`（**注意深度模型默认 repo 是 layerdifforg 不是 24yearsold**）；nf4 版是 `24yearsold/seethroughv0.0.{1_marigold,2_layerdiff3d}_nf4`。`_resolve_model_path` 支持 "org/repo" 写法按 basename 回退到本地目录。
+- **端到端实测数据（N 卡机器用 junction 复用应用已下好的 nf4 模型，零下载）**：推理 733s、产出 29 层 + 58 张 PNG（含 depth）、`load_layers` 读出 29 层 1024×1024、`build_rig` 得 11 个骨架节点、渲染非空 0.230。进度估算用的 700s 线性模型正好贴合。
+- **零下载测试法（N 卡机器验证 comfy 链路用）**：`New-Item -ItemType Junction D:\ComfyUI\main\models\SeeThrough -> D:\work\puppet\muppet_studio\models\24yearsold`，插件即可复用应用已下好的 nf4 模型（它们是标准 diffusers 目录，含 model_index.json），不必下 12.5GB。ComfyUI 侧解析模型目录走 `folder_paths.get_folder_paths("SeeThrough")`。
+- **体量事实**：SeeThrough 全精度模型 layerdiff3d 9.46GB + marigold 3.05GB = 12.5GB（是 nf4 5.31GB 的 2.4 倍），A 卡首跑由插件 `auto_download` 自动拉，可中断重跑续传。
+- **顺带修的产品级 bug**：之前删"拆分图片"按钮后没留任何 UI 入口，导致应用**完全无法触发拆图（N 卡也受影响）**。已恢复为菜单「拆分图片（SeeThrough）」，并加 `#pct=` 前缀日志支持估算进度条（comfy 路线无中间进度可查，按 700s 线性估）。
+- **打开工程/load_dir 兼容 ComfyUI 输出目录**：`find_meta()` 优先 `layers_meta.json`，否则取最新 `*_layers.json`，A 卡用户也可自己在 ComfyUI 跑工作流、再用「打开工程」直接选那个输出目录。
+- **安装包侧决定**：保留「A 卡拆图支持」代下选项（ComfyUI 安装器 172MB + 插件 zip + 生成的 `A卡拆图指引.txt`），但**测试端不跑这条下载链路**（体积大、依赖外网镜像，用户也可自行下载，链接都在指引里）。GPU 自动选路线逻辑不变，N 卡用户流程零影响（Setup 49.28MB）。
+
 ## 2026-11-09（深夜4）AMD 卡支持 + 安装前 GPU 自动选路线
 
 - **目标**：`"在安装前监测是 a 卡还是 n 卡,根据监测结果自动选择路线；改 a 卡代码影响 n 卡吗"`。

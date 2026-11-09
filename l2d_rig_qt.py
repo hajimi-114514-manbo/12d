@@ -448,6 +448,7 @@ def save_recent(items):
 # ---------------- 拆分进度锚点（日志文本 -> 百分比，单调不回退） ----------------
 # 本地引擎 verbose 消息对照表；未命中的消息保持上次值。
 PROGRESS_ANCHORS = [
+    # --- 本地引擎（进程内 nf4）---
     ("加载 LayerDiff 模型", 3),
     ("加载 Marigold 深度模型", 8),
     ("分层推理开始", 10),
@@ -458,6 +459,13 @@ PROGRESS_ANCHORS = [
     ("后处理：拆分与聚类", 85),
     ("后处理完成", 88),
     ("已保存", 95),
+    # --- ComfyUI 路线（A 卡/ROCm）---
+    ("已连接 ComfyUI", 5),
+    ("上传原图", 8),
+    ("提交工作流", 12),
+    ("已提交 prompt_id", 15),
+    ("状态=", 85),
+    ("收集 ", 95),
 ]
 
 
@@ -483,7 +491,32 @@ def _cuda_available():
     return _CUDA_CACHE[0]
 
 
+def find_meta(d):
+    """工程元数据路径：优先 layers_meta.json；
+    兼容在 ComfyUI 里手动跑工作流产出的 *_layers.json（A 卡备用路线，取最新一份）。"""
+    m = os.path.join(d, "layers_meta.json")
+    if os.path.isfile(m):
+        return m
+    try:
+        cands = [os.path.join(d, f) for f in os.listdir(d)
+                 if f.endswith("_layers.json")]
+    except Exception:
+        return None
+    return max(cands, key=os.path.getmtime) if cands else None
+
+
 # ---------------- 后台拆分线程（照 fluent_worker 模式） ----------------
+def _engine_mode():
+    """选拆分引擎：
+       local = 进程内 SeeThrough（nf4，需 CUDA，N 卡默认，最快）
+       comfy = 本机 ComfyUI + See-through 插件（bf16，A 卡/ROCm 或无 CUDA 时）
+    环境变量 MUPPET_ENGINE=local|comfy 可强制（N 卡想跑全精度质量更高时用 comfy）。"""
+    force = os.environ.get("MUPPET_ENGINE", "").strip().lower()
+    if force in ("local", "comfy"):
+        return force
+    return "local" if _cuda_available() else "comfy"
+
+
 class DecomposeWorker(QThread):
     log_signal = Signal(str)
     done_signal = Signal(object, str)     # meta or None, out_dir
@@ -494,12 +527,28 @@ class DecomposeWorker(QThread):
         self.out_dir = out_dir
 
     def run(self):
-        # ComfyUI 路径已下线：只走进程内 SeeThrough 本地引擎（模型在 models\）
+        mode = _engine_mode()
         try:
-            import seethrough_local as SL
-            self.log_signal.emit("本地引擎（进程内 SeeThrough）…")
-            meta = SL.decompose(self.img_path, self.out_dir,
-                                verbose=self.log_signal.emit)
+            if mode == "local":
+                import seethrough_local as SL
+                self.log_signal.emit("引擎：本地进程内 SeeThrough（nf4）…")
+                meta = SL.decompose(self.img_path, self.out_dir,
+                                    verbose=self.log_signal.emit)
+            else:
+                import comfy_decompose as CD
+                self.log_signal.emit(
+                    "引擎：ComfyUI + See-through 插件（bf16，A 卡/ROCm 路线）…")
+
+                def prog(sec):
+                    # 无中间进度可查，按耗时线性估：700s 视作正常完成点
+                    pct = int(15 + min(sec, 700) / 700.0 * 65)
+                    self.log_signal.emit(
+                        "#pct=%d ComfyUI 推理中 %ds（A 卡首跑含模型下载会更久）" % (pct, sec))
+
+                meta = CD.decompose(self.img_path, self.out_dir, quant="none",
+                                    auto_download=True, prefix="muppet",
+                                    verbose=self.log_signal.emit,
+                                    on_progress=prog, timeout=3600)
             self.done_signal.emit(meta, self.out_dir)
         except Exception as e:
             self.log_signal.emit("异常: %s: %s" % (type(e).__name__, e))
@@ -726,9 +775,10 @@ class Workbench(QWidget):
 
     # ---------- 数据 ----------
     def load_dir(self, d, push=True):
-        m = os.path.join(d, "layers_meta.json")
-        if not os.path.exists(m):
-            InfoBar.error("找不到元数据", "目录里没有 layers_meta.json：%s" % d,
+        m = find_meta(d)
+        if not m:
+            InfoBar.error("找不到元数据",
+                          "目录里没有 layers_meta.json（或 ComfyUI 的 *_layers.json）：%s" % d,
                           parent=self, position=InfoBarPosition.TOP, duration=4000)
             return False
         try:
@@ -1105,8 +1155,9 @@ class Workbench(QWidget):
         d = QFileDialog.getExistingDirectory(self, "打开工程（选择含 layers_meta.json 的文件夹）", start)
         if not d:
             return
-        if not os.path.isfile(os.path.join(d, "layers_meta.json")):
-            InfoBar.error("不是工程目录", "所选文件夹里没有 layers_meta.json：\n%s" % d,
+        if not find_meta(d):
+            InfoBar.error("不是工程目录",
+                          "所选文件夹里没有 layers_meta.json（也没有 ComfyUI 的 *_layers.json）：\n%s" % d,
                           parent=self, position=InfoBarPosition.TOP, duration=5000)
             return
         if self.load_dir(d):
@@ -1311,15 +1362,13 @@ class Workbench(QWidget):
             InfoBar.error("文件不存在", img_path, parent=self,
                           position=InfoBarPosition.TOP, duration=3000)
             return
-        # 本地引擎依赖 bitsandbytes nf4（CUDA 专属）：无 N 卡时给出对症引导
-        if not _cuda_available():
-            InfoBar.warning("本地拆分引擎不可用（无 NVIDIA CUDA）",
-                            "A 卡/核显请走 ComfyUI + ROCm 路线：安装器勾选「AMD 显卡支持」"
-                            "会下好 ComfyUI 安装器、See-through 插件与中文说明；"
-                            "在 ComfyUI 拆分并导出 PSD 后，用菜单「打开工程」或「导入 PSD」继续编辑。"
-                            "应用内编辑/骨架/导出功能不受影响。",
-                            parent=self, position=InfoBarPosition.TOP, duration=10000)
-            return
+        # 无 CUDA 不再阻断：改走 ComfyUI 路线，只把前提条件讲清楚
+        if _engine_mode() == "comfy":
+            InfoBar.info("本机无 NVIDIA CUDA，走 ComfyUI 路线拆分",
+                         "前提：本机 ComfyUI 已启动且装了 See-through 插件"
+                         "（安装器勾选「A 卡拆图支持」可代下 ComfyUI 安装器与插件（也可自行下载））。"
+                         "推理用 bf16，首次运行插件会自动下载约 12.5GB 模型，耗时较长且可重跑续传。",
+                         parent=self, position=InfoBarPosition.TOP, duration=9000)
         self.busy = True
         self.prog.setText("准备中…")
         self._nav_pct = 0
@@ -1333,6 +1382,12 @@ class Workbench(QWidget):
     def _on_decompose_log(self, msg):
         msg = str(msg)
         self.prog.setText(msg[-120:])
+        if msg.startswith("#pct="):          # 引擎侧直接上报百分比（估算法）
+            try:
+                self.set_nav_progress(int(msg[5:].split()[0]))
+            except Exception:
+                pass
+            return
         pct = progress_for_msg(msg)
         if pct is not None:
             self.set_nav_progress(pct)   # 单调不回退在 set_nav_progress 里保证
