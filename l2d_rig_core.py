@@ -189,6 +189,70 @@ def load_layers(meta_path, img_dir):
     return out, W, H
 
 
+# ---------------- ① 启发式子拆分（单层按连通域再拆） ----------------
+def subsplit_layer(layer, min_area=400, dilate=3):
+    """把一个图层按其 alpha 连通域拆成多个子图层。
+
+    输入：load_layers 产出的层 dict（含 "img": uint8 HxWx4 裁剪 RGBA、
+          "bbox": (x0, y0, x1, y1)、"name"）。
+    输出：新层 dict 列表（与输入同构），或 [] 表示不可拆（连通域 <2 或全部太小）。
+
+    规则：
+      - 掩码 = img[:,:,3] > 16；先 cv2.dilate(dilate) 把邻近碎片粘起来再
+        connectedComponentsWithStats(connectivity=8)
+      - 面积 >= min_area 的连通域保留；<2 个则返回 []
+      - 每个子层：bbox = 该连通域（dilate 前）的 tight 外接框（相对全画布坐标，
+        由原 bbox 平移），img = 原 img 中该连通域像素（其余 alpha 置 0）裁到此框，
+        name = "%s-%d" % (原name, k)，k 从 1 按面积降序编号
+      - 子层继承原层的 tag/node/depth/path/desc 等其余键（dict 浅拷贝后覆盖 img/bbox/name）
+      - 不修改输入 layer（np.where 生成新数组，原 img 只读）
+    """
+    img = layer.get("img")
+    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4 or img.size == 0:
+        return []
+    h, w = img.shape[:2]
+    x0, y0 = int(layer["bbox"][0]), int(layer["bbox"][1])
+    mask = img[:, :, 3] > 16
+    if not mask.any():
+        return []
+    m = mask.astype(np.uint8)
+    if dilate and dilate > 1:
+        m = cv2.dilate(m, np.ones((dilate, dilate), np.uint8))
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    if n <= 1:
+        return []
+    keep = []
+    for i in range(1, n):
+        area = int(stats[i, cv2.CC_STAT_AREA])
+        if area >= min_area:
+            keep.append((area, i))
+    if len(keep) < 2:
+        return []
+    keep.sort(key=lambda t: -t[0])            # 面积降序，k 从 1 编号
+    base = {k: v for k, v in layer.items() if k != "img"}
+    out = []
+    for k, (area, i) in enumerate(keep, start=1):
+        # 取该连通域 **dilate 前** 的真实像素（dilation 只用来把邻近碎片粘成一个
+        # 连通域，最终像素/外接框都用原掩码，保证 bbox 紧凑）
+        comp = mask & (labels == i)
+        if not comp.any():
+            continue
+        ys, xs = np.where(comp)
+        cx0, cx1 = int(xs.min()), int(xs.max()) + 1
+        cy0, cy1 = int(ys.min()), int(ys.max()) + 1
+        # clamp 到裁剪图范围内且至少 1px
+        cx0 = max(0, min(w, cx0)); cx1 = max(cx0 + 1, min(w, cx1))
+        cy0 = max(0, min(h, cy0)); cy1 = max(cy0 + 1, min(h, cy1))
+        # 保留该域颜色，其余 alpha 置 0（np.where 生成新数组，不改原 img）
+        sub = np.where(comp[:, :, None], img, 0).astype(np.uint8)[cy0:cy1, cx0:cx1]
+        item = dict(base)
+        item["name"] = "%s-%d" % (layer["name"], k)
+        item["img"] = np.ascontiguousarray(sub)
+        item["bbox"] = (x0 + cx0, y0 + cy0, x0 + cx1, y0 + cy1)
+        out.append(item)
+    return out
+
+
 # ---------------- ② 支点自动定位 ----------------
 def _union_alpha(layers, W, H):
     """由裁剪层拼出该节点组的联合 alpha（全画布 float 0/1）"""
@@ -259,7 +323,7 @@ def build_rig(layers, W, H):
             "layers": [l["name"] for l in by_node[node]],
             "_alpha": _union_alpha(by_node[node], W, H),
         })
-    rig["_layers"] = layers
+    rig["_layers"] = list(layers)   # 必须拷贝：曾直接别名传入列表，UI 对 layers 双 append 即产生重复引用（曾踩）
     # 眨眼几何（实测：睫毛条底边贴着眼框底边，且条带比眼框高）：
     # eye 与 lid 都用"底边锚定纵向压扁"——支点在各自 bbox 底边，sc_y=s。
     # 闭眼瞬间睫毛条塌成下缘一条线（上眼睑滑到下睫毛线），同时眼白瞳孔
@@ -386,13 +450,27 @@ def _lite_rig(rig, sc):
     return lite
 
 
-def render_frame(rig, t, hidden=None, scale=None):
-    """按 rig['draw_order']（远->近）绘制。scale=0.5 走半分辨率简化 rig（播放用）。"""
+def render_frame(rig, t, hidden=None, scale=None, bg=(0, 0, 0)):
+    """兼容旧接口：返回 RGB（透明区合成到 bg，默认黑=旧行为）。
+    需要透明请用 render_frame_rgba。"""
+    rgba = render_frame_rgba(rig, t, hidden=hidden, scale=scale)
+    a = rgba[:, :, 3:4].astype(np.float32) * (1.0 / 255.0)
+    b = np.array(bg, np.float32).reshape(1, 1, 3)
+    rgb = rgba[:, :, :3].astype(np.float32) * a + b * (1.0 - a)
+    return np.clip(rgb, 0, 255).astype(np.uint8)
+
+
+def render_frame_rgba(rig, t, hidden=None, scale=None, premul=False):
+    """按 rig['draw_order']（远->近）绘制，返回 HxWx4 RGBA。
+    背景默认透明（alpha=0）：画布用棋盘格显示、GIF 导出保透明。
+    scale=0.5 走半分辨率简化 rig（播放用）。
+    premul=True：跳过出口除法，直接返回预乘 RGBA（供 Qt ARGB32_Premultiplied
+    消费，画布播放路径专用；透明处 RGB=0 无影响）。"""
     if scale:
         rig = _lite_rig(rig, scale)
     hidden = hidden or set()
     W, H = rig["width"], rig["height"]
-    canvas = np.zeros((H, W, 3), np.float32)
+    canvas = np.zeros((H, W, 4), np.float32)   # 预乘画布：RGB=0-255 域预乘值，A=0-1
     cum = _cum_transforms(rig, t)
     node_of = {}
     for nd in rig["nodes"]:
@@ -417,10 +495,7 @@ def render_frame(rig, t, hidden=None, scale=None):
             if sx1 <= sx0 or sy1 <= sy0:
                 continue
             src = img[sy0 - ity - y0:sy1 - ity - y0, sx0 - itx - x0:sx1 - itx - x0]
-            a = src[:, :, 3:4].astype(np.float32) * (1.0 / 255.0)
-            sub = canvas[sy0:sy1, sx0:sx1]
-            sub *= (1.0 - a)
-            sub += src[:, :, :3].astype(np.float32) * a
+            _blend_premul(canvas, sy0, sy1, sx0, sx1, src)
             continue
         # 层 bbox 四角变换 -> 只处理受影响子矩形（旋转小、位移小时远小于全画布）
         # cv2.transform 的点集必须是 (N,1,2)：直接给 (1,4,2) 会被当成
@@ -442,11 +517,25 @@ def render_frame(rig, t, hidden=None, scale=None):
         warped = cv2.warpAffine(img, M2, (rx1 - rx0 + 1, ry1 - ry0 + 1),
                                 flags=cv2.INTER_LINEAR,
                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
-        a = warped[:, :, 3:4].astype(np.float32) * (1.0 / 255.0)
-        sub = canvas[ry0:ry1 + 1, rx0:rx1 + 1]
-        sub *= (1.0 - a)
-        sub += warped[:, :, :3].astype(np.float32) * a
-    return np.clip(canvas, 0, 255).astype(np.uint8)
+        _blend_premul(canvas, ry0, ry1 + 1, rx0, rx1 + 1, warped)
+    A = canvas[:, :, 3:4]
+    if premul:
+        out = np.dstack([canvas[:, :, :3], A * 255.0])   # 预乘直出，无除法
+    else:
+        rgb = canvas[:, :, :3] / np.maximum(A, 1e-6)     # 出口一次性除回 straight
+        out = np.dstack([rgb, A * 255.0])
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def _blend_premul(canvas, y0, y1, x0, x1, src):
+    """预乘 src-over：RGB 累加 src*a，A += a*(1-A)。
+    比逐层 straight 除法快 10ms+/帧（除法挪到出口全画布一次）。
+    尺度约定：RGB 通道 0-255 域预乘值；A 通道 0-1。
+    （历史坑：曾用 0-1 公式写 0-255 通道致 alpha=1 全黑，勿回退。）"""
+    a = src[:, :, 3:4].astype(np.float32) * (1.0 / 255.0)
+    sub = canvas[y0:y1, x0:x1]
+    sub[:, :, :3] = sub[:, :, :3] * (1.0 - a) + src[:, :, :3].astype(np.float32) * a
+    sub[:, :, 3:4] += a * (1.0 - sub[:, :, 3:4])
 
 
 def render_static(rig):

@@ -5,7 +5,7 @@ r"""SeeThrough 本地 runner —— 完全脱离 ComfyUI 的拆分引擎
 D:\work\puppet\l2d_rig\models\24yearsold\ 下的 nf4 量化副本，进程内完成
 LayerDiff 分层 + Marigold 深度 + 后处理 + 落盘。
 
-与 decompose.py（ComfyUI HTTP 路径）输出格式完全一致：
+与旧 ComfyUI HTTP 路径（decompose.py，已下线删除）输出格式完全一致：
   out_dir/layers_meta.json + layer_<名>.png + layer_<名>_depth.png + seethrough_preview.png
 
 依赖（D:\Python312 全部已装）：torch/diffusers/peft/accelerate/bitsandbytes/sklearn/cv2

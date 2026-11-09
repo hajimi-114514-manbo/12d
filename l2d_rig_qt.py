@@ -9,6 +9,7 @@ import os
 import sys
 import copy
 import json
+import re
 import time
 import shutil
 import tempfile
@@ -20,7 +21,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout,
                                QStackedWidget, QListWidgetItem, QTreeWidgetItem,
                                QSplitter)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QSize, QEvent, QRect
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QKeySequence, QShortcut, QIcon, QCursor
+from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QKeySequence, QShortcut, QIcon, QCursor, QPen, QBrush
 
 from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             PrimaryPushButton, ToolButton, ToggleToolButton,
@@ -71,7 +72,6 @@ class ToggleDropDownButton(TransparentDropDownPushButton):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import l2d_rig_core as C
-import decompose
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
 
@@ -106,7 +106,9 @@ FFMPEG_CANDIDATES = [os.path.join(V2, "ffmpeg.exe"),
 
 # ---------------- 历史栈（撤销/重做） ----------------
 class History:
-    """快照式历史：存 (layers 顺序, draw_order, 各节点支点)"""
+    """快照式历史。存图层**对象引用**（删除操作可恢复）+ 顺序 + 支点。
+    不变式：undo_stack 栈顶 == 当前状态；载入时播一个基线快照。
+    undo = 把当前弹给 redo、应用新栈顶（即上一状态）。"""
 
     def __init__(self, limit=60):
         self.limit = limit
@@ -117,15 +119,30 @@ class History:
         if studio.rig is None:
             return None
         return {
-            "order": [l["name"] for l in studio.layers],
+            "layers": list(studio.layers),                       # 对象引用
             "draw_order": list(studio.rig.get("draw_order", [])),
             "pivots": {n["node"]: list(n["pivot"]) for n in studio.rig["nodes"]},
+            "node_layers": {n["node"]: list(n["layers"]) for n in studio.rig["nodes"]},
+            "_layers": list(studio.rig.get("_layers", [])),
         }
+
+    def seed(self, studio):
+        """载入后播基线：undo_stack=[当前]"""
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        snap = self.snapshot(studio)
+        if snap is not None:
+            self.undo_stack.append(snap)
 
     def push(self, studio):
         snap = self.snapshot(studio)
-        if snap is None:
+        if snap is None or not self.undo_stack:
             return
+        prev = self.undo_stack[-1]
+        if [id(x) for x in snap["layers"]] == [id(x) for x in prev["layers"]] and \
+           snap["draw_order"] == prev["draw_order"] and \
+           snap["pivots"] == prev["pivots"]:
+            return                               # 无变化不压栈
         self.undo_stack.append(snap)
         if len(self.undo_stack) > self.limit:
             self.undo_stack.pop(0)
@@ -134,26 +151,30 @@ class History:
     def apply(self, studio, snap):
         if snap is None or studio.rig is None:
             return
-        by = {l["name"]: l for l in studio.layers}
-        studio.layers = [by[n] for n in snap["order"] if n in by]
+        studio.layers = list(snap["layers"])
         studio.rig["draw_order"] = list(snap["draw_order"])
+        studio.rig["_layers"] = list(snap["_layers"])
         for n in studio.rig["nodes"]:
             if n["node"] in snap["pivots"]:
                 n["pivot"] = list(snap["pivots"][n["node"]])
+            if n["node"] in snap["node_layers"]:
+                n["layers"] = list(snap["node_layers"][n["node"]])
+        studio.rig.pop("_lite", None)           # 结构变了，LOD 缓存作废
         studio.reload_widgets()
 
     def undo(self, studio):
-        if not self.undo_stack:
+        if len(self.undo_stack) < 2:
             return False
-        self.redo_stack.append(self.snapshot(studio))
-        self.apply(studio, self.undo_stack.pop())
+        self.redo_stack.append(self.undo_stack.pop())
+        self.apply(studio, self.undo_stack[-1])
         return True
 
     def redo(self, studio):
         if not self.redo_stack:
             return False
-        self.undo_stack.append(self.snapshot(studio))
-        self.apply(studio, self.redo_stack.pop())
+        snap = self.redo_stack.pop()
+        self.undo_stack.append(snap)
+        self.apply(studio, snap)
         return True
 
 
@@ -173,12 +194,21 @@ class RigCanvas(QWidget):
         self.drag_node = None
         self.hint = ""
         self.setAcceptDrops(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         self._geom = (0, 0, 1.0, 0, 0)   # ox, oy, s, dw, dh
+        # Photoshop 风格缩放：fit=适合窗口(Ctrl+0)，manual=手动倍率(Ctrl+1/±/滚轮)
+        self.zoom_mode = "fit"
+        self.zoom_factor = 1.0          # manual 模式的绝对缩放（1.0=实际像素）
+        self.pan = [0.0, 0.0]           # manual 模式相对居中的平移
+        self._space = False             # 空格按住 -> 拖拽平移
+        self._panning = None            # 平移起点 (x,y,panx,pany)
 
     def set_frame(self, img, pivots, hint=""):
+        """img 为 HxWx4 **预乘** RGBA（render_frame_rgba premul=True 直出，
+        省全画布除法）；Qt 按 ARGB32_Premultiplied 消费，透明处露棋盘格衬底"""
         h, w = img.shape[:2]
-        qimg = QImage(np.ascontiguousarray(img).data, w, h, 3 * w,
-                      QImage.Format.Format_RGB888)
+        arr = np.ascontiguousarray(img[:, :, [2, 1, 0, 3]])  # RGBA->BGRA（通道序不变）
+        qimg = QImage(arr.data, w, h, 4 * w, QImage.Format.Format_ARGB32_Premultiplied)
         self.pixmap = QPixmap.fromImage(qimg.copy())
         self.img_w, self.img_h = w, h
         self.pivots = dict(pivots)
@@ -189,11 +219,67 @@ class RigCanvas(QWidget):
         cw, ch = self.width(), self.height()
         if not self.pixmap or cw < 4 or ch < 4:
             return
-        s = min((cw - 20) / self.img_w, (ch - 20) / self.img_h)
-        s = max(s, 0.02)
-        dw, dh = int(self.img_w * s), int(self.img_h * s)
-        ox, oy = (cw - dw) // 2, (ch - dh) // 2
+        if self.zoom_mode == "fit":
+            s = min((cw - 20) / self.img_w, (ch - 20) / self.img_h)
+            s = max(s, 0.02)
+            dw, dh = int(self.img_w * s), int(self.img_h * s)
+            ox, oy = (cw - dw) // 2, (ch - dh) // 2
+        else:
+            s = max(0.02, min(16.0, self.zoom_factor))
+            dw, dh = int(self.img_w * s), int(self.img_h * s)
+            # 默认居中，再叠加平移量
+            ox = (cw - dw) // 2 + self.pan[0]
+            oy = (ch - dh) // 2 + self.pan[1]
         self._geom = (ox, oy, s, dw, dh)
+
+    def zoom_display(self):
+        """当前显示倍率（相对实际像素），供 UI 角标"""
+        if not self.pixmap:
+            return 1.0
+        self._layout()
+        return self._geom[2]
+
+    def set_fit(self):
+        self.zoom_mode = "fit"
+        self.pan = [0.0, 0.0]
+        self.update()
+
+    def set_actual(self):
+        self.zoom_mode = "manual"
+        self.zoom_factor = 1.0
+        self.pan = [0.0, 0.0]
+        self.update()
+
+    def zoom_step(self, up, anchor=None):
+        """逐级 ×2 / ÷2（PS 的 Ctrl+= / Ctrl+-）。anchor 为 widget 坐标。"""
+        self._layout()
+        old = self._geom[2]
+        new = min(16.0, max(0.02, old * (2.0 if up else 0.5)))
+        self._apply_zoom(new, old, anchor)
+
+    def _apply_zoom(self, new_s, old_s, anchor):
+        cw, ch = self.width(), self.height()
+        if self.zoom_mode == "fit":
+            # 从 fit 切入 manual：以调用方传入的当前 fit 倍率为基准，
+            # 避免画面从"适合窗口"突跳到默认 100%
+            self.zoom_mode = "manual"
+            self.zoom_factor = old_s
+            self.pan = [0.0, 0.0]
+        if abs(new_s - old_s) < 1e-9:
+            self.update()
+            return
+        if anchor is None:
+            anchor = QPoint(cw // 2, ch // 2)
+        # 以锚点为中心缩放：锚点在 widget 坐标下对应的图像坐标保持不变
+        ox, oy, s, dw, dh = self._geom
+        ix = (anchor.x() - ox) / s
+        iy = (anchor.y() - oy) / s
+        self.zoom_factor = new_s
+        dw2 = self.img_w * new_s
+        dh2 = self.img_h * new_s
+        self.pan[0] = anchor.x() - ix * new_s - (cw - dw2) / 2.0
+        self.pan[1] = anchor.y() - iy * new_s - (ch - dh2) / 2.0
+        self.update()
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -206,8 +292,23 @@ class RigCanvas(QWidget):
             return
         self._layout()
         ox, oy, s, dw, dh = self._geom
+        # 图像区域先铺 PS 风格棋盘格：透明背景处透出，表示"这里透明"。
+        # 2x2 格平铺画刷一次 fillRect（逐格循环曾给每帧加 ~15ms）
+        if not hasattr(self, "_checker_brush"):
+            tile = QPixmap(32, 32)
+            tp = QPainter(tile)
+            c1, c2 = QColor("#3a3f4a"), QColor("#2c303a")
+            tp.fillRect(0, 0, 16, 16, c1); tp.fillRect(16, 16, 16, 16, c1)
+            tp.fillRect(16, 0, 16, 16, c2); tp.fillRect(0, 16, 16, 16, c2)
+            tp.end()
+            self._checker_brush = QBrush(tile)
+        p.setClipRect(ox, oy, dw, dh)
+        p.fillRect(ox, oy, dw, dh, self._checker_brush)
+        # 缩小用 Fast（源是 2x LOD 降采样，双线性无视觉增益且省 ~8ms）；放大仍 Smooth
+        xform = Qt.FastTransformation if s < 1.0 else Qt.SmoothTransformation
         p.drawPixmap(QPoint(ox, oy), self.pixmap.scaled(
-            dw, dh, Qt.IgnoreAspectRatio, Qt.SmoothTransformation))
+            dw, dh, Qt.IgnoreAspectRatio, xform))
+        p.setClipping(False)
         for node, (x, y) in self.pivots.items():
             cx, cy = ox + x * s, oy + y * s
             p.setPen(QColor("#ffd166"))
@@ -215,6 +316,18 @@ class RigCanvas(QWidget):
             p.drawEllipse(QPoint(int(cx), int(cy)), 7, 7)
             p.setPen(QColor("#ffd166"))
             p.drawText(int(cx) + 10, int(cy) - 8, node)
+        # 左下角缩放角标（PS 风格）
+        pct = int(round(s * 100))
+        tag = ("适合窗口  %d%%" % pct) if self.zoom_mode == "fit" else ("%d%%" % pct)
+        f = p.font(); f.setPointSize(9); p.setFont(f)
+        fm = p.fontMetrics()
+        tw = fm.horizontalAdvance(tag) + 14
+        rect = self.rect().adjusted(6, self.height() - 26, 6 + tw, self.height() - 8)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(20, 22, 28, 190))
+        p.drawRoundedRect(rect, 4, 4)
+        p.setPen(QColor("#c8cfdb"))
+        p.drawText(rect, Qt.AlignCenter, tag)
         p.end()
 
     def _node_at(self, pos):
@@ -227,12 +340,23 @@ class RigCanvas(QWidget):
         return best
 
     def mousePressEvent(self, e):
+        if e.button() == Qt.MiddleButton or self._space:
+            # 平移：中键 或 空格+左键
+            self._panning = (e.position().x(), e.position().y(), self.pan[0], self.pan[1])
+            self.setCursor(Qt.ClosedHandCursor if self._space else Qt.OpenHandCursor)
+            return
         if e.button() == Qt.LeftButton:
             n = self._node_at(e.position().toPoint())
             if n:
                 self.drag_node = n
 
     def mouseMoveEvent(self, e):
+        if self._panning:
+            px, py, bpx, bpy = self._panning
+            self.pan[0] = bpx + (e.position().x() - px)
+            self.pan[1] = bpy + (e.position().y() - py)
+            self.update()
+            return
         if self.drag_node:
             ox, oy, s, dw, dh = self._geom
             x = (e.position().x() - ox) / s
@@ -242,9 +366,44 @@ class RigCanvas(QWidget):
             self.pivot_dragged.emit(self.drag_node, x, y)
 
     def mouseReleaseEvent(self, e):
+        if self._panning:
+            self._panning = None
+            self.unsetCursor()
+            return
         if self.drag_node:
             self.drag_node = None
             self.pivot_released.emit()
+
+    def wheelEvent(self, e):
+        """Ctrl+滚轮 = 以光标为锚缩放（PS 习惯）；无 Ctrl 时不拦截（留给滚动区）"""
+        if not (e.modifiers() & Qt.ControlModifier):
+            e.ignore()
+            return
+        if not self.pixmap:
+            e.ignore()
+            return
+        self._layout()
+        old = self._geom[2]
+        # 滚轮一格约 1.25 倍（比逐级细腻）
+        steps = e.angleDelta().y() / 120.0
+        new = min(16.0, max(0.02, old * (1.25 ** steps)))
+        self._apply_zoom(new, old, e.position().toPoint())
+        e.accept()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Space and not e.isAutoRepeat():
+            self._space = True
+            self.setCursor(Qt.OpenHandCursor)
+            return
+        super().keyPressEvent(e)
+
+    def keyReleaseEvent(self, e):
+        if e.key() == Qt.Key_Space and not e.isAutoRepeat():
+            self._space = False
+            if not self._panning:
+                self.unsetCursor()
+            return
+        super().keyReleaseEvent(e)
 
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls():
@@ -287,7 +446,7 @@ def save_recent(items):
 
 
 # ---------------- 拆分进度锚点（日志文本 -> 百分比，单调不回退） ----------------
-# 本地引擎与 ComfyUI 引擎的 verbose 消息共用一张表；未命中的消息保持上次值。
+# 本地引擎 verbose 消息对照表；未命中的消息保持上次值。
 PROGRESS_ANCHORS = [
     ("加载 LayerDiff 模型", 3),
     ("加载 Marigold 深度模型", 8),
@@ -299,13 +458,6 @@ PROGRESS_ANCHORS = [
     ("后处理：拆分与聚类", 85),
     ("后处理完成", 88),
     ("已保存", 95),
-    # ComfyUI 引擎
-    ("ComfyUI 未运行", 2),
-    ("ComfyUI 就绪", 5),
-    ("已送入 ComfyUI", 7),
-    ("已提交 prompt_id", 10),
-    ("状态=success", 95),
-    ("收集到", 98),
 ]
 
 
@@ -317,35 +469,37 @@ def progress_for_msg(msg):
     return None
 
 
+_CUDA_CACHE = [None]
+
+
+def _cuda_available():
+    """惰性检测 CUDA 可用性（结果缓存；torch 只在首次调用时 import）"""
+    if _CUDA_CACHE[0] is None:
+        try:
+            import torch
+            _CUDA_CACHE[0] = bool(torch.cuda.is_available())
+        except Exception:
+            _CUDA_CACHE[0] = False
+    return _CUDA_CACHE[0]
+
+
 # ---------------- 后台拆分线程（照 fluent_worker 模式） ----------------
 class DecomposeWorker(QThread):
     log_signal = Signal(str)
     done_signal = Signal(object, str)     # meta or None, out_dir
 
-    def __init__(self, img_path, out_dir, engine="local"):
+    def __init__(self, img_path, out_dir):
         super().__init__()
         self.img_path = img_path
         self.out_dir = out_dir
-        self.engine = engine
 
     def run(self):
+        # ComfyUI 路径已下线：只走进程内 SeeThrough 本地引擎（模型在 models\）
         try:
-            meta = None
-            if self.engine == "local":
-                try:
-                    import seethrough_local as SL
-                    self.log_signal.emit("本地引擎（不依赖 ComfyUI）…")
-                    meta = SL.decompose(self.img_path, self.out_dir,
-                                         verbose=self.log_signal.emit)
-                except Exception as e:
-                    self.log_signal.emit("本地引擎失败(%s)，回退 ComfyUI" % e)
-                if meta is None:
-                    self.log_signal.emit("改用 ComfyUI 引擎…")
-                    meta = decompose.decompose(self.img_path, self.out_dir,
-                                               verbose=self.log_signal.emit)
-            else:
-                meta = decompose.decompose(self.img_path, self.out_dir,
-                                            verbose=self.log_signal.emit)
+            import seethrough_local as SL
+            self.log_signal.emit("本地引擎（进程内 SeeThrough）…")
+            meta = SL.decompose(self.img_path, self.out_dir,
+                                verbose=self.log_signal.emit)
             self.done_signal.emit(meta, self.out_dir)
         except Exception as e:
             self.log_signal.emit("异常: %s: %s" % (type(e).__name__, e))
@@ -379,10 +533,7 @@ class Workbench(QWidget):
         split.setStyleSheet(SPLIT_QSS)
         root.addWidget(split)
 
-        # 左列：图层（菜单/导出按钮由 MainWindow 挪进标题栏）
-        left = QVBoxLayout()
-        left.setContentsMargins(0, 0, 4, 0)
-        left.setSpacing(6)
+        # 菜单/导出按钮（临时父容器，MainWindow 会把它们插进标题栏）
         self.toolbar_widget = QWidget()
         tb_lay = QHBoxLayout(self.toolbar_widget)
         tb_lay.setContentsMargins(0, 0, 0, 0)
@@ -406,6 +557,9 @@ class Workbench(QWidget):
         m.addAction(act_open)
         m.addAction(act_import)
         m.insertMenu(act_import, self.recent_menu)
+        # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
+        m.addAction(Action(FluentIcon.ZOOM, "拆分图片（SeeThrough）",
+                           triggered=self._pick_image))
         m.addSeparator()
         m.addAction(Action(FluentIcon.SAVE, "保存", triggered=self.act_save))
         m.addAction(Action(FluentIcon.SAVE_AS, "另存为", triggered=self.act_saveas))
@@ -443,78 +597,77 @@ class Workbench(QWidget):
         self._menu_cur = None
         m.aboutToHide.connect(lambda: self._menu_about_to_hide(menu))
         em.aboutToHide.connect(lambda: self._menu_about_to_hide(exp))
-        left.addWidget(StrongBodyLabel("图层（顶=最前，拖动重排，双击显隐）"))
-        self.layer_list = ListWidget()
-        self.layer_list.setDragDropMode(ListWidget.InternalMove)
-        self.layer_list.setDefaultDropAction(Qt.MoveAction)
-        self.layer_list.itemDoubleClicked.connect(self._toggle_item)
-        self.layer_list.model().rowsMoved.connect(self._on_rows_moved)
-        left.addWidget(self.layer_list, 1)
-        b = PushButton("显示/隐藏全部", self)
-        b.clicked.connect(self._toggle_all)
-        left.addWidget(b)
-        lw = QWidget()
-        lw.setLayout(left)
-        lw.setMinimumWidth(140)
-        split.addWidget(lw)
-
-        # 中列：画布 + 播放
-        mid = QVBoxLayout()
-        mid.setSpacing(6)
-        mid.setContentsMargins(4, 0, 4, 0)
+        # ===== 左列：画布（占整个左边，PS 风格）=====
+        leftLay = QVBoxLayout()
+        leftLay.setContentsMargins(0, 0, 4, 0)
+        leftLay.setSpacing(6)
         self.canvas = RigCanvas()
         self.canvas.pivot_dragged.connect(self._on_pivot_drag)
         self.canvas.pivot_released.connect(self._push_history)
-        self.canvas.image_dropped.connect(self.start_decompose)
-        mid.addWidget(self.canvas, 1)
+        self.canvas.image_dropped.connect(self._drop_add_layer)
+        leftLay.addWidget(self.canvas, 1)
         row = QHBoxLayout()
         self.btn_play = PushButton("播放", self)
         self.btn_play.clicked.connect(self._toggle_play)
         row.addWidget(self.btn_play)
-        self.btn_decomp = PrimaryPushButton("拆分图片", self)
-        self.btn_decomp.clicked.connect(self._pick_image)
-        row.addWidget(self.btn_decomp)
-        self.chk_local = CheckBox("本地引擎", self)
-        self.chk_local.setChecked(True)
-        self.chk_local.setToolTip("勾选=进程内直接跑 SeeThrough（模型在 models\\，无需 ComfyUI）\n"
-                                  "取消=走 ComfyUI HTTP（本地引擎失败时也会自动回退）")
-        row.addWidget(self.chk_local)
         self.slider = Slider(Qt.Horizontal, self)
         self.slider.setRange(0, 1000)
         self.slider.valueChanged.connect(self._on_scrub)
         row.addWidget(self.slider, 1)
         self.time_lbl = BodyLabel("0.00s")
         row.addWidget(self.time_lbl)
-        mid.addLayout(row)
+        leftLay.addLayout(row)
         self.prog = CaptionLabel("")
-        mid.addWidget(self.prog)
-        mw = QWidget()
-        mw.setLayout(mid)
-        mw.setMinimumWidth(260)
-        split.addWidget(mw)
+        leftLay.addWidget(self.prog)
+        lw = QWidget()
+        lw.setLayout(leftLay)
+        lw.setMinimumWidth(360)
+        split.addWidget(lw)
 
-        # 右列：节点表 + 导出
-        right = QVBoxLayout()
-        right.setSpacing(6)
-        right.setContentsMargins(4, 0, 0, 0)
-        right.addWidget(StrongBodyLabel("骨架节点"))
+        # ===== 右侧：垂直分割（上=骨架节点，下=图层）=====
+        vsplit = QSplitter(Qt.Vertical, self)
+        vsplit.setHandleWidth(1)
+        vsplit.setChildrenCollapsible(False)
+        vsplit.setStyleSheet(SPLIT_QSS)
+
+        topLay = QVBoxLayout()
+        topLay.setContentsMargins(4, 0, 0, 4)
+        topLay.setSpacing(6)
+        topLay.addWidget(StrongBodyLabel("骨架节点"))
         self.tree = TreeWidget()
         self.tree.setHeaderLabels(["节点", "父", "支点", "层数"])
         self.tree.itemDoubleClicked.connect(self._edit_pivot)
-        right.addWidget(self.tree, 1)
-        # 三个导出已并入顶部「导出」下拉菜单，这里只留单帧保存
-        b = PushButton("保存当前帧", self)
-        b.clicked.connect(self._save_frame)
-        right.addWidget(b)
-        rw = QWidget()
-        rw.setLayout(right)
-        rw.setMinimumWidth(180)
-        split.addWidget(rw)
-        # 初始宽度比例（左:中:右 = 1:3:1.1），仍可拖拽
-        split.setStretchFactor(0, 0)
-        split.setStretchFactor(1, 3)
-        split.setStretchFactor(2, 1)
-        split.setSizes([230, 640, 250])
+        topLay.addWidget(self.tree, 1)
+        topWidget = QWidget()
+        topWidget.setLayout(topLay)
+        vsplit.addWidget(topWidget)
+
+        botLay = QVBoxLayout()
+        botLay.setContentsMargins(4, 4, 0, 0)
+        botLay.setSpacing(6)
+        botLay.addWidget(StrongBodyLabel("图层（顶=最前，拖动重排，双击显隐，右键菜单）"))
+        self.layer_list = ListWidget()
+        self.layer_list.setDragDropMode(ListWidget.InternalMove)
+        self.layer_list.setDefaultDropAction(Qt.MoveAction)
+        self.layer_list.itemDoubleClicked.connect(self._toggle_item)
+        self.layer_list.model().rowsMoved.connect(self._on_rows_moved)
+        self.layer_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.layer_list.customContextMenuRequested.connect(self._layer_menu)
+        botLay.addWidget(self.layer_list, 1)
+        ball = PushButton("显示/隐藏全部", self)
+        ball.clicked.connect(self._toggle_all)
+        botLay.addWidget(ball)
+        botWidget = QWidget()
+        botWidget.setLayout(botLay)
+        vsplit.addWidget(botWidget)
+
+        split.addWidget(vsplit)
+        self.vsplit = vsplit
+        # 左画布 : 右面板 = 3 : 2；右侧 骨架 : 图层 均分
+        split.setStretchFactor(0, 3)
+        split.setStretchFactor(1, 2)
+        split.setSizes([820, 420])
+        vsplit.setSizes([280, 320])
 
         self.timer = QTimer(self)
         self.timer.setInterval(33)
@@ -591,8 +744,7 @@ class Workbench(QWidget):
         self.cur_dir = d
         self._record_recent(d)
         self.reload_widgets()
-        self.history.undo_stack.clear()
-        self.history.redo_stack.clear()
+        self.history.seed(self)      # 新不变式：undo_stack 栈底=载入基线
         return True
 
     def reload_widgets(self):
@@ -615,13 +767,14 @@ class Workbench(QWidget):
         self.redraw()
 
     def redraw(self):
-        if self.rig is None:
-            self.canvas.set_frame(np.zeros((8, 8, 3), np.uint8), {},
-                                  "拖入图片开始\n（或点「拆分图片」）")
+        if self.rig is None or not self.rig.get("_layers"):
+            self.canvas.set_frame(np.zeros((8, 8, 4), np.uint8), {},
+                                  "拖入图片开始")
             return
         hidden = {l["name"] for l in self.layers if not self.visible.get(l["name"], True)}
-        # 播放走半分辨率 LOD：全分辨率单帧 ~690ms，LOD 后 ~20-30ms，30fps 才跑得动
-        img = C.render_frame(self.rig, self.t, hidden=hidden, scale=PREVIEW_SCALE)
+        # 播放走半分辨率 LOD + 预乘直出（省出口除法，~30ms/帧），透明区画布显示棋盘格
+        img = C.render_frame_rgba(self.rig, self.t, hidden=hidden,
+                                  scale=PREVIEW_SCALE, premul=True)
         sc = PREVIEW_SCALE
         piv = {n["node"]: (n["pivot"][0] * sc, n["pivot"][1] * sc)
                for n in self.rig["nodes"] if n["node"] != "root"}
@@ -658,6 +811,192 @@ class Workbench(QWidget):
             self.rig["draw_order"] = list(reversed(names))
             self.history.push(self)
             self.redraw()
+
+    # ---------- 图层右键菜单（置顶 / 拆分 / 删除） ----------
+    def _layer_menu(self, pos):
+        if self.rig is None:
+            return
+        it = self.layer_list.itemAt(pos)
+        if it is None:
+            return
+        name = it.data(Qt.UserRole)
+        menu = RoundMenu(parent=self.layer_list)
+        menu.addAction(Action(FluentIcon.UP, "置顶",
+                              triggered=lambda: self._layer_to_top(name)))
+        # 拆分此层：两级子菜单（A 连通域 / B SAM）
+        sub = RoundMenu("拆分此层", parent=self)
+        sub.addAction(Action(FluentIcon.CUT, "基础拆分（连通域）",
+                             triggered=lambda: self._layer_subsplit(name, "basic")))
+        sub.addAction(Action(FluentIcon.SEARCH, "智能拆分（SAM）",
+                             triggered=lambda: self._layer_subsplit(name, "sam")))
+        menu.addMenu(sub)
+        menu.addAction(Action(FluentIcon.DELETE, "删除",
+                              triggered=lambda: self._layer_delete(name)))
+        self._layer_ctx_menu = menu      # 防 GC
+        self._layer_ctx_sub = sub
+        menu.exec(self.layer_list.mapToGlobal(pos))
+
+    def _layer_subsplit(self, name, mode):
+        """把某层按其视觉块再拆成子层。mode: basic=连通域(免费快) / sam=SAM智能。
+        子层就地替换原层（保持列表位置=叠放层次），Ctrl+Z 可撤销。"""
+        if self.rig is None:
+            return
+        obj = next((l for l in self.layers if l["name"] == name), None)
+        if obj is None:
+            return
+        try:
+            if mode == "basic":
+                parts = C.subsplit_layer(obj)
+            else:
+                import sam_subsplit
+                parts = sam_subsplit.sam_subsplit_layer(obj, verbose=lambda m: self.prog.setText(str(m)))
+        except FileNotFoundError as e:
+            InfoBar.warning("无法智能拆分", str(e), parent=self,
+                            position=InfoBarPosition.TOP, duration=6000)
+            return
+        except Exception as e:
+            InfoBar.error("拆分失败", zh_err(e), parent=self,
+                          position=InfoBarPosition.TOP, duration=5000)
+            return
+        if not parts:
+            if mode == "basic":
+                InfoBar.info("无法再拆分",
+                             "%s 是单一连通整体（SeeThrough 已按部件分层），"
+                             "可试“智能拆分（SAM）”按视觉块细分" % name,
+                             parent=self, position=InfoBarPosition.TOP, duration=4500)
+            else:
+                InfoBar.info("SAM 未分出多块", "%s 未能拆出≥2个有效块" % name,
+                             parent=self, position=InfoBarPosition.TOP, duration=3500)
+            return
+        self._apply_subsplit(obj, parts)
+        InfoBar.success("已拆分", "%s → %d 个子层（Ctrl+Z 可撤销）" % (name, len(parts)),
+                        parent=self, position=InfoBarPosition.TOP, duration=3000)
+
+    def _apply_subsplit(self, obj, parts):
+        """用子层列表就地替换原层。"""
+        name = obj["name"]
+        idx = self.layers.index(obj)
+        vis = self.visible.get(name, True)
+        # 列表顺序：parts 已按面积降序（大块在前=更靠列表顶=更前层）
+        new_layers = self.layers[:idx] + parts + self.layers[idx + 1:]
+        self.layers = new_layers
+        for p in parts:
+            self.visible[p["name"]] = vis
+        self.visible.pop(name, None)
+        # 引擎结构同步
+        self.rig["_layers"] = [l for l in self.rig["_layers"] if l["name"] != name] + parts
+        self.rig["draw_order"] = [l["name"] for l in reversed(self.layers)]
+        for nd in self.rig["nodes"]:
+            if name in nd["layers"]:
+                k = nd["layers"].index(name)
+                nd["layers"][k:k + 1] = [p["name"] for p in parts]
+        self.rig.pop("_lite", None)      # LOD 缓存作废
+        self.reload_widgets()
+        self.history.push(self)
+
+    def _layer_to_top(self, name):
+        """置顶 = 移到列表第一行 = draw_order 末位（最前层）"""
+        obj = next((l for l in self.layers if l["name"] == name), None)
+        if obj is None:
+            return
+        self.layers.remove(obj)
+        self.layers.insert(0, obj)
+        self.rig["draw_order"] = [l["name"] for l in reversed(self.layers)]
+        self.reload_widgets()
+        self.history.push(self)
+
+    def _layer_delete(self, name):
+        """删除图层：从 layers/draw_order/所属节点/_layers 摘除。
+        历史快照存对象引用，撤销可完整恢复。"""
+        if self.rig is None:
+            return
+        obj = next((l for l in self.layers if l["name"] == name), None)
+        if obj is None:
+            return
+        self.layers = [l for l in self.layers if l["name"] != name]
+        self.rig["draw_order"] = [n for n in self.rig["draw_order"] if n != name]
+        self.rig["_layers"] = [l for l in self.rig["_layers"] if l["name"] != name]
+        for nd in self.rig["nodes"]:
+            if name in nd["layers"]:
+                nd["layers"].remove(name)
+        self.rig.pop("_lite", None)      # LOD 缓存里有被删层，作废重建
+        self.reload_widgets()
+        self.history.push(self)
+        InfoBar.info("已删除图层", "%s（Ctrl+Z 可撤销）" % name, parent=self,
+                     position=InfoBarPosition.TOP, duration=2500)
+
+    # ---------- 拖入图片 = 新增一个图层（不再触发拆分） ----------
+    def _drop_add_layer(self, img_path):
+        """把拖入的图片作为新图层加到工作台顶部（列表首位=最前层）。
+        空工作台时先建一个只有 root 语义的空 rig，方便直接拖图。"""
+        try:
+            pil = Image.open(img_path).convert("RGBA")
+            w, h = pil.size
+            arr = np.asarray(pil)
+        except Exception as e:
+            InfoBar.error("无法读取图片", zh_err(e), parent=self,
+                          position=InfoBarPosition.TOP, duration=4000)
+            return
+        if arr.ndim != 3 or arr.shape[2] != 4 or w <= 0 or h <= 0:
+            InfoBar.error("图片格式不支持", img_path, parent=self,
+                          position=InfoBarPosition.TOP, duration=4000)
+            return
+
+        # 空工作台 -> 建空 rig（只有 root 语义），并播基线快照让 Ctrl+Z 能回空
+        if self.rig is None:
+            self.rig = {"width": w, "height": h, "fps": 30.0,
+                        "nodes": [], "_layers": [], "draw_order": []}
+            self.W, self.H = w, h
+            self.cur_dir = None
+            self.history.seed(self)
+
+        W, H = self.W, self.H
+        # 图片比画布大则等比缩小，否则原样居中
+        sw, sh = w, h
+        if sw > W or sh > H:
+            sc = min(float(W) / float(sw), float(H) / float(sh))
+            sw = max(1, int(round(sw * sc)))
+            sh = max(1, int(round(sh * sc)))
+            pil = pil.resize((sw, sh), Image.LANCZOS)
+            arr = np.asarray(pil)
+        x0 = max(0, (W - sw) // 2)
+        y0 = max(0, (H - sh) // 2)
+        x1 = min(W, x0 + sw)
+        y1 = min(H, y0 + sh)
+
+        # 图层名：文件名去扩展名 + 序号防重（image / image_2 / image_3 …）
+        # \w 在 str 模式下已是 Unicode 感知（含中文），保留 . - 其余替换为 _
+        stem = os.path.splitext(os.path.basename(img_path))[0]
+        base = re.sub(r"[^\w.\-]+", "_", (stem or "image").strip(),
+                      flags=re.UNICODE) or "image"
+        name = base
+        n = 2
+        existing = {l["name"] for l in self.layers}
+        while name in existing:
+            name = "%s_%d" % (base, n)
+            n += 1
+
+        layer = {
+            "name": name,
+            "tag": "Image",
+            "node": "other",
+            "path": img_path,
+            "img": np.ascontiguousarray(arr),
+            "bbox": (x0, y0, x1, y1),
+            "depth": 0.10,
+        }
+
+        # 列表顶=最前层；draw_order = reversed(layers)（末位=最前=最后绘制）
+        self.layers.insert(0, layer)
+        self.rig["_layers"] = list(self.layers)   # 拷贝不断引用：_layers 与 layers 是两个独立列表
+        self.rig["draw_order"] = [l["name"] for l in reversed(self.layers)]
+        self.rig.pop("_lite", None)          # LOD 缓存作废
+        self.visible[name] = True
+        self.reload_widgets()
+        self.history.push(self)
+        self.redraw()
+        InfoBar.success("已添加图层", name, parent=self,
+                        position=InfoBarPosition.TOP, duration=2500)
 
     def _toggle_all(self):
         vals = [self.visible.get(k, True) for k in self.visible]
@@ -700,15 +1039,6 @@ class Workbench(QWidget):
         n["pivot"] = [(x + 10) % max(1, self.W), y]
         self.history.push(self)
         self.reload_widgets()
-
-    def _save_frame(self):
-        if self.rig is None:
-            return
-        img = C.render_frame(self.rig, self.t)
-        p = os.path.join(getattr(self, "cur_dir", V2), "preview_t%.2f.png" % self.t)
-        Image.fromarray(img).save(p)
-        InfoBar.success("已保存", p, parent=self,
-                        position=InfoBarPosition.TOP, duration=2500)
 
     # ---------- 菜单动作 ----------
     def act_undo(self):
@@ -981,14 +1311,21 @@ class Workbench(QWidget):
             InfoBar.error("文件不存在", img_path, parent=self,
                           position=InfoBarPosition.TOP, duration=3000)
             return
+        # 本地引擎依赖 bitsandbytes nf4（CUDA 专属）：无 N 卡时给出对症引导
+        if not _cuda_available():
+            InfoBar.warning("本地拆分引擎不可用（无 NVIDIA CUDA）",
+                            "A 卡/核显请走 ComfyUI + ROCm 路线：安装器勾选「AMD 显卡支持」"
+                            "会下好 ComfyUI 安装器、See-through 插件与中文说明；"
+                            "在 ComfyUI 拆分并导出 PSD 后，用菜单「打开工程」或「导入 PSD」继续编辑。"
+                            "应用内编辑/骨架/导出功能不受影响。",
+                            parent=self, position=InfoBarPosition.TOP, duration=10000)
+            return
         self.busy = True
-        self.btn_decomp.setEnabled(False)
         self.prog.setText("准备中…")
         self._nav_pct = 0
         self.set_nav_progress(0)
         out = os.path.join(OUT_BASE, os.path.splitext(os.path.basename(img_path))[0])
-        engine = "local" if self.chk_local.isChecked() else "comfy"
-        self.worker = DecomposeWorker(img_path, out, engine=engine)
+        self.worker = DecomposeWorker(img_path, out)
         self.worker.log_signal.connect(self._on_decompose_log)
         self.worker.done_signal.connect(self._decompose_done)
         self.worker.start()
@@ -1017,7 +1354,6 @@ class Workbench(QWidget):
 
     def _decompose_done(self, meta, out_dir):
         self.busy = False
-        self.btn_decomp.setEnabled(True)
         self.set_nav_progress(None)      # 无论成败都清掉导航栏百分比
         if meta:
             self.prog.setText("完成，已载入骨架")
@@ -1028,6 +1364,27 @@ class Workbench(QWidget):
             self.prog.setText("拆分失败")
             InfoBar.error("拆分失败", "SeeThrough 未返回结果", parent=self,
                           position=InfoBarPosition.TOP, duration=4000)
+
+
+def _gif_frames(rgba_list):
+    """RGBA 帧序列 -> GIF P 帧：255 色量化 + 索引 255 专属透明。
+    返回 (frames, trans_index)。alpha<128 的像素一律映射到透明索引。"""
+    TRANS = 255
+    frames = []
+    for i, arr in enumerate(rgba_list):
+        rgb = arr[:, :, :3]
+        if i == 0:
+            base = Image.fromarray(rgb).quantize(colors=255, method=Image.Quantize.FASTOCTREE)
+            pal = base.getpalette()[:765]          # 255*3
+        q = Image.fromarray(rgb).quantize(palette=base, dither=Image.Dither.NONE)
+        idx = np.array(q, dtype=np.uint8)
+        idx[arr[:, :, 3] < 128] = TRANS
+        im = Image.new("P", q.size)
+        full = pal + [0, 0, 0]                     # 索引 255 = 透明色（RGB 0,0,0）
+        im.putpalette(full)
+        im.paste(Image.fromarray(idx, mode="P"))
+        frames.append(im)
+    return frames, TRANS
 
 
 # ---------------- 后台导出线程（MP4/GIF 渲染要几十秒，绝不阻塞 UI） ----------------
@@ -1057,21 +1414,17 @@ class ExportWorker(QThread):
                 vw.release()
                 self.done.emit(True, self.path)
             else:
-                # GIF：LOD 直出（不再全分辨率渲染后缩放），fps 降到 15
+                # GIF：LOD 直出 + **透明背景**（255 色量化 + 索引 255 专属透明）
                 gf = min(15, self.fps)
                 gn = max(2, int(self.seconds * gf))
                 sc = self.gif_scale
-                rgb = [C.render_frame(self.rig, i / gf, hidden=self.hidden, scale=sc)
-                       for i in range(gn)]
+                rgba = [C.render_frame_rgba(self.rig, i / gf, hidden=self.hidden, scale=sc)
+                        for i in range(gn)]
                 self.progress.emit(1, gn)
-                # 全局调色板：只量化首帧，其余帧套同一 palette（FASTOCTREE 比逐帧 ADAPTIVE 快数倍）
-                base = Image.fromarray(rgb[0]).quantize(colors=256, method=Image.Quantize.FASTOCTREE)
-                frames = [base]
-                for j, arr in enumerate(rgb[1:], 2):
-                    frames.append(Image.fromarray(arr).quantize(palette=base, dither=Image.Dither.NONE))
-                    self.progress.emit(j, gn)
+                frames, trans_idx = _gif_frames(rgba)
                 frames[0].save(self.path, save_all=True, append_images=frames[1:],
-                               duration=int(1000 / gf), loop=0, optimize=True)
+                               duration=int(1000 / gf), loop=0, optimize=True,
+                               transparency=trans_idx, disposal=2)
                 self.done.emit(True, self.path)
         except Exception as e:
             self.done.emit(False, "%s: %s" % (type(e).__name__, e))
@@ -1098,6 +1451,31 @@ class ExportWorker(QThread):
             self.done.emit(False, "ffmpeg 合成失败: %s" % e)
         finally:
             shutil.rmtree(d, ignore_errors=True)
+
+
+class SidebarIcon(QIcon):
+    """DSH 同款「侧栏面板」图标：圆角矩形 + 左侧分隔竖线，白色线条。
+    用 QIcon 的 pixmap 回调按需生成，选中态（折叠时）自动高亮。"""
+
+    def __init__(self):
+        super().__init__()
+        self.addPixmap(self._make(False), QIcon.Normal, QIcon.Off)
+        self.addPixmap(self._make(True), QIcon.Normal, QIcon.On)
+
+    @staticmethod
+    def _make(active):
+        pm = QPixmap(20, 20)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        col = QColor("#e8ecf4") if not active else QColor("#4d88ff")
+        pen = QPen(col, 1.6)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(2.5, 3.5, 15, 13, 3, 3)
+        p.drawLine(8, 4.5, 8, 15.5)
+        p.end()
+        return pm
 
 
 # ---------------- 主窗 ----------------
@@ -1128,33 +1506,26 @@ class MainWindow(FluentWindow):
                 self.nav_item.setText(text)
                 self.nav_item.setToolTip(tip)
             self.wb.nav_setter = _set_nav
-        # 导航栏也作为可拖模块：把 [导航栏 | 内容区] 装进外层 splitter。
-        # 注意：NavigationInterface 的 sizeHint().width() 是 -1（无效），
-        # 直接进 splitter 会被当成自然宽 0、把剩余空间全塞给它（实测停在 322px），
-        # 所以包一层容器 widget 并给 Expanding 策略。
-        self.hBoxLayout.removeWidget(self.navigationInterface)
-        self.widgetLayout.removeWidget(self.stackedWidget)
-        nav_box = QWidget()
-        nb = QHBoxLayout(nav_box)
-        nb.setContentsMargins(0, 0, 0, 0)
-        nb.setSpacing(0)
-        nb.addWidget(self.navigationInterface)
-        nav_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        nav_box.setMinimumWidth(48)
-        outer = QSplitter(Qt.Horizontal, self)
-        outer.setHandleWidth(1)
-        outer.setChildrenCollapsible(False)
-        outer.setStyleSheet(SPLIT_QSS)
-        outer.addWidget(nav_box)
-        outer.addWidget(self.stackedWidget)
-        outer.setStretchFactor(0, 0)
-        outer.setStretchFactor(1, 1)
-        outer.setSizes([48, 1232])
-        self.widgetLayout.addWidget(outer)
-        self.outer_split = outer
-        self.nav_box = nav_box
+        # 导航栏：默认隐藏（单页应用常驻导航无益，用户要求直接去掉）。
+        # 标题栏侧栏按钮可唤出，唤出时 140px 完整显示「工作台」（图标+文字）。
+        # 库机制：isCompacted 时 paintEvent 只画图标，必须 EXPAND 模式；
+        # setCollapsible(False) 关自动展开/收起，双层定宽钉死 140。
+        self.nav_width = 140
+        ni = self.navigationInterface
+        ni.setCollapsible(False)
+        ni.setExpandWidth(self.nav_width)
+        ni.setMinimumExpandWidth(0)
+        try:
+            ni.expand(useAni=False)
+        except Exception:
+            pass
+        for tgt in (ni, ni.panel):
+            tgt.setMinimumWidth(self.nav_width)
+            tgt.setFixedWidth(self.nav_width)
+        self.nav_collapsed = True
+        ni.setVisible(False)
         # ---- 标题栏左上角工具条（DSH 风格）：折叠按钮 + 菜单 + 导出 ----
-        self.btn_collapse = TransparentToggleToolButton(FluentIcon.LAYOUT, self)
+        self.btn_collapse = TransparentToggleToolButton(SidebarIcon(), self)
         self.btn_collapse.setFixedSize(32, 30)
         self.btn_collapse.setToolTip("显示/隐藏导航栏")
         self.btn_collapse.clicked.connect(self._toggle_nav)
@@ -1165,11 +1536,17 @@ class MainWindow(FluentWindow):
         # 快捷键
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.wb.act_undo)
         QShortcut(QKeySequence("Ctrl+Y"), self, activated=self.wb.act_redo)
+        # Photoshop 风格画布缩放快捷键
+        cv = self.wb.canvas
+        QShortcut(QKeySequence("Ctrl+0"), self, activated=cv.set_fit)
+        QShortcut(QKeySequence("Ctrl+1"), self, activated=cv.set_actual)
+        QShortcut(QKeySequence("Ctrl+="), self, activated=lambda: cv.zoom_step(True))
+        QShortcut(QKeySequence("Ctrl+-"), self, activated=lambda: cv.zoom_step(False))
 
     def _toggle_nav(self):
-        """折叠/展开最左导航栏（splitter 首面板隐藏后句柄一并消失，空间自动让给内容）"""
-        vis = not self.nav_box.isVisible()
-        self.nav_box.setVisible(vis)
+        """折叠/展开最左导航栏：直接隐藏，布局自动把空间让给内容区"""
+        self.nav_collapsed = not self.nav_collapsed
+        self.navigationInterface.setVisible(not self.nav_collapsed)
 
 
 def run_app():
