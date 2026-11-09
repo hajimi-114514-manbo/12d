@@ -19,6 +19,15 @@
 - **顺带修的产品级 bug**：之前删"拆分图片"按钮后没留任何 UI 入口，导致应用**完全无法触发拆图（N 卡也受影响）**。已恢复为菜单「拆分图片（SeeThrough）」，并加 `#pct=` 前缀日志支持估算进度条（comfy 路线无中间进度可查，按 700s 线性估）。
 - **打开工程/load_dir 兼容 ComfyUI 输出目录**：`find_meta()` 优先 `layers_meta.json`，否则取最新 `*_layers.json`，A 卡用户也可自己在 ComfyUI 跑工作流、再用「打开工程」直接选那个输出目录。
 - **安装包侧决定**：保留「A 卡拆图支持」代下选项（ComfyUI 安装器 172MB + 插件 zip + 生成的 `A卡拆图指引.txt`），但**测试端不跑这条下载链路**（体积大、依赖外网镜像，用户也可自行下载，链接都在指引里）。GPU 自动选路线逻辑不变，N 卡用户流程零影响（Setup 49.28MB）。
+- **事故记录（务必别再犯）：`COMFY_API` 被写成"优先"而不是"限定"**。测"ComfyUI 没开时该报错"这条分支，用 `COMFY_API=http://127.0.0.1:8` 指死端口，但 probe() 是 `[env] + [8188,8000,8189]` 依次试——死端口失败后**回退到本机真在跑的 8188**，于是本该失败的探测变成了真提交一个 quant=none 的拆图任务（GPU 100%、显存 7.8GB）。已改为：**设了 `COMFY_API` 就只连它，失败直接 None**（配置就该被尊重）。教训：测"服务不可用"分支时，绝不能让发现逻辑有回退余地；先单测 `probe()` 返回 None，才允许继续跑上层。
+- **`/interrupt` 对 SeeThrough 节点无效**：插件的推理节点不在 interrupt checkpoint 上，连发 6 次 interrupt 任务照跑、队列照满。唯一止损手段是重启服务进程（记下原命令行 `D:\Python312\python.exe main.py --listen 0.0.0.0 --port 8188`、cwd `D:\ComfyUI\main`，kill 后按原样拉起，验证 `/system_stats` 与空队列即恢复）。
+- **子代理三路交叉验证补出的事实**（zip 哈希 + 本机源码 + 实时 `/object_info`，与本机结论一致）：`QUANT_MODES=["none","nf4"]`；`use_lama` 是 **required** 不是 optional；`LoadImage` 的 API 输入**只有 `image`**（`upload` 是前端控件，已从图里删掉）；`auto_download` 落点是 **C 盘 `%USERPROFILE%\.cache\huggingface\hub`，不是 `ComfyUI\models`**（12.5GB 会吃掉 C 盘，指引已教用 `HF_HOME` 改盘、`HF_ENDPOINT=https://hf-mirror.com` 走镜像）；`use_lama=true` 还会经 torch.hub 额外下 `lama_large_512px.ckpt`，所以应用默认关；README 里 Marigold 写成 `24yearsold/…`（无 _nf4 后缀）不准确，以代码为准。
+- **结构校验优先于跑推理**：拿 `/object_info` 逐节点比对"我们送的 key 是否都在 required/optional、required 是否有缺项"，比跑一次 13 分钟的推理更快也更硬（改一行图就能秒验）。已作为 comfy 路由单测的第 2 项固化。
+- **qa-runner 独立验证**：`comfy_route_test.py` 42 项断言全绿（发现层/交叉校验/find_meta/引擎选路/worker 分流/无 CUDA 不拦截/py_compile），全程只发 GET，未碰 GPU 任务。
+- **测试脚本自身两个缺陷已修**（都是我的锅，非产品问题）：
+  1. `layer_menu_test.py` 不显式收尾 → Qt 在解释器退出阶段随机崩，退出码翻成 `0xC0000005`/`0xC0000409` 而断言其实全 PASS（qa 实测 4 次里 2 崩）。已加 `worker.stop()+w.close()+deleteLater()+processEvents()` 并 `sys.exit(0 if not fails else 1)`，让**退出码只反映断言结果**；连跑 3 次 rc 均为 0。
+  2. 第 22 项渲染阈值 +15ms 贴线（高负载时 Δ 实测能到 16~20ms 误报 FAIL，降载后 Δ 9~15ms）。真回归量级远大于此，放宽到 +20ms；修完实测 Δ≈9-10ms 稳定通过。
+  3. 口径提醒：该脚本 `ck()` 实际只有 **17 条**，标签编号跳到 23——"23 项"是最大标签不是条数，以后别按 23 计数。
 
 ## 2026-11-09（深夜4）AMD 卡支持 + 安装前 GPU 自动选路线
 
