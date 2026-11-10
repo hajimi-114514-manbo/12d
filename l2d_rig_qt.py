@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
 功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做/拆分图片）。
@@ -20,11 +20,11 @@ from PySide6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout,
                                QGridLayout, QSizePolicy, QFileDialog, QLabel,
                                QStackedWidget, QListWidgetItem, QTreeWidgetItem,
                                QSplitter, QStyledItemDelegate, QAbstractItemView,
-                               QStyle)
+                               QStyle, QButtonGroup)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QSize, QEvent, QRect
 from PySide6.QtGui import (QImage, QPixmap, QPainter, QColor, QKeySequence,
                            QShortcut, QIcon, QCursor, QPen, QBrush,
-                           QIntValidator)
+                           QIntValidator, QPolygon)
 
 from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             PrimaryPushButton, ToolButton, ToggleToolButton,
@@ -105,7 +105,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.0.2"
+VERSION = "2.1.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -259,6 +259,7 @@ class RigCanvas(QWidget):
     move_grabbed = Signal(str)                     # 移动工具：按下图层名
     move_dragged = Signal(str, float, float)       # 图层名, dx, dy（全分辨率像素）
     move_released = Signal()
+    lasso_committed = Signal(object)               # 多边形套索：提交选区点集（图像坐标）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -278,16 +279,21 @@ class RigCanvas(QWidget):
         self.pan = [0.0, 0.0]           # manual 模式相对居中的平移
         self._space = False             # 空格按住 -> 拖拽平移
         self._panning = None            # 平移起点 (x,y,panx,pany)
-        # 工具："pan"=默认（左键拖支点）；"move"=移动图层（只拖当前选中层）
+        # 工具："pan"=默认（左键拖支点）；"move"=移动图层（只拖当前选中层）；"lasso"=多边形套索
         self.tool = "pan"
         self._layers_ref = []           # [(name, bbox_full, (visible, locked))] 列表前=叠放顶
         self.selected_name = None       # 当前选中图层名（图层列表 currentItem 同步）
         self._mv = None                 # 移动拖拽态 (name, 按下点全分辨率坐标)
+        self._lasso = []                # 多边形套索顶点（图像全分辨率坐标）
 
     def set_tool(self, t):
+        if t != self.tool:
+            self._lasso = []          # 换工具清掉未闭合的选区
         self.tool = t
         if t == "move":
             self.setCursor(Qt.SizeAllCursor)
+        elif t == "lasso":
+            self.setCursor(Qt.CrossCursor)
         else:
             self.unsetCursor()
         self.update()
@@ -412,6 +418,21 @@ class RigCanvas(QWidget):
         p.drawPixmap(QPoint(ox, oy), self.pixmap.scaled(
             dw, dh, Qt.IgnoreAspectRatio, xform))
         p.setClipping(False)
+        # ---- 多边形套索：绘制选区路径（图像坐标 -> widget 坐标）----
+        if self._lasso:
+            sc = PREVIEW_SCALE
+            # 全分辨率坐标 -> LOD 坐标(px*sc) -> widget 坐标(ox + lod*s)
+            pts = [QPoint(int(ox + px * sc * s), int(oy + py * sc * s))
+                   for px, py in self._lasso]
+            p.setPen(QPen(QColor("#4d88ff"), 1, Qt.DashLine))
+            p.setBrush(Qt.NoBrush)
+            if len(pts) >= 2:
+                poly = QPolygon(pts)
+                poly.append(pts[0])
+                p.drawPolyline(poly)
+            p.setBrush(QColor("#4d88ff"))
+            for pt in pts:
+                p.drawEllipse(pt, 2, 2)
         for node, (x, y) in self.pivots.items():
             cx, cy = ox + x * s, oy + y * s
             p.setPen(QColor("#ffd166"))
@@ -475,6 +496,11 @@ class RigCanvas(QWidget):
             self.setCursor(Qt.ClosedHandCursor if self._space else Qt.OpenHandCursor)
             return
         if e.button() == Qt.LeftButton:
+            if self.tool == "lasso":
+                # 多边形套索：左键加点，双击闭合（mouseDoubleClickEvent 负责闭合）
+                self._lasso.append(self._to_full(e.position().toPoint()))
+                self.update()
+                return
             if self.tool == "move":
                 ix, iy = self._to_full(e.position().toPoint())
                 name = self._selected_layer_hit(ix, iy)
@@ -486,6 +512,31 @@ class RigCanvas(QWidget):
             n = self._node_at(e.position().toPoint())
             if n:
                 self.drag_node = n
+
+    def mouseDoubleClickEvent(self, e):
+        """多边形套索：双击闭合并提交选区"""
+        if self.tool == "lasso" and e.button() == Qt.LeftButton:
+            self._commit_lasso()
+            return
+        super().mouseDoubleClickEvent(e)
+
+    def _commit_lasso(self):
+        """闭合多边形并发出选区（<3 点视为取消）"""
+        pts = list(self._lasso)
+        # 双击最后一点闭合时，鼠标按下已加过一个重复顶点 —— 去掉末尾重复点
+        if len(pts) >= 2 and abs(pts[-1][0] - pts[-2][0]) < 0.5 and \
+           abs(pts[-1][1] - pts[-2][1]) < 0.5:
+            pts = pts[:-1]
+        self._lasso = []
+        self.update()
+        if len(pts) >= 3:
+            self.lasso_committed.emit(pts)
+
+    def lasso_reset(self):
+        """外部要求清空选区（切工具/取消）"""
+        if self._lasso:
+            self._lasso = []
+            self.update()
 
     def mouseMoveEvent(self, e):
         if self._panning:
@@ -539,10 +590,20 @@ class RigCanvas(QWidget):
         e.accept()
 
     def keyPressEvent(self, e):
+        # 空格 -> 临时平移（任何工具模式下都可用）
         if e.key() == Qt.Key_Space and not e.isAutoRepeat():
             self._space = True
             self.setCursor(Qt.OpenHandCursor)
             return
+        # 套索工具：Enter 闭合提交、Esc 取消
+        if self.tool == "lasso":
+            if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self._commit_lasso()
+                return
+            if e.key() == Qt.Key_Escape:
+                self._lasso = []
+                self.update()
+                return
         super().keyPressEvent(e)
 
     def keyReleaseEvent(self, e):
@@ -1157,7 +1218,11 @@ class Workbench(QWidget):
         self.canvas.move_grabbed.connect(self._on_move_grab)
         self.canvas.move_dragged.connect(self._on_move_drag)
         self.canvas.move_released.connect(self._push_history)
-        # PS 风格竖排工具栏：导航栏右侧、画布左侧。先内置移动工具一个按钮。
+        self.canvas.lasso_committed.connect(self._on_lasso_committed)
+        # 工具互斥：移动 / 多边形套索。
+        # **不用 QButtonGroup 的 exclusive 模式**——它不允许取消已选中的按钮
+        # （setChecked(False) 被吞），会破坏"取消移动工具回到左键拖支点"的行为。
+        # 改为自己维护：点谁就取消其它。
         self.tool_bar = QWidget()
         _tbl = QVBoxLayout(self.tool_bar)
         _tbl.setContentsMargins(4, 6, 4, 6)
@@ -1166,9 +1231,14 @@ class Workbench(QWidget):
         self.btn_move.setToolTip("移动工具：在画布上拖动图层（Ctrl+Z 撤销）。\n"
                                  "未选中时左键仍用于拖动骨架支点。")
         # 默认不选中：保持原有"左键拖支点"行为，点按钮才进入移动模式
-        self.btn_move.toggled.connect(
-            lambda on: self.canvas.set_tool("move" if on else "pan"))
+        self.btn_move.toggled.connect(self._on_tool_toggled)
         _tbl.addWidget(self.btn_move)
+        # 多边形套索
+        self.btn_lasso = TransparentToggleToolButton(FluentIcon.EDIT, self)
+        self.btn_lasso.setToolTip("多边形套索：左键逐点圈选，双击(或 Enter)闭合，"
+                                  "把选中的图层裁剪成只剩选区内像素（Esc 取消）。")
+        self.btn_lasso.toggled.connect(self._on_tool_toggled)
+        _tbl.addWidget(self.btn_lasso)
         _tbl.addStretch(1)
         self.tool_bar.setFixedWidth(44)
         self.tool_bar.setStyleSheet(
@@ -1427,6 +1497,66 @@ class Workbench(QWidget):
             self.history.push(self)
 
     # ---------- 移动工具 ----------
+    def _on_tool_toggled(self, checked):
+        """工具按钮切换：手动维护互斥（不用 QButtonGroup 的 exclusive，
+        它会吞掉 setChecked(False)、导致无法取消工具回到支点拖拽）。"""
+        btn = self.sender()
+        if checked:
+            for other in (self.btn_move, self.btn_lasso):
+                if other is not btn and other.isChecked():
+                    other.blockSignals(True)
+                    other.setChecked(False)
+                    other.blockSignals(False)
+            self.canvas.set_tool("lasso" if btn is self.btn_lasso else "move")
+        else:
+            # 取消选中 -> 回到默认（支点拖拽）
+            if not (self.btn_move.isChecked() or self.btn_lasso.isChecked()):
+                self.canvas.set_tool("pan")
+
+    def _on_lasso_committed(self, points):
+        """多边形套索提交：把当前选中图层裁剪到选区内。
+
+        实现：lasso_tool.clip_layer_by_polygon 生成新 img（alpha 与掩码相乘）
+        + 收紧 bbox，替换 layers / rig['_layers'] 里的该层；
+        历史快照存的是**对象引用**，所以这里用**新 dict**替换（原地改 img
+        会让旧快照的引用看到新内容、撤销失效）——与图层改名同一套路。
+        """
+        if self.rig is None or not points:
+            return
+        name = self._selected
+        if not name:
+            InfoBar.info("多边形套索", "请先在图层面板选中一个图层", parent=self,
+                         position=InfoBarPosition.TOP, duration=2500)
+            return
+        layer = self.layer_by_name(name)
+        if layer is None:
+            return
+        if self.locked.get(name):
+            InfoBar.warning("图层已锁定", "「%s」已锁定，无法裁剪" % name, parent=self,
+                            position=InfoBarPosition.TOP, duration=2500)
+            return
+        import lasso_tool
+        newL = lasso_tool.clip_layer_by_polygon(layer, points)
+        if newL is None:
+            InfoBar.warning("选区无效", "选区与图层没有重叠，或图层完全被裁空",
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            return
+        # 替换 layers 与 rig['_layers'] 里的该层（两者可能是同一个 list）
+        for arr in (self.layers, self.rig.get("_layers", [])):
+            for i, x in enumerate(arr):
+                if x["name"] == name:
+                    arr[i] = newL
+        if self.rig.get("_layers") is not self.layers:
+            self.rig["_layers"] = [newL if x is layer else x
+                                    for x in self.rig.get("_layers", [])]
+        self.rig.pop("_lite", None)          # LOD 缓存作废
+        self._sync_layer_index()
+        self.history.push(self)
+        self.reload_widgets()
+        self._select_in_list(name)
+        InfoBar.success("已裁剪图层", "%s：保留选区内像素" % name, parent=self,
+                        position=InfoBarPosition.TOP, duration=2500)
+
     def toggle_visible(self, name):
         """切换某层显隐（delegate 的眼睛点击入口）。
         只刷行 + 重绘画布，不重建列表。"""
