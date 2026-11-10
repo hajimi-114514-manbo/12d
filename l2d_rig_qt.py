@@ -960,8 +960,27 @@ class Workbench(QWidget):
             if l["name"] == name:
                 # 必须 int：渲染切片 img[y0:y1] 只吃整数 bbox（load_layers 契约）
                 l["bbox"] = (nx0, ny0, nx0 + int(x1 - x0), ny0 + int(y1 - y0))
+                self._sync_lite_bbox(l)
                 break
         self.redraw()
+
+    def _sync_lite_bbox(self, layer):
+        """_lite 缓存里存的是各层裁剪图+bbox，源层 bbox 变了必须同步，
+        否则预览仍画旧位置（曾踩：移动后画面不动，看起来像"只改了层级"）。
+        与 _lite_rig 同式重算该层，避免每次拖拽事件重建全部层。"""
+        import cv2
+        for lite in self.rig.get("_lite", {}).values():
+            W, H = lite["width"], lite["height"]
+            sc = W / float(self.rig["width"])
+            x0, y0, x1, y1 = layer["bbox"]
+            nx0, ny0 = int(round(x0 * sc)), int(round(y0 * sc))
+            nx1, ny1 = int(round(x1 * sc)), int(round(y1 * sc))
+            nx1, ny1 = max(nx0 + 1, min(W, nx1)), max(ny0 + 1, min(H, ny1))
+            for ll in lite["_layers"]:
+                if ll["name"] == layer["name"]:
+                    ll["bbox"] = (nx0, ny0, nx1, ny1)
+                    ll["img"] = cv2.resize(layer["img"], (nx1 - nx0, ny1 - ny0),
+                                           interpolation=cv2.INTER_AREA)
 
     def _select_in_list(self, name):
         self._selected = name
@@ -1737,6 +1756,11 @@ def run_app():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     setTheme(Theme.DARK)
+    # qfluentwidgets 的 setTheme 不管 QToolTip：暗色下 tooltip 仍是系统默认
+    # 黑字深底看不清，这里显式给一套浅色字深色底（只影响 tooltip，不动其它控件）
+    app.setStyleSheet(
+        "QToolTip { color:#e6e6e6; background-color:#2b3140;"
+        " border:1px solid #3c4354; padding:4px 6px; }")
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
