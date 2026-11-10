@@ -19,6 +19,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using System.Drawing;
 
 class Installer
 {
@@ -897,30 +898,58 @@ class Installer
 
         win = new Form();
         win.Text = "木偶工作室 安装向导";
-        win.ClientSize = new System.Drawing.Size(540, 400);
+        win.ClientSize = new System.Drawing.Size(760, 400);
         win.FormBorderStyle = FormBorderStyle.FixedDialog;
         win.MaximizeBox = false; win.MinimizeBox = false;
         win.StartPosition = FormStartPosition.CenterScreen;
 
+        // ===== 左侧竖版配图（ArcGIS 安装器风格）=====
+        // banner 作为嵌入资源打进 exe，离线安装也能显示
+        PictureBox banner = new PictureBox();
+        banner.SizeMode = PictureBoxSizeMode.StretchImage;
+        banner.SetBounds(0, 0, 220, 400);
+        try
+        {
+            using (Stream bs = Assembly.GetExecutingAssembly()
+                       .GetManifestResourceStream("installer_banner.png"))
+            {
+                if (bs != null)
+                {
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        bs.CopyTo(ms);
+                        ms.Position = 0;
+                        banner.Image = Image.FromStream(ms);
+                    }
+                }
+            }
+        }
+        catch { }
+        win.Controls.Add(banner);
+
+        // 右侧表单区（左侧 220px 给配图）
+        const int LX = 240;
+        const int LW = 500;
+
         radioUpdate = new RadioButton();
         radioUpdate.Text = "更新版本";
-        radioUpdate.SetBounds(20, 20, 100, 24);
+        radioUpdate.SetBounds(LX, 20, 100, 24);
         radioUpdate.Enabled = !string.IsNullOrEmpty(detected);
         win.Controls.Add(radioUpdate);
 
         detectLbl = new Label();
         detectLbl.Text = string.IsNullOrEmpty(detected) ? "未检测到已安装版本" : ("检测到旧版本: " + detected);
-        detectLbl.SetBounds(120, 22, 400, 20);
+        detectLbl.SetBounds(LX + 100, 22, LW - 100, 20);
         win.Controls.Add(detectLbl);
 
         radioFresh = new RadioButton();
         radioFresh.Text = "新安装";
-        radioFresh.SetBounds(20, 52, 100, 24);
+        radioFresh.SetBounds(LX, 52, 100, 24);
         radioFresh.Checked = string.IsNullOrEmpty(detected);
         win.Controls.Add(radioFresh);
 
         dirBox = new TextBox();
-        dirBox.SetBounds(120, 52, 300, 24);
+        dirBox.SetBounds(LX + 100, 52, 300, 24);
         dirBox.Text = string.IsNullOrEmpty(detected)
             ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "木偶工作室")
             : detected;
@@ -928,55 +957,55 @@ class Installer
 
         browseBtn = new Button();
         browseBtn.Text = "浏览…";
-        browseBtn.SetBounds(428, 51, 76, 26);
+        browseBtn.SetBounds(LX + 408, 51, 76, 26);
         browseBtn.Click += delegate { Browse(); };
         win.Controls.Add(browseBtn);
 
         modelChk = new CheckBox();
         modelChk.Text = "下载模型权重（nf4 量化，约 5.3 GB，需联网，支持断点续传）";
-        modelChk.SetBounds(22, 86, 486, 24);
+        modelChk.SetBounds(LX + 2, 86, LW - 4, 24);
         win.Controls.Add(modelChk);
 
         Label l3 = new Label();
         l3.Text = "更新只覆盖程序文件，模型与你的拆分产物（seethrough_out\\）保持不变；\r\n" +
                  "新安装会创建开始菜单与桌面快捷方式，并把安装路径记录到注册表供下次更新检测。";
-        l3.SetBounds(22, 166, 496, 40);
+        l3.SetBounds(LX + 2, 166, LW - 4, 40);
         win.Controls.Add(l3);
 
         // 显卡路线：安装前检测，A 卡自动勾选 ComfyUI(ROCm) 路线（N 卡不受影响）
         gpuV = GpuVendor(out gpuN);
         gpuLbl = new Label();
-        gpuLbl.SetBounds(22, 112, 496, 20);
+        gpuLbl.SetBounds(LX + 2, 112, LW - 4, 20);
         gpuLbl.Text = gpuV == "nvidia" ? ("检测到显卡：" + gpuN + "（N 卡，应用内可直接拆图）")
                     : gpuV == "amd" ? ("检测到显卡：" + gpuN + "（A 卡，建议走 ComfyUI + ROCm 拆图）")
                     : ("检测到显卡：" + gpuN);
         win.Controls.Add(gpuLbl);
 
         amdChk = new CheckBox();
-        amdChk.SetBounds(22, 136, 500, 24);
+        amdChk.SetBounds(LX + 2, 136, LW - 4, 24);
         amdChk.Text = "A 卡拆图支持：代下 ComfyUI 安装器(172MB) + See-through 插件 + 中文指引（也可自行下载，见指引）";
         if (gpuV == "amd") amdChk.Checked = true;
         win.Controls.Add(amdChk);
 
         bar = new ProgressBar();
-        bar.SetBounds(20, 222, 500, 20);
+        bar.SetBounds(LX + 2, 222, LW - 4, 20);
         bar.Maximum = 1000;
         win.Controls.Add(bar);
 
         status = new Label();
         status.Text = "就绪";
-        status.SetBounds(20, 246, 500, 20);
+        status.SetBounds(LX + 2, 246, LW - 4, 20);
         win.Controls.Add(status);
 
         installBtn = new Button();
         installBtn.Text = "安 装";
-        installBtn.SetBounds(90, 300, 110, 34);
+        installBtn.SetBounds(LX + 20, 300, 110, 34);
         installBtn.Click += delegate { StartInstall(relaunched); };
         win.Controls.Add(installBtn);
 
         Button diagBtn = new Button();
         diagBtn.Text = "网络诊断";
-        diagBtn.SetBounds(210, 300, 110, 34);
+        diagBtn.SetBounds(LX + 140, 300, 110, 34);
         diagBtn.Click += delegate
         {
             if (running) return;
@@ -999,7 +1028,7 @@ class Installer
 
         Button quit = new Button();
         quit.Text = "退出";
-        quit.SetBounds(330, 300, 100, 34);
+        quit.SetBounds(LX + 260, 300, 100, 34);
         quit.Click += delegate { if (!running) win.Close(); else cancelFlag = true; };
         win.Controls.Add(quit);
 
