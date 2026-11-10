@@ -30,7 +30,8 @@ from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             DropDownPushButton, Action, RoundMenu, ListWidget,
                             TreeWidget, Slider, BodyLabel, CaptionLabel,
                             StrongBodyLabel, FluentStyleSheet, setTheme, Theme,
-                            MessageBox, InfoBar, InfoBarPosition)
+                            MessageBox, InfoBar, InfoBarPosition,
+                            MessageBoxBase, SpinBox, SubtitleLabel)
 
 
 class ToggleDropDownButton(TransparentDropDownPushButton):
@@ -623,6 +624,48 @@ class DecomposeWorker(QThread):
             self.done_signal.emit(None, self.out_dir)
 
 
+# ---------------- 新建画布尺寸对话框 ----------------
+class NewCanvasDialog(MessageBoxBase):
+    """「文件 → 新建」弹窗：输入画布宽高（像素）。默认 1024×1024，1..8192。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.titleLabel = SubtitleLabel("新建工程", self)
+        self.viewLayout.addWidget(self.titleLabel)
+        self.hint = CaptionLabel("设置画布尺寸（像素），之后拖入或导入的图片将按此画布摆放。",
+                                 self)
+        self.viewLayout.addWidget(self.hint)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(BodyLabel("宽度", self))
+        self.w_spin = SpinBox(self)
+        self.w_spin.setRange(1, 8192)
+        self.w_spin.setValue(1024)
+        self.w_spin.setFixedWidth(140)
+        row1.addWidget(self.w_spin)
+        row1.addStretch(1)
+        self.viewLayout.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.addWidget(BodyLabel("高度", self))
+        self.h_spin = SpinBox(self)
+        self.h_spin.setRange(1, 8192)
+        self.h_spin.setValue(1024)
+        self.h_spin.setFixedWidth(140)
+        row2.addWidget(self.h_spin)
+        row2.addStretch(1)
+        self.viewLayout.addLayout(row2)
+
+        self.yesButton.setText("创建")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(360)
+
+    def canvas_size(self):
+        # 注意：绝不能叫 size()——那会覆盖 QWidget.size()，
+        # 基类 MaskDialogBase.__init__ 内部调 self.size() 时控件还没建好（实测崩）
+        return self.w_spin.value(), self.h_spin.value()
+
+
 # ---------------- 工作台页 ----------------
 class Workbench(QWidget):
     def __init__(self, win):
@@ -637,10 +680,11 @@ class Workbench(QWidget):
         self.busy = False
         self._mv_orig = None          # 移动工具按下时的原始 bbox
         self._selected = None         # 当前选中图层名（列表/画布共用）
+        self._new_canvas = None       # 「新建」弹窗指定的画布尺寸 (W,H)，首张拖入图消费
         self._build()
         # 启动即空工作台（不自动载入任何工程）
         self.cur_dir = None
-        self.act_new()
+        self.act_new(False)   # 启动初始化：不弹尺寸对话框
 
     def _build(self):
         root = QHBoxLayout(self)
@@ -659,7 +703,7 @@ class Workbench(QWidget):
         tb_lay.setSpacing(6)
         menu = ToggleDropDownButton("文件", self)
         m = RoundMenu(parent=self)
-        act_new = Action(FluentIcon.ADD, "新建", triggered=self.act_new)
+        act_new = Action(FluentIcon.ADD, "新建", triggered=lambda: self.act_new(True))
         act_open = Action(FluentIcon.FOLDER, "打开工程", triggered=self.act_open_project)
         act_import = Action(FluentIcon.FOLDER_ADD, "导入 PSD", triggered=self.act_import)
         # 「最近打开」子菜单：hover 向右弹出（库内置 400ms 防抖）。
@@ -1141,10 +1185,13 @@ class Workbench(QWidget):
 
         # 空工作台 -> 建空 rig（只有 root 语义），并播基线快照让 Ctrl+Z 能回空
         if self.rig is None:
-            self.rig = {"width": w, "height": h, "fps": 30.0,
+            # 「新建」弹窗指定的画布尺寸优先；没指定则沿用首图尺寸（旧行为）
+            cw, ch = getattr(self, "_new_canvas", None) or (w, h)
+            self.rig = {"width": cw, "height": ch, "fps": 30.0,
                         "nodes": [], "_layers": [], "draw_order": []}
-            self.W, self.H = w, h
+            self.W, self.H = cw, ch
             self.cur_dir = None
+            self._new_canvas = None      # 消费掉，避免后续再建 rig 时误用旧尺寸
             self.history.seed(self)
 
         W, H = self.W, self.H
@@ -1311,13 +1358,23 @@ class Workbench(QWidget):
             InfoBar.success("已打开工程", os.path.basename(d), parent=self,
                             position=InfoBarPosition.TOP, duration=2000)
 
-    def act_new(self):
+    def act_new(self, ask_size=False):
+        """新建工程。ask_size=True（菜单触发）弹窗问画布尺寸；
+        False（启动初始化/程序化调用）直接建空白工作台，不弹窗。"""
+        W = H = None
+        if ask_size:
+            dlg = NewCanvasDialog(self)
+            if not dlg.exec():
+                return                      # 取消：保持当前工作台不动
+            W, H = dlg.canvas_size()
         self.rig = None
         self.layers = []
         self.visible = {}
         self.cur_dir = None
+        self._new_canvas = (W, H) if W else None   # 首张拖入图按此画布尺寸摆放
         self.reload_widgets()
-        self.prog.setText("空白工作台：拖入图片开始")
+        self.prog.setText("空白工作台：拖入图片开始"
+                          if not W else "新画布 %d×%d：拖入图片开始" % (W, H))
 
     def act_import(self):
         p, _ = QFileDialog.getOpenFileName(self, "导入 PSD", "",
