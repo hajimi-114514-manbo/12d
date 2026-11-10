@@ -1,6 +1,8 @@
-# 木偶工作室（Muppet Studio）
+﻿# 木偶工作室（Muppet Studio）
 
-> **伪L2D 骨架工作室 V2.0** —— 把动漫立绘自动拆成分层骨架并做动画的 PySide6 桌面应用。
+> **伪L2D 骨架工作室 v2.0.2** —— 把动漫立绘自动拆成分层骨架并做动画的 PySide6 桌面应用。
+>
+> 当前版本：v2.0.2（单一版本源见 `l2d_rig_qt.py` 的 `VERSION` 常量，窗口标题引用它；每次小更新 patch+1，成体系大功能 minor+1）。
 >
 > 语义规范采用 **Adobe Character Animator（CA）官方图层命名规范**，所以导出的 PSD 既能被
 > Character Animator 全自动绑定，也能被 Live2D Cubism Editor 自动转成部件。
@@ -253,3 +255,4 @@ D:\work\puppet\muppet_studio\
 `see-through\` 是完整的 SeeThrough 仓库，其 `requirements.txt` 另列了 `einops` / `transformers` /
 `huggingface-hub` / `safetensors` / `matplotlib` 等；本机已全部安装。`annotators\` 用到的
 `timm` / `pycocotools` 在本应用的拆分路径上不加载，`pycocotools` 缺失时会自动 mock，不是必需依赖。
+

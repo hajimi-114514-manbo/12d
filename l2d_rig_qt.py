@@ -19,7 +19,8 @@ from PIL import Image
 from PySide6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout,
                                QGridLayout, QSizePolicy, QFileDialog, QLabel,
                                QStackedWidget, QListWidgetItem, QTreeWidgetItem,
-                               QSplitter)
+                               QSplitter, QStyledItemDelegate, QAbstractItemView,
+                               QStyle)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QSize, QEvent, QRect
 from PySide6.QtGui import (QImage, QPixmap, QPainter, QColor, QKeySequence,
                            QShortcut, QIcon, QCursor, QPen, QBrush,
@@ -30,6 +31,7 @@ from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             TransparentToolButton, TransparentToggleToolButton,
                             TransparentDropDownPushButton, CheckBox,
                             DropDownPushButton, Action, RoundMenu, ListWidget,
+                            ListItemDelegate,
                             TreeWidget, Slider, BodyLabel, CaptionLabel,
                             StrongBodyLabel, FluentStyleSheet, setTheme, Theme,
                             MessageBox, InfoBar, InfoBarPosition,
@@ -102,6 +104,8 @@ def zh_err(e):
         return "内存不足，请关闭其他程序后重试"
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
+# 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
+VERSION = "2.0.2"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -152,8 +156,12 @@ class History:
         return {
             "layers": list(studio.layers),                       # 对象引用
             # bbox 值记录：移动工具是**原地改 bbox**，对象引用快照无法回退
-            # （undo 恢复的是同一对象，bbox 已被改掉）。按 name 键存值。
-            "bboxes": {l["name"]: tuple(l["bbox"]) for l in studio.layers},
+            # （undo 恢复的是同一对象，bbox 已被改掉）。用**对象 id** 做键
+            # （层名会变，不能拿名字当键）。
+            "bboxes": {id(l): tuple(l["bbox"]) for l in studio.layers},
+            # 图层名值记录：改名同样是**原地改 dict['name']**，对象引用快照
+            # 回退不了。用**下标**做键（名字自己会变，不能拿名字当键）。
+            "names": [l["name"] for l in studio.layers],
             "draw_order": list(studio.rig.get("draw_order", [])),
             "pivots": {n["node"]: list(n["pivot"]) for n in studio.rig["nodes"]},
             "node_layers": {n["node"]: list(n["layers"]) for n in studio.rig["nodes"]},
@@ -176,7 +184,8 @@ class History:
         if [id(x) for x in snap["layers"]] == [id(x) for x in prev["layers"]] and \
            snap["draw_order"] == prev["draw_order"] and \
            snap["pivots"] == prev["pivots"] and \
-           snap.get("bboxes") == prev.get("bboxes"):
+           snap.get("bboxes") == prev.get("bboxes") and \
+           snap.get("names") == prev.get("names"):
             return                               # 无变化不压栈
         self.undo_stack.append(snap)
         if len(self.undo_stack) > self.limit:
@@ -187,11 +196,35 @@ class History:
         if snap is None or studio.rig is None:
             return
         studio.layers = list(snap["layers"])
-        # 回退 bbox（移动工具的撤销靠这里，缺省则对象引用不变）
+        # 回退图层名（改名的撤销）：按**对象 id** 对应回原名——
+        # 名字已被改过，不能用名字去索引 names 列表
+        names = snap.get("names")
+        if names:
+            # snap["layers"] 与 names 同序；用 id 建立当前名->原名 映射
+            cur2orig = {}
+            for l, orig in zip(studio.layers, names):
+                cur2orig[id(l)] = orig
+            # 先迁移 visible/locked 的键（必须在改 name **之前**做，
+            # 否则 cur==orig 判断失效、键迁不回去）
+            for dname in ("visible", "locked"):
+                d = getattr(studio, dname, None)
+                if isinstance(d, dict):
+                    for l in studio.layers:
+                        cur = l["name"]
+                        orig = cur2orig.get(id(l))
+                        if orig and cur != orig and cur in d and orig not in d:
+                            d[orig] = d.pop(cur)
+            # 再把名字改回原名
+            for l in studio.layers:
+                orig = cur2orig.get(id(l))
+                if orig is not None and l["name"] != orig:
+                    l["name"] = orig
+        # 回退 bbox（移动工具的撤销靠这里）；键是对象 id（层名可能已变）
         bbs = snap.get("bboxes", {})
         for l in studio.layers:
-            if l["name"] in bbs:
-                l["bbox"] = tuple(bbs[l["name"]])
+            bb = bbs.get(id(l))
+            if bb is not None:
+                l["bbox"] = tuple(bb)
         studio.rig["draw_order"] = list(snap["draw_order"])
         studio.rig["_layers"] = list(snap["_layers"])
         for n in studio.rig["nodes"]:
@@ -247,7 +280,7 @@ class RigCanvas(QWidget):
         self._panning = None            # 平移起点 (x,y,panx,pany)
         # 工具："pan"=默认（左键拖支点）；"move"=移动图层（只拖当前选中层）
         self.tool = "pan"
-        self._layers_ref = []           # [(name, bbox_full, visible)] 列表前=叠放顶
+        self._layers_ref = []           # [(name, bbox_full, (visible, locked))] 列表前=叠放顶
         self.selected_name = None       # 当前选中图层名（图层列表 currentItem 同步）
         self._mv = None                 # 移动拖拽态 (name, 按下点全分辨率坐标)
 
@@ -260,8 +293,9 @@ class RigCanvas(QWidget):
         self.update()
 
     def set_layers(self, ref):
-        """Workbench 每次 redraw 同步：[(name, bbox(全分辨率), visible)]，
-        顺序=图层列表顺序（前=叠放最上），命中测试按此序取第一个。"""
+        """Workbench 每次 redraw 同步：[(name, bbox(全分辨率), (visible, locked))]，
+        顺序=图层列表顺序（前=叠放最上），命中测试按此序取第一个。
+        兼容旧式三元组 (name, bbox, visible)。"""
         self._layers_ref = ref
 
     def _to_full(self, pos):
@@ -409,16 +443,29 @@ class RigCanvas(QWidget):
         return best
 
     def _selected_layer_hit(self, ix, iy):
-        """移动工具命中测试：只认当前选中层。按下点在选中层 bbox 内
-        且该层可见才返回层名，否则 None（什么都不发生，无 InfoBar）。"""
+        """移动工具命中测试：只认当前选中层。
+
+        规则（用户要求：图层的空白区域也能拖）：
+          - 选中层存在、可见、未锁定 → **画布任意位置按下都拖它**，
+            包括图层 bbox 之外的空白处（PS 里拖已选对象的手感）；
+          - 图层 bbox **之内**的透明像素同样可拖（bbox 即判定范围，不看 alpha），
+            实测图层 bbox 内有 20%~71% 是透明像素，若按 alpha 判定会大片拖不动；
+          - 选中层被隐藏 / 锁定 / 已删除 → 不可拖（返回 None，什么都不发生，无 InfoBar）。
+        """
         name = self.selected_name
         if not name:
             return None
-        for nm, (x0, y0, x1, y1), vis in self._layers_ref:
+        for item in self._layers_ref:
+            nm = item[0]
+            extra = item[2]
+            if isinstance(extra, tuple):
+                vis, locked = extra
+            else:
+                vis, locked = extra, False
             if nm == name:
-                if vis and x0 <= ix < x1 and y0 <= iy < y1:
+                if vis and not locked:
                     return name
-                return None            # 选中层被隐藏或点在 bbox 外：不可拖
+                return None            # 选中层被隐藏/锁定：不可拖
         return None                    # 选中层已不在画布数据里（刚被删）
 
     def mousePressEvent(self, e):
@@ -845,6 +892,162 @@ class ProjectNameDialog(MessageBoxBase):
         return sanitize_proj_name(self.name_edit.text())
 
 
+# ---------------- PS 风格图层列表委托 ----------------
+class LayerItemDelegate(ListItemDelegate):
+    """图层列表项绘制：眼睛(24px) | 缩略图(36px) | 名称+tag | 锁定标记(24px)。
+
+    继承 qfluentwidgets ListItemDelegate（保留其 hover/press/selected 机制与
+    qfluentwidgets 的 setItemDelegate 契约），只接管绘制与点击区域：
+      - 眼睛区单击 -> 切 visible（只刷该行 + redraw，不重建列表）
+      - 右缘锁定区单击 -> 切 locked（移动/拆分/删除/置顶/画布命中全部跳过）
+      - 缩略图区双击 -> 进入重命名（createEditor/setEditorData/setModelData）
+    """
+
+    EYE_W = 24
+    THUMB = 36
+    LOCK_W = 24
+    ROW_H = 48
+
+    def __init__(self, parent, wb):
+        super().__init__(parent)
+        self.wb = wb
+        self._thumb_cache = {}
+
+    def sizeHint(self, option, index):
+        return QSize(0, self.ROW_H)
+
+    def paint(self, painter, option, index):
+        name = index.data(Qt.UserRole)
+        wb = self.wb
+        # 图层查表：原来每次 paint 都 next(...) 线性扫 layers（17 行 x 17 层 = 289 次比较），
+        # 改用 wb 维护的 name->layer 字典（重命名/删层时同步）。
+        layer = wb.layer_by_name(name)
+        if not name or layer is None:
+            return
+        vis = wb.visible.get(name, True)
+        locked = wb.locked.get(name, False)
+        rect = option.rect
+        row = index.row()
+        is_sel = row in self.selectedRows
+        is_press = self.pressedRow == row
+        is_hover = self.hoverRow == row
+        if is_sel:
+            bg = QColor("#2f3d5c")
+        elif is_press:
+            bg = QColor("#2a3142")
+        elif is_hover:
+            bg = QColor("#262c38")
+        else:
+            bg = QColor("#242935")
+        painter.fillRect(rect, bg)
+        # 选中指示条（保留 qfluentwidgets 的选中视觉线索）
+        if is_sel:
+            painter.fillRect(QRect(rect.left(), rect.top(), 3, rect.height()),
+                             QColor("#4d88ff"))
+        # ---- 眼睛区 ----
+        ex = rect.left() + 12
+        ey = rect.center().y()
+        painter.setPen(QPen(QColor("#8a93a5"), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(QPoint(ex, ey), 6, 3.5)
+        if vis:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#e6ebf5"))
+            painter.drawEllipse(QPoint(ex, ey), 2.2, 1.6)
+        else:
+            painter.setPen(QPen(QColor("#e6ebf5"), 2))
+            painter.drawLine(QPoint(ex - 7, ey - 2), QPoint(ex + 7, ey + 2))
+        # ---- 缩略图区（棋盘底 + 缩放后的层图）----
+        tx = rect.left() + self.EYE_W + 4
+        ty = rect.center().y() - self.THUMB // 2
+        painter.fillRect(QRect(tx, ty, self.THUMB, self.THUMB), QColor("#1b1f27"))
+        pix = self._thumb(layer)
+        if pix is not None:
+            # _thumb 返回的已是缩放好的小图，直接绘制（不再每次重缩放）
+            painter.drawPixmap(tx + 2, ty + 2, pix)
+        # ---- 名称 + tag ----
+        tx2 = tx + self.THUMB + 10
+        tw = max(1, rect.right() - tx2 - self.LOCK_W - 6)
+        painter.setPen(QColor("#e6ebf5") if vis else QColor("#6b7382"))
+        painter.drawText(QRect(tx2, rect.top() + 4, tw, 20),
+                         Qt.AlignLeft | Qt.AlignVCenter, name)
+        tag = layer.get("tag")
+        if tag:
+            painter.setPen(QColor("#7c8593"))
+            painter.drawText(QRect(tx2, rect.top() + 24, tw, 18),
+                             Qt.AlignLeft | Qt.AlignVCenter, tag)
+        # ---- 锁定标记（右缘）----
+        if locked:
+            lx = rect.right() - 12
+            ly = rect.center().y()
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor("#e6c068"))
+            painter.drawRoundedRect(QRect(lx - 5, ly - 2, 10, 8), 2, 2)
+            painter.drawArc(QRect(lx - 5, ly - 9, 10, 11), 0, 180 * 16)
+
+    def _thumb(self, layer):
+        """返回**已缩放到 THUMB-4 的小图**（直接绘制用）。
+        优化点：原实现每次 paint 都对原图做一次 scaled() 重缩放
+        （637x706 -> 32x32 SmoothTransformation），17 行重绘 = 17 次缩放，
+        这就是"隐藏所有图层后画布卡很久"的主因。现在缩放结果直接缓存。"""
+        img = layer.get("img")
+        if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] != 4:
+            return None
+        h, w = img.shape[:2]
+        if w <= 0 or h <= 0:
+            return None
+        arr = np.ascontiguousarray(img)
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        key = (layer["name"], arr.shape[1], arr.shape[0])
+        cache = self._thumb_cache
+        pix = cache.get(key)
+        if pix is not None:
+            return pix
+        qimg = QImage(arr.data, w, h, 4 * w, QImage.Format.Format_RGBA8888)
+        full = QPixmap.fromImage(qimg.copy())
+        side = max(1, self.THUMB - 4)
+        pix = full.scaled(side, side, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        if len(cache) > 400:
+            cache.clear()
+        cache[key] = pix
+        return pix
+
+    def editorEvent(self, event, model, option, index):
+        name = index.data(Qt.UserRole)
+        if not name:
+            return super().editorEvent(event, model, option, index)
+        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            x = event.position().x() - option.rect.left()
+            if x < self.EYE_W:
+                self.wb.toggle_visible(name)
+                self.wb._select_in_list(name)
+                return True
+            if x > option.rect.width() - self.LOCK_W:
+                self.wb.toggle_lock(name)
+                self.wb._select_in_list(name)
+                return True
+            return False
+        if event.type() == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+            x = event.position().x() - option.rect.left()
+            if self.EYE_W <= x < self.EYE_W + self.THUMB:
+                self.wb.start_rename_edit(name)
+                return True
+        return super().editorEvent(event, model, option, index)
+
+    def createEditor(self, parent, option, index):
+        return LineEdit(parent)
+
+    def setEditorData(self, editor, index):
+        editor.setText(index.data(Qt.UserRole) or "")
+
+    def setModelData(self, editor, model, index):
+        old = index.data(Qt.UserRole)
+        new = editor.text().strip()
+        if old and new:
+            self.wb.rename_layer(old, new)
+
+
 # ---------------- 工作台页 ----------------
 class Workbench(QWidget):
     def __init__(self, win):
@@ -854,6 +1057,7 @@ class Workbench(QWidget):
         self.layers = []
         self.W = self.H = 0
         self.visible = {}
+        self.locked = {}               # 图层名 -> 是否锁定（PS 锁标记）
         self.history = History()
         self.worker = None
         self.busy = False
@@ -1014,11 +1218,14 @@ class Workbench(QWidget):
         botLay = QVBoxLayout()
         botLay.setContentsMargins(4, 4, 0, 0)
         botLay.setSpacing(6)
-        botLay.addWidget(StrongBodyLabel("图层（顶=最前，拖动重排，双击显隐，右键菜单）"))
+        botLay.addWidget(StrongBodyLabel(
+            "图层（顶=最前，拖动重排；PS 式：眼睛显隐 / 缩略图重命名 / 锁定，右键菜单）"))
         self.layer_list = ListWidget()
         self.layer_list.setDragDropMode(ListWidget.InternalMove)
         self.layer_list.setDefaultDropAction(Qt.MoveAction)
-        self.layer_list.itemDoubleClicked.connect(self._toggle_item)
+        # PS 风格委托：自己画眼睛/缩略图/名称/锁标；编辑只由缩略图双击触发
+        self.layer_list.setItemDelegate(LayerItemDelegate(self.layer_list, self))
+        self.layer_list.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.layer_list.model().rowsMoved.connect(self._on_rows_moved)
         self.layer_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.layer_list.customContextMenuRequested.connect(self._layer_menu)
@@ -1113,6 +1320,7 @@ class Workbench(QWidget):
         pos = {nm: k for k, nm in enumerate(self.rig["draw_order"])}
         self.layers.sort(key=lambda l: -pos.get(l["name"], 0))
         self.visible = {l["name"]: True for l in self.layers}
+        self.locked = {}               # 载入新工程：锁定状态清空
         self.cur_dir = d
         self.proj_name = self._read_proj_name(d)
         self.proj_dir = d
@@ -1155,13 +1363,15 @@ class Workbench(QWidget):
                   ensure_ascii=False, indent=2)
 
     def reload_widgets(self):
+        # 图层名索引重建（delegate 靠它 O(1) 查层，避免每次 paint 线性扫）
+        self._sync_layer_index()
         # clear 会触发 currentItemChanged 把选中层洗成 None，先屏蔽；
         # 重建列表后按 _selected 恢复选中（保持"列表选中=画布可拖层"一致）
         self.layer_list.blockSignals(True)
         self.layer_list.clear()
         for l in self.layers:
-            mark = "●" if self.visible.get(l["name"], True) else "○"
-            it = QListWidgetItem("%s %s [%s]" % (mark, l["name"], l["tag"]))
+            # 委托负责绘制眼睛/缩略图/tag；item 文本只作可访问性兜底
+            it = QListWidgetItem(l["name"])
             it.setData(Qt.UserRole, l["name"])
             self.layer_list.addItem(it)
         if self._selected:
@@ -1189,9 +1399,11 @@ class Workbench(QWidget):
                                   "拖入图片开始")
             return
         hidden = {l["name"] for l in self.layers if not self.visible.get(l["name"], True)}
-        # 移动工具命中测试数据：列表顺序=前为叠放顶，与视觉一致
+        # 移动工具命中测试数据：列表顺序=前为叠放顶，与视觉一致；
+        # 第三元素 (visible, locked)：锁定层不可被画布命中
         self.canvas.set_layers([(l["name"], l["bbox"],
-                                 self.visible.get(l["name"], True))
+                                 (self.visible.get(l["name"], True),
+                                  self.locked.get(l["name"], False)))
                                 for l in self.layers])
         # 播放走半分辨率 LOD + 预乘直出（省出口除法，~30ms/帧），透明区画布显示棋盘格
         img = C.render_frame_rgba(self.rig, self.t, hidden=hidden,
@@ -1215,14 +1427,57 @@ class Workbench(QWidget):
             self.history.push(self)
 
     # ---------- 移动工具 ----------
+    def toggle_visible(self, name):
+        """切换某层显隐（delegate 的眼睛点击入口）。
+        只刷行 + 重绘画布，不重建列表。"""
+        if not name:
+            return
+        self.visible[name] = not self.visible.get(name, True)
+        self._refresh_layer_rows()
+        self.redraw()
+
+    def _refresh_layer_rows(self):
+        """只重画图层列表的行（不重建 item）：可见性/锁定/名字变化后用，
+        比 reload_widgets 快得多（后者 clear+新建 17 个 item + 全部重绘）。"""
+        try:
+            vp = self.layer_list.viewport()
+        except Exception:
+            return
+        vp.update()
+
+    def layer_by_name(self, name):
+        """按名字取图层（带缓存字典，避免 delegate 每次 paint 线性扫描）。
+        缓存 key 是**当前**名字；改名/删层/重排后由 _sync_layer_index 重建。"""
+        if not name:
+            return None
+        idx = getattr(self, "_layer_index", None)
+        if idx is None:
+            idx = self._sync_layer_index()
+        l = idx.get(name)
+        if l is not None:
+            return l
+        # 缓存可能过期（改名等），重建一次再查
+        idx = self._sync_layer_index()
+        return idx.get(name)
+
+    def _sync_layer_index(self):
+        """重建 name->layer 字典索引（重命名/增删/重排后调用）"""
+        idx = {l["name"]: l for l in self.layers}
+        self._layer_index = idx
+        return idx
+
     def _on_current_layer_changed(self, cur, _prev=None):
         """图层列表 currentItem 变化 -> 同步画布选中层（移动工具只拖该层）。"""
         self._selected = cur.data(Qt.UserRole) if cur is not None else None
         self.canvas.selected_name = self._selected
 
     def _on_move_grab(self, name):
-        """按下命中选中层：记原始 bbox（累计偏移基准，避免逐帧增量误差）。"""
+        """按下命中选中层：记原始 bbox（累计偏移基准，避免逐帧增量误差）。
+        锁定层直接拒绝（防线上是 hit-test，这里是第二道防线——
+        避免将来有代码绕过 hit-test 直调槽函数时把锁定层拖走）。"""
         self._mv_orig = None
+        if self.locked.get(name):
+            return
         for l in self.layers:
             if l["name"] == name:
                 self._mv_orig = tuple(l["bbox"])
@@ -1230,6 +1485,8 @@ class Workbench(QWidget):
 
     def _on_move_drag(self, name, dx, dy):
         if self._mv_orig is None:
+            return
+        if self.locked.get(name):        # 第二道防线：锁定层不动
             return
         x0, y0, x1, y1 = self._mv_orig
         nx0, ny0 = int(round(x0 + dx)), int(round(y0 + dy))
@@ -1240,6 +1497,7 @@ class Workbench(QWidget):
                 self._sync_lite_bbox(l)
                 break
         self.redraw()
+
 
     def _sync_lite_bbox(self, layer):
         """_lite 缓存里存的是各层裁剪图+bbox，源层 bbox 变了必须同步，
@@ -1259,6 +1517,7 @@ class Workbench(QWidget):
                     ll["img"] = cv2.resize(layer["img"], (nx1 - nx0, ny1 - ny0),
                                            interpolation=cv2.INTER_AREA)
 
+
     def _select_in_list(self, name):
         """程序化选中列表项（会经 currentItemChanged 同步到画布）。"""
         for i in range(self.layer_list.count()):
@@ -1267,10 +1526,63 @@ class Workbench(QWidget):
                 self.layer_list.setCurrentItem(it)
                 return
 
-    def _toggle_item(self, item):
-        nm = item.data(Qt.UserRole)
-        self.visible[nm] = not self.visible.get(nm, True)
+    def rename_layer(self, old, new):
+        """兼容入口：delegate.setModelData 调用，转给 _rename_layer。"""
+        self._rename_layer(old, new)
+
+    def _rename_layer(self, old, new):
+        """重命名图层（PS 双击缩略图 / 右键菜单触发）。
+
+        清洗非法字符、重名自动 _2/_3；同步 layers 的 name、visible/locked 的键、
+        rig draw_order、rig nodes[].layers 引用；history.push 可撤销。
+        改 name 时**新建层 dict 替换**，不能原地改——历史快照存对象引用，
+        原地改会让撤销拿不到旧名（对象引用快照方案的死角）。"""
+        if self.rig is None or not old:
+            return
+        obj = next((l for l in self.layers if l["name"] == old), None)
+        if obj is None:
+            return
+        base = sanitize_proj_name(new)
+        if not base:
+            return
+        name = base
+        n = 2
+        existing = {l["name"] for l in self.layers if l["name"] != old}
+        while name in existing:
+            name = "%s_%d" % (base, n)
+            n += 1
+        if name == old:
+            return
+        # 新建层 dict 替换（img/path 等其余字段共享引用）
+        new_obj = dict(obj)
+        new_obj["name"] = name
+        idx = next(i for i, l in enumerate(self.layers) if l is obj)
+        self.layers[idx] = new_obj
+        # rig["_layers"] 与 self.layers 可能是同一 list（load_dir 后），
+        # 也可能是独立 list（_drop_add_layer/_apply_subsplit 后），两种都要处理
+        if self.rig["_layers"] is not self.layers:
+            self.rig["_layers"] = [new_obj if l is obj else l
+                                   for l in self.rig["_layers"]]
+        # visible / locked 字典键迁移（值保持；不存在则跳过）
+        if old in self.visible:
+            self.visible[name] = self.visible.pop(old)
+        locked = getattr(self, "locked", {})
+        if old in locked:
+            locked[name] = locked.pop(old)
+        # rig nodes[].layers 里引用该层名的地方（字符串列表，必须单独替换）
+        for nd in self.rig["nodes"]:
+            if old in nd["layers"]:
+                k = nd["layers"].index(old)
+                nd["layers"][k] = name
+        # draw_order（字符串列表）
+        self.rig["draw_order"] = [name if x == old else x for x in self.rig["draw_order"]]
+        # 选中态跟随（否则移动工具拖不到改名后的层）
+        if self._selected == old:
+            self._selected = name
+            self.canvas.selected_name = name
+        self.rig.pop("_lite", None)
         self.reload_widgets()
+        self.history.push(self)
 
     def _on_rows_moved(self, *a):
         # InternalMove 完成后按视觉顺序重建 layers/draw_order
@@ -1282,6 +1594,7 @@ class Workbench(QWidget):
         by = {l["name"]: l for l in self.layers}
         if len(names) == len(self.layers) and all(n in by for n in names):
             self.layers = [by[n] for n in names]
+            self._sync_layer_index()          # 重排后索引失效，重建
             self.rig["draw_order"] = list(reversed(names))
             self.history.push(self)
             self.redraw()
@@ -1297,6 +1610,10 @@ class Workbench(QWidget):
         menu = RoundMenu(parent=self.layer_list)
         menu.addAction(Action(FluentIcon.UP, "置顶",
                               triggered=lambda: self._layer_to_top(name)))
+        menu.addAction(Action(FluentIcon.EDIT, "重命名",
+                              triggered=lambda: self.start_rename_edit(name)))
+        menu.addAction(Action(text=("解锁" if self.locked.get(name) else "锁定"),
+                              triggered=lambda: self.toggle_lock(name)))
         # 拆分此层：两级子菜单（A 连通域 / B SAM）
         sub = RoundMenu("拆分此层", parent=self)
         sub.addAction(Action(FluentIcon.CUT, "基础拆分（连通域）",
@@ -1317,6 +1634,10 @@ class Workbench(QWidget):
             return
         obj = next((l for l in self.layers if l["name"] == name), None)
         if obj is None:
+            return
+        if self.locked.get(name):
+            InfoBar.warning("图层已锁定", "%s 已锁定，无法拆分（取消锁定后重试）" % name,
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
             return
         try:
             if mode == "basic":
@@ -1373,6 +1694,10 @@ class Workbench(QWidget):
         obj = next((l for l in self.layers if l["name"] == name), None)
         if obj is None:
             return
+        if self.locked.get(name):
+            InfoBar.warning("图层已锁定", "%s 已锁定，无法置顶（取消锁定后重试）" % name,
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            return
         self.layers.remove(obj)
         self.layers.insert(0, obj)
         self.rig["draw_order"] = [l["name"] for l in reversed(self.layers)]
@@ -1386,6 +1711,10 @@ class Workbench(QWidget):
             return
         obj = next((l for l in self.layers if l["name"] == name), None)
         if obj is None:
+            return
+        if self.locked.get(name):
+            InfoBar.warning("图层已锁定", "%s 已锁定，无法删除（取消锁定后重试）" % name,
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
             return
         self.layers = [l for l in self.layers if l["name"] != name]
         self.rig["draw_order"] = [n for n in self.rig["draw_order"] if n != name]
@@ -1484,11 +1813,16 @@ class Workbench(QWidget):
                         position=InfoBarPosition.TOP, duration=2500)
 
     def _toggle_all(self):
+        """显示/隐藏全部图层。
+        性能：原来调 reload_widgets() 重建全部 item（clear + 17 次新建 + 17 行重绘），
+        实测真窗口 60~100ms，体感"卡一下"。这里改成**只刷行**——
+        可见状态变了但列表结构没变，委托重画眼睛即可。"""
         vals = [self.visible.get(k, True) for k in self.visible]
         target = not all(vals) if vals else True
         for k in self.visible:
             self.visible[k] = target
-        self.reload_widgets()
+        self._refresh_layer_rows()
+        self.redraw()
 
     def _toggle_play(self):
         self.playing = not self.playing
@@ -1641,6 +1975,7 @@ class Workbench(QWidget):
         self.rig = None
         self.layers = []
         self.visible = {}
+        self.locked = {}
         self.cur_dir = None
         self.proj_name = None
         self.proj_dir = None
@@ -2035,7 +2370,7 @@ SPLIT_QSS = ("QSplitter::handle { background: #3a3f4a; }"
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("木偶工作室 V2.0")
+        self.setWindowTitle("木偶工作室 v" + VERSION)
         self.resize(1280, 780)
         from PySide6.QtGui import QIcon
         if os.path.exists(ICON_ICO):

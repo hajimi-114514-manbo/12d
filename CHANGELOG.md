@@ -5,6 +5,38 @@
 
 ---
 
+## v2.0.2（2026-11-10 19:44）图层面板 PS 化 + 性能优化 + 版本号机制
+
+- **图层面板 PS 化（QStyledItemDelegate 委托绘制）**：行结构 = 眼睛(24px) | 缩略图(36px，棋盘底) | 名称+tag | 锁标。眼睛单击切显隐、行尾点击切锁定（锁定层移动/删除/拆分/置顶全部跳过并提示「图层已锁定」）、双击缩略图区进重命名。
+- **图层重命名**（_rename_layer / delegate 的 setModelData 调用）：清洗非法字符 \ / : * ? " < > |、限长 60、重名自动 _2/_3 后缀；同步 layers 字典的 name、visible/locked 的**键**、rig['draw_order']、rig['nodes'][*]['layers']、当前选中态。改名可撤销。
+- **History 快照补 names 键**：改名和移动一样是**原地改图层属性**，对象引用快照回退不了。快照新增 "names": [每层名]（按**下标**存，名字自己会变不能当键），apply 时按**对象 id** 对应回原名，并同步 visible/locked 的键迁移；bboxes 的键也从层名改成对象 id（改名会让层名键失效）。**教训：对象引用快照方案里，任何"原地改图层属性"的工具都必须补值记录**。
+- **性能：隐藏/显示全部图层卡顿已修**（用户反馈「点击隐藏所有图层后画布要好久才能更新」）。三处根因与修法：① _toggle_all 原来调 
+eload_widgets() 重建全部 item（clear + 17 次新建 + 17 行重绘）→ 改成**只刷行**（viewport.update()）；② delegate 的 _thumb 返回原图尺寸 pixmap、paint 时每次都 scaled(SmoothTransformation) 重缩放（637x706→32x32，17 行 = 17 次缩放）→ 改为**直接缓存缩放后的小图**；③ paint 里 
+ext(l for l in wb.layers ...) 线性查找（17 行 × 17 层 = 289 次比较）→ 改为 wb.layer_by_name() 的 O(1) 字典索引。**实测真窗口：平均 64.6ms → 23.6ms，最大 97.8ms → 33.4ms**。
+- **修一个真 bug**：delegate 的眼睛点击调 wb.toggle_visible(name)，但 Workbench **根本没有这个方法** → 点眼睛会 AttributeError 崩溃。已补 	oggle_visible()（切 visible + 只刷行 + redraw）。
+- **移动工具空白区可拖**：实测图层 bbox 内有 20%~71% 是透明像素（按 alpha 判定会大片拖不动），且画布上不在任何 bbox 内的空白处也应当能拖当前选中层（PS 拖已选对象的手感）。改为：**只要有选中层且它可见未锁定，画布任意位置按下都拖它**。
+- **锁定第二道防线**：之前只有画布 hit-test 拦锁定层，绕过 hit-test 直调 _on_move_grab/_on_move_drag 能拖锁定层（qa-runner 指出的边界）。现在两个槽函数内部也检查 locked。
+- **版本号机制**：单一版本源 = l2d_rig_qt.py 的 VERSION 常量（窗口标题 "木偶工作室 v" + VERSION 引用它），README 同步；此后每次小更新 patch+1，成体系大功能 minor+1。
+- **测试**：layer_menu_test 44 项 / finisher_test 全项 / proj_nav_test 全绿 rc=0；qa-runner 独立适配了移动工具新语义的断言（24c2 系列 + 24h 锁定），并如实报告了锁定防线的边界。
+
+## 版本号规范
+
+- **单一版本源**：`l2d_rig_qt.py` 的 `VERSION` 常量，窗口标题引用它。
+- **递增规则**：每次小更新 patch+1（v2.0.1、v2.0.2…）；成体系大功能 minor+1；破坏性/架构级 major+1。
+- **CHANGELOG 新节标题格式**：`## vX.Y.Z（日期 时段）主题`。
+- 历史各节（2026-11-09~10）为 v2.0.0 开发期记录，不回溯补号。
+
+## v2.0.1（2026-11-10 下午）工程化 + 新建弹窗 + 移动工具修正
+
+- **新建弹窗加工程名**：「文件 → 新建」弹窗现在可输入工程名 + 画布宽高（1..8192，默认 1024×1024）。确认后立刻创建 `projects\<工程名>\` 目录、写占位 rig_project.json、并在**导航栏新增该工程项**（点它直接载入）；「工作台」按钮已从导航栏移除。保存时默认建议当前工程名，用户可改（改名会建新目录并同步导航项）。
+- **NumSpinBox（修 qfluentwidgets 的坏控件）**：实测 qfw 1.11.3 的 `SpinBox`/`CompactSpinBox`/`DoubleSpinBox` **全部**把内部 QLineEdit 挤成 **1px 宽**（`QRect(0,1,1,31)`），数字区完全不可见、点不进——这就是用户报的"宽高输入框无法使用"。试过 `hBoxLayout.insertWidget(0, lineEdit)`：lineEdit 可见了，但 QSpinBox 失去对它的引用，`setValue()` 不刷新文本、手改文本也不回写 value，功能坏，否决。最终自研 `NumSpinBox`（qfw LineEdit + QIntValidator + 复用 qfw SpinButton 箭头、支持长按连发），对外接口 value/setValue/setRange 与 SpinBox 兼容。
+- **移动工具语义**：改为**只拖图层面板当前选中层**（不再自动命中最上层）。且**图层的空白区域也能拖**——bbox 内的透明像素（实测图层 bbox 内 20%~71% 是透明区）可拖，画布上不在任何 bbox 内的空白处按下也拖当前选中层（PS 拖已选对象的手感）；隐藏层/锁定层不可拖。
+- **拆分图片入口移到「编辑」菜单**（文件菜单 10 项、编辑菜单 3 项）。
+- **空画布拖图自适应**：没建过工程时直接拖图 → 画布尺寸=图片尺寸、工程名=图片文件名（中文保留）、自动建工程目录+导航项；已有画布时旧行为不变（超尺寸图等比缩放居中）。
+- **修一个潜伏 bug**：菜单改版时 `em.aboutToHide.connect(lambda: self._menu_about_to_hide(exp))` 残留引用已删除的 `exp` 变量，aboutToHide 触发即 NameError（此前侥幸不炸是因为 RoundMenu.close() 不发该信号）。
+- **测试**：finisher_test 37 项 / layer_menu_test 39 项 / proj_nav_test 全绿 rc=0；SpinBox 真窗口截图确认真实渲染（非 offscreen）。
+- **版本号规范**（用户新定规矩）：此后每次小更新都要递增版本号（patch+1，如 v2.0.1、v2.0.2；成体系大功能 minor+1）。单一版本源 = l2d_rig_qt.py 的 VERSION 常量，窗口标题引用它；CHANGELOG 新节标题用 `## vX.Y.Z（日期 时段）主题`。历史各节（2026-11-09~10）为 v2.0.0 开发期记录，不回溯补号。
+
 ## 2026-11-10（下午3）新建弹窗：自定义画布尺寸
 
 - **用户需求原文**：「文件下拉菜单选择新建后，需要弹窗让用户输入长和宽(像素)，根据输入创建画布尺寸」。
@@ -192,4 +224,3 @@
   1. **.bat 必须纯 ASCII 注释**：cmd 按 ANSI(GBK) 读 .bat，UTF-8 中文注释会被误解析成命令（'uppetStudio-Setup.exe（exe' is not recognized...），原 bat 全英文注释所以从没出过问题；
   2. **不能用相对路径 ..\* 打包**：7z/cmd 会把它解析到 D:\ 根（去扫 Config.Msi/pnpm-store/.BIN），必须用 %~dp0 拼绝对路径 %APP%\*。
 - **7z 排除清单新增 -xr!dist -xr!legacy**：dist 防止 49MB exe 被打进 zip（Setup 自包含变 ~100MB），legacy 防止退役代码随包分发。两者都实测生效（49.89MB → 49.29MB）。
-
