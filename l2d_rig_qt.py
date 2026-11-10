@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
 功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做/拆分图片）。
@@ -109,8 +109,8 @@ VERSION = "2.3.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
-ICON_PNG = os.path.join(V2, "laowu_icon.png")
-ICON_ICO = os.path.join(V2, "laowu_icon.ico")
+ICON_PNG = os.path.join(V2, "anon_sewing_icon.png")
+ICON_ICO = os.path.join(V2, "anon_sewing_icon.ico")
 DEFAULT_DIR = os.path.join(V2, "示例工程")
 # ffmpeg 回退：应用自带优先，其次历史上放过的共享位置
 FFMPEG_CANDIDATES = [os.path.join(V2, "ffmpeg.exe"),
@@ -1693,10 +1693,20 @@ class Workbench(QWidget):
 
     def act_copy_selection(self, cut=False):
         """Ctrl+C / Ctrl+X：把选区内容复制到系统剪贴板（cut=True 则同时从原层抠掉）。"""
+        # 正在画但没闭合 -> 自动闭合（用户直接按 Ctrl+C 的常见情形）
+        if len(getattr(self.canvas, "_lasso", []) or []) >= 3:
+            self.canvas._commit_lasso()
+            app = QApplication.instance()
+            if app is not None:
+                app.processEvents()
         layer = self._selection_layer()
         if layer is None:
-            InfoBar.info("复制", "没有激活的选区（先用套索工具圈选）", parent=self,
-                         position=InfoBarPosition.TOP, duration=2000)
+            if not self._selected:
+                InfoBar.info("复制", "请先在图层面板选中一个图层", parent=self,
+                             position=InfoBarPosition.TOP, duration=2500)
+            else:
+                InfoBar.info("复制", "没有激活的选区（先用套索工具圈选并双击闭合）",
+                             parent=self, position=InfoBarPosition.TOP, duration=2500)
             return
         import lasso_tool
         sels = self._selection_data
@@ -1720,10 +1730,17 @@ class Workbench(QWidget):
         mime.setData("application/x-muppet-layer",
                      QByteArray(json.dumps(meta).encode("utf8")))
         QApplication.clipboard().setMimeData(mime)
-        # 剪切：从原层抠掉选区内容（保留原层不透明部分）
+        # 剪切：**移除选中的部分**（保留选区外的），选区内容进剪贴板
+        # —— PS 语义。注意与"应用选区裁剪"方向相反：那个是只保留选区内。
         if cut:
             mask = self._selection_mask(layer)
-            newL = lasso_tool.clip_layer_by_mask(layer, mask) if mask is not None else None
+            # 选区落在空白处 -> 没有可剪切的内容，明确提示
+            if mask is not None and not ((layer["img"][:, :, 3] > 0) & (mask > 0)).any():
+                InfoBar.warning("剪切", "选区落在图层的空白处，没有可剪切的内容",
+                                parent=self, position=InfoBarPosition.TOP, duration=3000)
+                return
+            newL = (lasso_tool.clip_layer_by_mask(layer, mask, invert=True)
+                    if mask is not None else None)
             if newL is not None:
                 for arr2 in (self.layers, self.rig.get("_layers", [])):
                     for i, x in enumerate(arr2):
@@ -1874,7 +1891,17 @@ class Workbench(QWidget):
         mask = lasso_tool.combine_masks(add_masks, sub_masks, w, h,
                                         feather=self.lasso_feather)
         if mask is None:
-            InfoBar.warning("选区无效", "选区与图层没有重叠，或图层完全被裁空",
+            InfoBar.warning("选区无效", "选区与图层没有重叠，未做任何修改",
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            return
+        # 选区与图层实际重叠像素为 0 -> 明确提示，别静默改层
+        if not (mask > 0).any():
+            InfoBar.warning("选区无效", "选区与图层没有重叠，未做任何修改", parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            return
+        # 有重叠但重叠处全透明（图层 bbox 的空白角很常见）-> 也提示，不清空图层
+        if not ((img[:, :, 3] > 0) & (mask > 0)).any():
+            InfoBar.warning("选区为空", "选区落在图层的空白处，没有可保留的内容",
                             parent=self, position=InfoBarPosition.TOP, duration=3000)
             return
         # L2：保留原图（首次裁剪时存），供「还原」与"在原图上再次选取"

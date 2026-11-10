@@ -65,12 +65,21 @@ def combine_masks(add_masks, sub_masks, w, h, feather=0):
     return acc
 
 
-def clip_layer_by_mask(layer, mask, origin=(0, 0)):
+def invert_mask(mask):
+    """掩码取反（0<->255），用于"减去选区"（PS 的剪切语义：
+    保留选区**外**的内容，移除选区内的）。"""
+    if mask is None:
+        return None
+    return (255 - mask).astype(np.uint8)
+
+
+def clip_layer_by_mask(layer, mask, origin=(0, 0), invert=False):
     """按掩码裁剪图层。返回新 layer dict，或 None（无有效内容）。
 
     - mask 是图层**自身坐标系**（相对 bbox 左上角）的 0..255 掩码
     - origin: 掩码对应的原点在 bbox 坐标系里的偏移（本函数按 bbox 裁剪，
       传入 (0,0) 表示掩码与 bbox 同尺寸）
+    - invert=True：取反掩码 —— 用于**剪切**（保留选区外、去掉选区内）
     - 不修改入参 layer（返回新 dict）
     """
     img = layer.get("img")
@@ -83,6 +92,8 @@ def clip_layer_by_mask(layer, mask, origin=(0, 0)):
     h, w = img.shape[:2]
     if mask.shape[:2] != (h, w):
         return None
+    if invert:
+        mask = invert_mask(mask)
     keep = mask > 0
     if not keep.any():
         return None                                  # 选区与图层无交集

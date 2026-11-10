@@ -19,10 +19,10 @@ pushd "%APP%"
 popd
 if not exist "%TMPDIR%\model_manifest.json" goto :err
 copy /y "%HERE%installer.cs" "%TMPDIR%\" >nul
-copy /y "%APP%\laowu_icon.ico" "%TMPDIR%\" >nul
+copy /y "%APP%\anon_sewing_icon.ico" "%TMPDIR%\" >nul
 copy /y "%HERE%installer_banner.png" "%TMPDIR%\" >nul
 pushd "%TMPDIR%"
-"%CSC%" /nologo /target:winexe /win32icon:laowu_icon.ico /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Management.dll /resource:muppet_app.zip /resource:model_manifest.json /resource:installer_banner.png /out:MuppetStudio-Setup.exe installer.cs
+"%CSC%" /nologo /target:winexe /win32icon:anon_sewing_icon.ico /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Management.dll /resource:muppet_app.zip /resource:model_manifest.json /resource:installer_banner.png /out:MuppetStudio-Setup.exe installer.cs
 if errorlevel 1 popd & goto :err
 popd
 copy /y "%TMPDIR%\MuppetStudio-Setup.exe" "%HERE%MuppetStudio-Setup.exe" >nul

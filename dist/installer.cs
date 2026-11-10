@@ -1,5 +1,5 @@
 // 木偶工作室 安装器（支持 更新安装 / 全新安装 两种模式）
-// 编译: csc /target:winexe /win32icon:laowu_icon.ico
+// 编译: csc /target:winexe /win32icon:anon_sewing_icon.ico
 //       /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
 //       /resource:muppet_app.zip /resource:model_manifest.json installer.cs
 // CLI（自动化测试用）: --detect | --update <dir> [--no-pause] | --fresh <dir> [--models] [--no-pause]
@@ -862,7 +862,7 @@ class Installer
                 dynamic lnk = sh.CreateShortcut(Path.Combine(folder, "木偶工作室.lnk"));
                 lnk.TargetPath = exe;
                 lnk.WorkingDirectory = dir;
-                lnk.IconLocation = Path.Combine(dir, "laowu_icon.ico");
+                lnk.IconLocation = Path.Combine(dir, "anon_sewing_icon.ico");
                 lnk.Description = "木偶工作室 —— SeeThrough 分层骨架动画工作台";
                 lnk.Save();
             }
