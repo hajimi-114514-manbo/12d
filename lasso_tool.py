@@ -118,3 +118,47 @@ def clip_layer_by_polygon(layer, points, feather=0):
     if feather and feather > 0:
         mask = combine_masks([mask], [], w, h, feather)
     return clip_layer_by_mask(layer, mask)
+
+
+def extract_selection(layer, selections, feather=0):
+    """提取选区内的像素（PS 的"复制选区内容"）。
+
+    返回 (rgba, x, y)：
+        rgba = 选区内容（uint8 HxWx4，尺寸=选区外接矩形）
+        x, y = 该内容在画布全分辨率坐标里的左上角位置
+    与 clip_layer_by_mask 的区别：这里**不裁原层**，只是"取一块出来"，
+    用于复制到剪贴板 / 粘贴成新图层。
+    """
+    img = layer.get("img")
+    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4:
+        return None
+    bbox = layer.get("bbox")
+    if not bbox:
+        return None
+    x0, y0, x1, y1 = [int(v) for v in bbox]
+    h, w = img.shape[:2]
+    add_masks, sub_masks = [], []
+    for sel in selections or []:
+        pts = sel.get("points") or []
+        op = sel.get("op", "add")
+        local = [(px - x0, py - y0) for px, py in pts]
+        m = polygon_mask(local, w, h)
+        if m is None:
+            continue
+        (sub_masks if op == "sub" else add_masks).append(m)
+    mask = combine_masks(add_masks, sub_masks, w, h, feather=feather)
+    if mask is None:
+        return None
+    keep = mask > 0
+    if not keep.any():
+        return None
+    ys, xs = np.nonzero(keep)
+    nx0, ny0 = int(xs.min()), int(ys.min())
+    nx1, ny1 = int(xs.max()) + 1, int(ys.max()) + 1
+    sub = img[ny0:ny1, nx0:nx1].copy()
+    m2 = mask[ny0:ny1, nx0:nx1]
+    sub[:, :, 3] = ((sub[:, :, 3].astype(np.uint16) * m2.astype(np.uint16)) // 255).astype(np.uint8)
+    if not (sub[:, :, 3] > 0).any():
+        return None
+    return np.ascontiguousarray(sub), x0 + nx0, y0 + ny0
+

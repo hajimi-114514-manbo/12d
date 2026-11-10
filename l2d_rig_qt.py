@@ -105,7 +105,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -260,6 +260,7 @@ class RigCanvas(QWidget):
     move_dragged = Signal(str, float, float)       # 图层名, dx, dy（全分辨率像素）
     move_released = Signal()
     lasso_committed = Signal(object)               # 多边形套索：提交选区点集（图像坐标）
+    selection_changed = Signal(object)            # 选区状态变化（进入/更新选区，尚未裁剪）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -290,6 +291,7 @@ class RigCanvas(QWidget):
         self._lasso_done = []
         self._lasso_drag = None         # 顶点拖拽态 (索引, 起点)
         self._lasso_op = "add"          # 当前圈的选区操作：add / sub
+        self._selection_active = False  # 选区已激活（闭合后等用户复制/剪切/应用）
 
     def set_tool(self, t):
         if t != self.tool:
@@ -566,10 +568,13 @@ class RigCanvas(QWidget):
         super().mouseDoubleClickEvent(e)
 
     def _commit_lasso(self, op=None):
-        """闭合多边形：记入选区列表并提交。
+        """闭合多边形：进入"选区激活"状态（PS 式两段操作）。
 
+        流程：
+            闭合选区 -> **进入选区状态**（画布显示选区边框，可继续加减选、拖顶点）
+            -> Ctrl+C 复制 / Ctrl+X 剪切 / Ctrl+V 粘贴（新建顶部图层）
+            -> 按 Delete 或 Enter 才**真正裁剪**原图层；Esc 取消选区。
         op: "add"=加选（默认）、"sub"=减选（Alt 修饰）。
-        已闭合的选区累积在 _lasso_done，提交时一次性做布尔运算。
         """
         pts = list(self._lasso)
         # 双击最后一点闭合时，鼠标按下已加过一个重复顶点 —— 去掉末尾重复点
@@ -583,13 +588,30 @@ class RigCanvas(QWidget):
         if op is None:
             op = getattr(self, "_lasso_op", "add")
         self._lasso_done.append({"points": pts, "op": op})
-        self.lasso_committed.emit(list(self._lasso_done))
-        self._lasso_done = []          # 提交后清空（下次从新选区开始）
+        self._selection_active = True       # 进入选区状态（不立即裁剪）
+        self.selection_changed.emit(list(self._lasso_done))
+
+    def lasso_apply_selection(self):
+        """把当前选区真正应用到图层（裁剪）——Delete / Enter 触发"""
+        if self._lasso_done:
+            self.lasso_committed.emit(list(self._lasso_done))
+            self._lasso_done = []
+            self._selection_active = False
+            self.update()
+
+    def lasso_cancel_selection(self):
+        """取消选区（Esc）——不裁剪"""
+        self._lasso_done = []
+        self._selection_active = False
+        self.update()
+        self.selection_changed.emit([])     # 通知 Workbench 清状态
 
     def lasso_reset(self):
         """外部要求清空选区（切工具/取消）"""
-        if self._lasso:
+        if self._lasso or self._lasso_done:
             self._lasso = []
+            self._lasso_done = []
+            self._selection_active = False
             self.update()
 
     def mouseMoveEvent(self, e):
@@ -662,14 +684,20 @@ class RigCanvas(QWidget):
             self._space = True
             self.setCursor(Qt.OpenHandCursor)
             return
-        # 套索工具：Enter 闭合提交、Esc 取消
+        # 套索工具：Enter 闭合选区（有选区则应用裁剪）、Esc 取消
         if self.tool == "lasso":
             if e.key() in (Qt.Key_Return, Qt.Key_Enter):
-                self._commit_lasso()
+                if self._lasso_done:
+                    self.lasso_apply_selection()   # 已有选区 -> 应用裁剪
+                else:
+                    self._commit_lasso()            # 正在画 -> 闭合
                 return
             if e.key() == Qt.Key_Escape:
-                self._lasso = []
-                self.update()
+                if self._lasso_done:
+                    self.lasso_cancel_selection()
+                else:
+                    self._lasso = []
+                    self.update()
                 return
         super().keyPressEvent(e)
 
@@ -1195,6 +1223,9 @@ class Workbench(QWidget):
         self._mv_orig = None          # 移动工具按下时的原始 bbox
         self._selected = None         # 当前选中图层名（列表/画布共用）
         self._new_canvas = None       # 「新建」弹窗指定的画布尺寸 (W,H)，首张拖入图消费
+        # 选区状态（唯一真源在此，画布只负责绘制）
+        self._selection_data = []     # [{"points":[...], "op":"add"/"sub"}]
+        self._selection_active = False
         self.proj_name = None         # 当前工程名（新建/载入时写回）
         self.proj_dir = None          # 当前工程目录（新建时指向 projects\<名>\）
         self._build()
@@ -1289,6 +1320,7 @@ class Workbench(QWidget):
         self.canvas.move_dragged.connect(self._on_move_drag)
         self.canvas.move_released.connect(self._push_history)
         self.canvas.lasso_committed.connect(self._on_lasso_committed)
+        self.canvas.selection_changed.connect(self._on_selection_changed)
         # 工具互斥：移动 / 多边形套索。
         # **不用 QButtonGroup 的 exclusive 模式**——它不允许取消已选中的按钮
         # （setChecked(False) 被吞），会破坏"取消移动工具回到左键拖支点"的行为。
@@ -1624,6 +1656,177 @@ class Workbench(QWidget):
         except Exception:
             pass
 
+    # ---------- 选区：复制 / 剪切 / 粘贴（PS 风格）----------
+    def _selection_layer(self):
+        """当前选区所属的图层。
+        选区状态由 Workbench 持有（self._selection_active / self._selection_data），
+        画布只负责画 —— 两边各存一份会导致状态不同步（曾导致复制无效）。"""
+        if not getattr(self, "_selection_active", False):
+            return None
+        sels = getattr(self, "_selection_data", None)
+        if not sels:
+            return None
+        name = self._selected
+        if not name:
+            return None
+        return self.layer_by_name(name)
+
+    def _on_selection_changed(self, selections):
+        """画布选区变化 -> Workbench 持有（选区状态的唯一真源）。
+
+        选区激活后不立即裁剪：用户可继续加减选、拖顶点，
+        然后 Ctrl+C/X 复制剪切、Ctrl+V 粘贴、Delete/Enter 才真正裁剪。
+        """
+        self._selection_data = list(selections or [])
+        self._selection_active = bool(self._selection_data)
+        # 同步画布（画布用它画选区边框）
+        self.canvas._lasso_done = list(self._selection_data)
+        self.canvas._selection_active = self._selection_active
+        self.canvas.update()
+        self._sync_canvas_options()
+
+    def _clear_selection(self):
+        """清除选区状态（复制/剪切后、应用后、Esc）"""
+        self._selection_data = []
+        self._selection_active = False
+        self.canvas.lasso_cancel_selection()
+
+    def act_copy_selection(self, cut=False):
+        """Ctrl+C / Ctrl+X：把选区内容复制到系统剪贴板（cut=True 则同时从原层抠掉）。"""
+        layer = self._selection_layer()
+        if layer is None:
+            InfoBar.info("复制", "没有激活的选区（先用套索工具圈选）", parent=self,
+                         position=InfoBarPosition.TOP, duration=2000)
+            return
+        import lasso_tool
+        sels = self._selection_data
+        res = lasso_tool.extract_selection(layer, sels, feather=self.lasso_feather)
+        if res is None:
+            InfoBar.warning("复制", "选区与图层没有重叠", parent=self,
+                            position=InfoBarPosition.TOP, duration=2500)
+            return
+        rgba, px, py = res
+        # PNG 进剪贴板（可粘到其它程序）；另用自定义 MIME 记住图层元信息
+        from PySide6.QtGui import QImage
+        from PySide6.QtCore import QMimeData, QByteArray
+        h, w = rgba.shape[:2]
+        arr = np.ascontiguousarray(rgba[:, :, [2, 1, 0, 3]])   # RGBA->BGRA
+        qimg = QImage(arr.data, w, h, 4 * w, QImage.Format.Format_RGBA8888)
+        mime = QMimeData()
+        mime.setImageData(qimg)
+        meta = {"tag": layer.get("tag", "Image"), "node": layer.get("node", "other"),
+                "depth": layer.get("depth", 0.1), "w": int(w), "h": int(h),
+                "x": int(px), "y": int(py)}
+        mime.setData("application/x-muppet-layer",
+                     QByteArray(json.dumps(meta).encode("utf8")))
+        QApplication.clipboard().setMimeData(mime)
+        # 剪切：从原层抠掉选区内容（保留原层不透明部分）
+        if cut:
+            mask = self._selection_mask(layer)
+            newL = lasso_tool.clip_layer_by_mask(layer, mask) if mask is not None else None
+            if newL is not None:
+                for arr2 in (self.layers, self.rig.get("_layers", [])):
+                    for i, x in enumerate(arr2):
+                        if x["name"] == layer["name"]:
+                            arr2[i] = newL
+                if self.rig.get("_layers") is not self.layers:
+                    self.rig["_layers"] = [newL if x is layer else x
+                                            for x in self.rig.get("_layers", [])]
+                self.rig.pop("_lite", None)
+                self._sync_layer_index()
+                self.reload_widgets()
+                self._select_in_list(layer["name"])
+        self._clear_selection()
+        self.history.push(self)
+        InfoBar.success("已剪切" if cut else "已复制",
+                        "选区内容 %dx%d" % (w, h), parent=self,
+                        position=InfoBarPosition.TOP, duration=2000)
+
+    def _selection_mask(self, layer):
+        """当前选区在指定图层坐标系里的掩码（0..255）"""
+        import lasso_tool
+        bbox = layer.get("bbox")
+        if not bbox:
+            return None
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        h, w = layer["img"].shape[:2]
+        add_masks, sub_masks = [], []
+        for sel in self._selection_data or []:
+            pts = sel.get("points") or []
+            op = sel.get("op", "add")
+            local = [(px - x0, py - y0) for px, py in pts]
+            m = lasso_tool.polygon_mask(local, w, h)
+            if m is None:
+                continue
+            (sub_masks if op == "sub" else add_masks).append(m)
+        return lasso_tool.combine_masks(add_masks, sub_masks, w, h,
+                                        feather=self.lasso_feather)
+
+    def act_paste_selection(self):
+        """Ctrl+V：把剪贴板里的选区内容作为**顶部新图层**插入。"""
+        mime = QApplication.clipboard().mimeData()
+        if mime is None:
+            return
+        meta = {}
+        raw = mime.data("application/x-muppet-layer")
+        if raw:
+            try:
+                meta = json.loads(bytes(raw.data()).decode("utf8"))
+            except Exception:
+                meta = {}
+        img = mime.imageData()
+        if img is None or img.isNull():
+            InfoBar.info("粘贴", "剪贴板里没有图像", parent=self,
+                         position=InfoBarPosition.TOP, duration=2000)
+            return
+        img = img.convertToFormat(QImage.Format.Format_RGBA8888)
+        w, h = img.width(), img.height()
+        ptr = img.constBits()
+        buf = np.frombuffer(ptr, np.uint8, img.sizeInBytes()).reshape(
+            h, img.bytesPerLine() // 4, 4)[:, :w].copy()
+        rgba = buf[:, :, [2, 1, 0, 3]].copy()      # BGRA->RGBA
+        if self.rig is None:
+            # 空工作台 -> 建一个 rig（尺寸取剪贴板内容或默认 1024）
+            W = int(meta.get("x", 0)) + w
+            H = int(meta.get("y", 0)) + h
+            self.rig = {"width": max(W, 1024), "height": max(H, 1024), "fps": 30.0,
+                        "nodes": [], "_layers": [], "draw_order": []}
+            self.W, self.H = self.rig["width"], self.rig["height"]
+            self.history.seed(self)
+        # 粘贴位置：剪贴板记录的原位置（PS 行为），越界则夹到画布内
+        px = int(meta.get("x", 0))
+        py = int(meta.get("y", 0))
+        px = max(0, min(px, self.W - w))
+        py = max(0, min(py, self.H - h))
+        name = "pasted"
+        existing = {l["name"] for l in self.layers}
+        if name in existing:
+            n = 2
+            while "%s_%d" % (name, n) in existing:
+                n += 1
+            name = "%s_%d" % (name, n)
+        layer = {
+            "name": name,
+            "tag": meta.get("tag", "Image"),
+            "node": meta.get("node", "other"),
+            "path": "",
+            "img": np.ascontiguousarray(rgba),
+            "bbox": (px, py, px + w, py + h),
+            "depth": float(meta.get("depth", 0.1)),
+        }
+        self.layers.insert(0, layer)              # 顶部=最前
+        self.rig["_layers"] = list(self.layers)
+        self.rig["draw_order"] = [l["name"] for l in reversed(self.layers)]
+        self.visible[name] = True
+        self.locked[name] = False
+        self.rig.pop("_lite", None)
+        self._sync_layer_index()
+        self.reload_widgets()
+        self._select_in_list(name)
+        self.history.push(self)
+        InfoBar.success("已粘贴", "新图层 %s（%dx%d）" % (name, w, h), parent=self,
+                        position=InfoBarPosition.TOP, duration=2200)
+
     def _on_lasso_committed(self, selections):
         """多边形套索提交：把当前选中图层裁剪到选区内。
 
@@ -1699,6 +1902,7 @@ class Workbench(QWidget):
         self.history.push(self)
         self.reload_widgets()
         self._select_in_list(name)
+        self._clear_selection()              # 裁剪完成 -> 选区状态清空
         InfoBar.success("已裁剪图层", "%s：保留选区内像素" % name, parent=self,
                         position=InfoBarPosition.TOP, duration=2500)
 
@@ -2780,6 +2984,22 @@ class MainWindow(FluentWindow):
         # 快捷键
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.wb.act_undo)
         QShortcut(QKeySequence("Ctrl+Y"), self, activated=self.wb.act_redo)
+        # PS 风格选区操作：复制/剪切/粘贴（套索选区激活时有效）
+        QShortcut(QKeySequence("Ctrl+C"), self, activated=self.wb.act_copy_selection)
+        QShortcut(QKeySequence("Ctrl+X"), self,
+                  activated=lambda: self.wb.act_copy_selection(True))
+        QShortcut(QKeySequence("Ctrl+V"), self, activated=self.wb.act_paste_selection)
+        # Delete / Enter：把选区真正裁剪到图层；Esc：取消选区
+        QShortcut(QKeySequence("Del"), self,
+                  activated=lambda: self.wb.canvas.lasso_apply_selection())
+        QShortcut(QKeySequence("Backspace"), self,
+                  activated=lambda: self.wb.canvas.lasso_apply_selection())
+        QShortcut(QKeySequence("Return"), self,
+                  activated=lambda: self.wb.canvas.lasso_apply_selection())
+        QShortcut(QKeySequence("Enter"), self,
+                  activated=lambda: self.wb.canvas.lasso_apply_selection())
+        QShortcut(QKeySequence("Esc"), self,
+                  activated=lambda: self.wb.canvas.lasso_cancel_selection())
         # Photoshop 风格画布缩放快捷键
         cv = self.wb.canvas
         QShortcut(QKeySequence("Ctrl+0"), self, activated=cv.set_fit)
