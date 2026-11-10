@@ -1,4 +1,4 @@
-# 木偶工作室 更新日志（CHANGELOG）
+﻿# 木偶工作室 更新日志（CHANGELOG）
 
 > 给后续会话/维护者快速回忆用。按时间倒序，最新在最上。
 > 目录铁律：V1 `D:\work\puppet\l2d_rig\` 已冻结不再改；V2 `D:\work\puppet\muppet_studio\` 一切用相对路径（以本目录为根）。
@@ -149,8 +149,9 @@
 - **V1 退役**：D:\work\puppet\l2d_rig\（13 个文件，~700KB：l2d_rig_studio.py 主程序、旧 decompose.py、selftest.py、骨架工作室.exe、README_骨架工作室.md 等）本地目录已删除。删除前**先归档进本仓库 legacy/v1/ 并推送 GitHub**——用户原以为"上传到 GitHub 后"，实测仓库里只有 V2，先补归档才删，避免永久丢失。
 - **安全性核查（删前做过）**：V2 引擎模型目录 seethrough_local.py MODELS_DIR **优先用自带 models\**（sam 38.8MB + nf4 5.3GB 都在 V2），../l2d_rig/models 回退只在自带目录缺失时触发——而 V1 的 models 目录早已不存在，回退本就是死代码。删除不影响任何功能。laowu_icon.ico/png V2 有自己的副本。grep 全库确认无 D:\work\puppet\l2d_rig 绝对路径引用。
 - **注意**：qa 回归三件套里的"V1 selftest（31 项）"跑的是 l2d_rig\selftest.py，V1 删除后该项**永久不可再跑**（代码已归档在 legacy/v1/，需要时可从仓库恢复）。回归改为两项：layer_menu_test + Uninstaller selftest。
-- **安装器源码迁入仓库**（原来只在本机 D:\work\puppet\dist，无版本控制，仓库恢复后装不出安装包）：dist\installer.cs（51KB，GPU 检测/AMD 下载/断点续传/指引）+ dist\重新打包.bat 移入 muppet_studio\dist\，与既有 Uninstaller.cs 同一约定；旧 D:\work\puppet\dist 已删除。按用户选择 **Setup exe（49MB 二进制）也提交进仓库便于分发**。
+- **安装器源码迁入仓库**（原来只在本机 D:\work\puppet\dist，无版本控制，仓库恢复后装不出安装包）：dist\installer.cs（51KB，GPU 检测/AMD 下载/断点续传/指引）+ dist\重新打包.bat 移入 muppet_studio\dist\，与既有 Uninstaller.cs 同一约定；旧 D:\work\puppet\dist 已删除。Setup exe 原计划也提交进仓库，实测直连 GitHub 上传 49MB blob 两次被掐（12 分钟 0 进展 / 卡死 6%），小提交秒过——已从 git 摘出（gitignore），改为走 GitHub Release 资产分发；创建 Release 需要的 token 因凭据失效暂缓，可浏览器拖拽上传（Steam++ 加速下最简单）。
 - **重打包.bat 两个坑（记牢）**：
   1. **.bat 必须纯 ASCII 注释**：cmd 按 ANSI(GBK) 读 .bat，UTF-8 中文注释会被误解析成命令（'uppetStudio-Setup.exe（exe' is not recognized...），原 bat 全英文注释所以从没出过问题；
   2. **不能用相对路径 ..\* 打包**：7z/cmd 会把它解析到 D:\ 根（去扫 Config.Msi/pnpm-store/.BIN），必须用 %~dp0 拼绝对路径 %APP%\*。
 - **7z 排除清单新增 -xr!dist -xr!legacy**：dist 防止 49MB exe 被打进 zip（Setup 自包含变 ~100MB），legacy 防止退役代码随包分发。两者都实测生效（49.89MB → 49.29MB）。
+
