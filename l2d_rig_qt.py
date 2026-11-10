@@ -105,7 +105,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -869,6 +869,9 @@ class NumSpinBox(QWidget):
             b.setAutoRepeat(True)       # 长按连续 ±1
             b.setAutoRepeatDelay(400)
             b.setAutoRepeatInterval(80)
+            # qfw SpinButton 默认较宽（两个约占 60px），会把 editor 挤成 29px
+            # 只显示数字，箭头窄一点即可
+            b.setFixedWidth(16)
         self.upBtn.clicked.connect(lambda: self.stepBy(1))
         self.downBtn.clicked.connect(lambda: self.stepBy(-1))
         lay.addWidget(self.upBtn)
@@ -1306,36 +1309,47 @@ class Workbench(QWidget):
                                   "把选中的图层裁剪成只剩选区内像素（Esc 取消）。")
         self.btn_lasso.toggled.connect(self._on_tool_toggled)
         _tbl.addWidget(self.btn_lasso)
-        # 羽化半径（像素）：套索选区边缘软化，0 = 硬边
+        _tbl.addStretch(1)
+        self.tool_bar.setFixedWidth(44)
+        self.tool_bar.setStyleSheet(
+            "background:#252a33; border-radius:8px;")
+
+        # ===== 画布上方选项栏（PS 风格）：套索工具激活时显示 =====
+        # 未选套索工具时整条隐藏（setVisible），不占空间。
+        self.canvas_options = QWidget()
+        _opl = QHBoxLayout(self.canvas_options)
+        _opl.setContentsMargins(8, 3, 8, 3)
+        _opl.setSpacing(6)
         self.lasso_feather = 0
-        _fr = QHBoxLayout()
-        _fr.setContentsMargins(0, 0, 0, 0)
-        _fr.setSpacing(2)
-        _feather_lbl = CaptionLabel("羽化", self.tool_bar)
-        _feather_lbl.setFixedWidth(28)
-        _fr.addWidget(_feather_lbl)
-        self.spin_feather = NumSpinBox(minimum=0, maximum=20, value=0, parent=self.tool_bar)
+        _opl.addWidget(CaptionLabel("羽化", self.canvas_options))
+        self.spin_feather = NumSpinBox(minimum=0, maximum=20, value=0,
+                                       parent=self.canvas_options)
         self.spin_feather.setToolTip("羽化半径（像素）：选区边缘软化，0=硬边")
-        self.spin_feather.setFixedWidth(52)
+        self.spin_feather.setFixedWidth(96)
+        # 高度不能固定：内部 editor 高 33，setFixedHeight(26) 会把它压扁错位
+        self.spin_feather.setMinimumHeight(33)
+        self.spin_feather.setMaximumHeight(33)
         self.spin_feather.valueChanged.connect(
             lambda v: setattr(self, "lasso_feather", int(v)))
-        _fr.addWidget(self.spin_feather)
-        _tbl.addLayout(_fr)
+        _opl.addWidget(self.spin_feather)
+        _opl.addWidget(CaptionLabel("px", self.canvas_options))
+        _opl.addStretch(1)
         # 顶点拖动后重新应用选区
-        self.btn_lasso_apply = TransparentToolButton(FluentIcon.ACCEPT, self.tool_bar)
+        self.btn_lasso_apply = TransparentToolButton(FluentIcon.ACCEPT,
+                                                     self.canvas_options)
         self.btn_lasso_apply.setToolTip("重新应用选区（拖动顶点调整形状后点此）")
         self.btn_lasso_apply.setFixedSize(24, 24)
         self.btn_lasso_apply.clicked.connect(lambda: self.canvas.lasso_reapply())
-        _tbl.addWidget(self.btn_lasso_apply)
-        _tbl.addStretch(1)
-        self.tool_bar.setFixedWidth(72)      # 容纳"羽化"标签 + 数字框
-        self.tool_bar.setStyleSheet(
-            "background:#252a33; border-radius:8px;")
+        _opl.addWidget(self.btn_lasso_apply)
+        self.canvas_options.setFixedHeight(38)
+        self.canvas_options.setVisible(False)      # 默认隐藏（非套索工具）
+
         canvas_row = QHBoxLayout()
         canvas_row.setContentsMargins(0, 0, 0, 0)
         canvas_row.setSpacing(6)
         canvas_row.addWidget(self.tool_bar)
         canvas_row.addWidget(self.canvas, 1)
+        leftLay.addWidget(self.canvas_options)   # PS 风格选项栏（默认隐藏）
         leftLay.addLayout(canvas_row, 1)
         row = QHBoxLayout()
         self.btn_play = PushButton("播放", self)
@@ -1587,7 +1601,8 @@ class Workbench(QWidget):
     # ---------- 移动工具 ----------
     def _on_tool_toggled(self, checked):
         """工具按钮切换：手动维护互斥（不用 QButtonGroup 的 exclusive，
-        它会吞掉 setChecked(False)、导致无法取消工具回到支点拖拽）。"""
+        它会吞掉 setChecked(False)、导致无法取消工具回到支点拖拽）。
+        画布上方的选项栏（羽化等）只在套索工具激活时显示（PS 风格）。"""
         btn = self.sender()
         if checked:
             for other in (self.btn_move, self.btn_lasso):
@@ -1600,6 +1615,14 @@ class Workbench(QWidget):
             # 取消选中 -> 回到默认（支点拖拽）
             if not (self.btn_move.isChecked() or self.btn_lasso.isChecked()):
                 self.canvas.set_tool("pan")
+        self._sync_canvas_options()
+
+    def _sync_canvas_options(self):
+        """画布上方选项栏只在套索工具激活时显示（用户要求）"""
+        try:
+            self.canvas_options.setVisible(self.canvas.tool == "lasso")
+        except Exception:
+            pass
 
     def _on_lasso_committed(self, selections):
         """多边形套索提交：把当前选中图层裁剪到选区内。
