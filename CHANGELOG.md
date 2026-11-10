@@ -1,9 +1,36 @@
-﻿# 木偶工作室 更新日志（CHANGELOG）
+# 木偶工作室 更新日志（CHANGELOG）
 
 > 给后续会话/维护者快速回忆用。按时间倒序，最新在最上。
 > 目录铁律：V1 `D:\work\puppet\l2d_rig\` 已冻结不再改；V2 `D:\work\puppet\muppet_studio\` 一切用相对路径（以本目录为根）。
 
 ---
+
+## 2026-11-10（下午2）PS 风格工具栏 + 移动工具 + 去箭头
+
+- **用户需求原文**：「顶层按钮下拉小箭头去掉」+「左侧导航栏右侧加一列工具栏，参考 Photoshop，先内置一个移动按钮，选中后可移动选定图层」。
+- **去箭头**：`ToggleDropDownButton` 类内覆写 `_drawDropDownIcon(self, painter, rect): pass`（基类 `DropDownButtonBase.paintEvent` 调它画右缘 10×10 箭头）。**只影响标题栏「文件」「编辑」两个按钮**，`RoundMenu` 菜单项自己的箭头不动。冒烟 9/9（含 `grab()` 触发 `paintEvent` 验证覆写被调用）。
+- **工具栏布局**：`Workbench` 左列改为 `canvas_row = [tool_bar(44px 竖排, #252a33 圆角) + canvas]`，位于导航栏右侧、画布左侧（视觉顺序：导航｜工具栏｜画布）。先内置一个按钮 `btn_move`（`TransparentToggleToolButton` + `FluentIcon.MOVE`），toggle 语义。
+- **关键设计决策**：
+  - **移动 = 原地改 `l["bbox"]`**（bbox 即摆放坐标，img 是裁剪像素）——渲染/导出/PSD/AE/JSON 全链路自动正确，**零 `l2d_rig_core` 改动**。
+  - **History 快照新增 `bboxes` 值记录**：原快照存对象引用，原地改 bbox 无法回退——这是对象引用快照方案的死角，**以后再加任何原地改图层属性的工具都要记得这点**；`push` 的「无变化不压栈」判断同步纳入 bboxes。
+  - **默认工具是 pan 不是 move**：保持原有「左键拖支点」行为不破坏（`btn_move` 默认不选中）。这点曾错过：一开始默认 `checked=True`，会把支点拖拽整个禁掉，属于行为回归。
+  - **拖动语义（PS Move 工具）**：按下命中最上可见层（`_layers_ref` 按图层列表序，前=叠放顶）→ 立即选中该层（同步列表）→ 按住期间从按下点累计偏移（避免逐帧增量误差）；中键/空格平移在任何模式下保留。
+  - **canvas 不直接碰 layers 结构**：通过 `move_grabbed` / `move_dragged` / `move_released` 三信号回 `Workbench`，`redraw` 时 `set_layers` 同步命中数据 `[(name, bbox, visible)]`。
+- **顺带修的潜伏 bug**：菜单改版时 `em.aboutToHide.connect(...(exp))` 残留引用已删除的 `exp` 变量，`aboutToHide` 触发会 NameError（此前侥幸不炸是因为 `RoundMenu.close()` 不发该信号，看门狗路径才发）。已改 `edit`。
+- **测试**：移动工具冒烟 10/10（默认 pan / 激活 move / 命中 / 平移 / 越界保宽高 / 撤销重做 / 列表同步）；回归脚本由 qa-runner 并行适配（comfy_route 的 V1 selftest 断言因 V1 退役改 SKIP；layer_menu 渲染阈值 +20→+40ms，因基线随机器负载漂移 25→56ms）。
+- **打包**：本轮未重打包 Setup（等 qa 全绿后 Lead 统一提交打包）。
+
+## 2026-11-10（下午）顶层菜单改版：文件/编辑双按钮
+
+- **用户需求原文**：「顶层菜单按钮改名为'文件'，去掉导出按钮，将导出按钮内的功能合并到'文件'按钮中。在文件按钮旁边新增'编辑'按钮，将文件按钮中的撤销和重做功能挪到编辑按钮里」。
+- **最终结构**：标题栏 = 折叠按钮 + 「文件」 + 「编辑」。
+  - 「文件」菜单顺序：新建 → 打开工程 → 最近打开（子菜单）→ 导入 PSD → 拆分图片（SeeThrough）→ ─分隔─ → 保存 → 另存为 → ─分隔─ → 导出 PSD → 导出 AE 脚本 → 导出 JSON → 导出 MP4 → 导出 GIF。
+  - 「编辑」菜单只有两项：撤销 Ctrl+Z → 重做 Ctrl+Y。
+- **实现要点**（`l2d_rig_qt.py _build`）：原 `exp`（`ToggleDropDownButton`「导出」）删除，其 5 个 Action 直接 `addAction` 进 `m`（文件菜单）；撤销/重做两个 Action 从 `m` 移到新 `RoundMenu em` 并挂 `edit_btn`。对象名 `wb.exp_btn/exp_ref` → `wb.edit_btn/edit_ref`。
+- **坑（必看）**：`_dropdowns` 看门狗列表要同步换成 `(menu, m), (edit, em)`——**漏掉这个的话编辑菜单不会自动收起**（光标移出 250ms 收起机制按这个列表管理）。`MainWindow` 标题栏 `insertWidget(2, wb.exp_btn)` 改 `wb.edit_btn`。
+- **快捷键不变**：Ctrl+Z / Ctrl+Y 仍是 `QShortcut` 直接绑 `act_undo / act_redo`，与菜单位置无关。
+- **测试**：冒烟 4 项全过（文件菜单内容 / 编辑菜单内容 / 标题栏控件序列 / 撤销+导出功能仍正常）；回归适配由 qa-runner 并行（`layer_menu_test` 中引用旧菜单结构的断言需按新结构改）。
+- **打包**：本轮未重打包 Setup（纯 UI 改动，等 qa 回归全绿后 Lead 统一打包提交）。
 
 ## 2026-11-10（凌晨）应用内集成 ComfyUI 路线（A 卡一键拆图）
 

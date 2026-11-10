@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
-功能对齐 V1.0，并新增左上角菜单：撤销/重做/新建/导入PSD/保存/另存为。
+功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/拆分/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做）。
 SeeThrough 拆分走 QThread，绝不阻塞 UI。
 引擎接口全部复用 l2d_rig_core / decompose（v2 副本）。
 """
@@ -70,6 +70,12 @@ class ToggleDropDownButton(TransparentDropDownPushButton):
         self._open = False
         self._closed_at = time.monotonic()
 
+    def _drawDropDownIcon(self, painter, rect):
+        """标题栏按钮去掉右侧下拉小箭头（用户要求，纯文字更干净）。
+        基类 DropDownButtonBase.paintEvent 会调这个方法画箭头；这里空实现即可。
+        注意：不影响 RoundMenu 菜单项自己的箭头。"""
+        pass
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import l2d_rig_core as C
 
@@ -120,6 +126,9 @@ class History:
             return None
         return {
             "layers": list(studio.layers),                       # 对象引用
+            # bbox 值记录：移动工具是**原地改 bbox**，对象引用快照无法回退
+            # （undo 恢复的是同一对象，bbox 已被改掉）。按 name 键存值。
+            "bboxes": {l["name"]: tuple(l["bbox"]) for l in studio.layers},
             "draw_order": list(studio.rig.get("draw_order", [])),
             "pivots": {n["node"]: list(n["pivot"]) for n in studio.rig["nodes"]},
             "node_layers": {n["node"]: list(n["layers"]) for n in studio.rig["nodes"]},
@@ -141,7 +150,8 @@ class History:
         prev = self.undo_stack[-1]
         if [id(x) for x in snap["layers"]] == [id(x) for x in prev["layers"]] and \
            snap["draw_order"] == prev["draw_order"] and \
-           snap["pivots"] == prev["pivots"]:
+           snap["pivots"] == prev["pivots"] and \
+           snap.get("bboxes") == prev.get("bboxes"):
             return                               # 无变化不压栈
         self.undo_stack.append(snap)
         if len(self.undo_stack) > self.limit:
@@ -152,6 +162,11 @@ class History:
         if snap is None or studio.rig is None:
             return
         studio.layers = list(snap["layers"])
+        # 回退 bbox（移动工具的撤销靠这里，缺省则对象引用不变）
+        bbs = snap.get("bboxes", {})
+        for l in studio.layers:
+            if l["name"] in bbs:
+                l["bbox"] = tuple(bbs[l["name"]])
         studio.rig["draw_order"] = list(snap["draw_order"])
         studio.rig["_layers"] = list(snap["_layers"])
         for n in studio.rig["nodes"]:
@@ -183,6 +198,9 @@ class RigCanvas(QWidget):
     pivot_dragged = Signal(str, float, float)      # node, x, y
     pivot_released = Signal()
     image_dropped = Signal(str)
+    move_grabbed = Signal(str)                     # 移动工具：按下图层名
+    move_dragged = Signal(str, float, float)       # 图层名, dx, dy（全分辨率像素）
+    move_released = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -202,6 +220,31 @@ class RigCanvas(QWidget):
         self.pan = [0.0, 0.0]           # manual 模式相对居中的平移
         self._space = False             # 空格按住 -> 拖拽平移
         self._panning = None            # 平移起点 (x,y,panx,pany)
+        # 工具："pan"=默认（左键拖支点）；"move"=移动图层（左键按 bbox 命中选取并拖动）
+        self.tool = "pan"
+        self._layers_ref = []           # [(name, bbox_full, visible)] 列表前=叠放顶
+        self._mv = None                 # 移动拖拽态 (name, 按下点全分辨率坐标)
+
+    def set_tool(self, t):
+        self.tool = t
+        if t == "move":
+            self.setCursor(Qt.SizeAllCursor)
+        else:
+            self.unsetCursor()
+        self.update()
+
+    def set_layers(self, ref):
+        """Workbench 每次 redraw 同步：[(name, bbox(全分辨率), visible)]，
+        顺序=图层列表顺序（前=叠放最上），命中测试按此序取第一个。"""
+        self._layers_ref = ref
+
+    def _to_full(self, pos):
+        """widget 坐标 -> 全分辨率图像坐标（画布显示的是 LOD 帧）"""
+        ox, oy, s, dw, dh = self._geom
+        sc = PREVIEW_SCALE
+        ix = (pos.x() - ox) / s / sc
+        iy = (pos.y() - oy) / s / sc
+        return ix, iy
 
     def set_frame(self, img, pivots, hint=""):
         """img 为 HxWx4 **预乘** RGBA（render_frame_rgba premul=True 直出，
@@ -339,13 +382,27 @@ class RigCanvas(QWidget):
                 bestd, best = d ** 0.5, node
         return best
 
+    def _layer_at(self, ix, iy):
+        """移动工具命中测试：按图层列表顺序（前=最上）找第一个包含该点的可见层"""
+        for name, (x0, y0, x1, y1), vis in self._layers_ref:
+            if vis and x0 <= ix < x1 and y0 <= iy < y1:
+                return name
+        return None
+
     def mousePressEvent(self, e):
         if e.button() == Qt.MiddleButton or self._space:
-            # 平移：中键 或 空格+左键
+            # 平移：中键 或 空格+左键（任何工具模式下都保留）
             self._panning = (e.position().x(), e.position().y(), self.pan[0], self.pan[1])
             self.setCursor(Qt.ClosedHandCursor if self._space else Qt.OpenHandCursor)
             return
         if e.button() == Qt.LeftButton:
+            if self.tool == "move":
+                ix, iy = self._to_full(e.position().toPoint())
+                name = self._layer_at(ix, iy)
+                if name:
+                    self._mv = (name, ix, iy)
+                    self.move_grabbed.emit(name)
+                return
             n = self._node_at(e.position().toPoint())
             if n:
                 self.drag_node = n
@@ -356,6 +413,11 @@ class RigCanvas(QWidget):
             self.pan[0] = bpx + (e.position().x() - px)
             self.pan[1] = bpy + (e.position().y() - py)
             self.update()
+            return
+        if self._mv:
+            name, sx, sy = self._mv
+            ix, iy = self._to_full(e.position().toPoint())
+            self.move_dragged.emit(name, ix - sx, iy - sy)
             return
         if self.drag_node:
             ox, oy, s, dw, dh = self._geom
@@ -369,6 +431,12 @@ class RigCanvas(QWidget):
         if self._panning:
             self._panning = None
             self.unsetCursor()
+            if self.tool == "move":
+                self.setCursor(Qt.SizeAllCursor)
+            return
+        if self._mv:
+            self._mv = None
+            self.move_released.emit()
             return
         if self.drag_node:
             self.drag_node = None
@@ -567,6 +635,8 @@ class Workbench(QWidget):
         self.history = History()
         self.worker = None
         self.busy = False
+        self._mv_orig = None          # 移动工具按下时的原始 bbox
+        self._selected = None         # 当前选中图层名（列表/画布共用）
         self._build()
         # 启动即空工作台（不自动载入任何工程）
         self.cur_dir = None
@@ -587,11 +657,8 @@ class Workbench(QWidget):
         tb_lay = QHBoxLayout(self.toolbar_widget)
         tb_lay.setContentsMargins(0, 0, 0, 0)
         tb_lay.setSpacing(6)
-        menu = ToggleDropDownButton("菜单", self)
+        menu = ToggleDropDownButton("文件", self)
         m = RoundMenu(parent=self)
-        m.addAction(Action(FluentIcon.HISTORY, "撤销  Ctrl+Z", triggered=self.act_undo))
-        m.addAction(Action(FluentIcon.HISTORY, "重做  Ctrl+Y", triggered=self.act_redo))
-        m.addSeparator()
         act_new = Action(FluentIcon.ADD, "新建", triggered=self.act_new)
         act_open = Action(FluentIcon.FOLDER, "打开工程", triggered=self.act_open_project)
         act_import = Action(FluentIcon.FOLDER_ADD, "导入 PSD", triggered=self.act_import)
@@ -612,40 +679,43 @@ class Workbench(QWidget):
         m.addSeparator()
         m.addAction(Action(FluentIcon.SAVE, "保存", triggered=self.act_save))
         m.addAction(Action(FluentIcon.SAVE_AS, "另存为", triggered=self.act_saveas))
+        # 导出功能并入「文件」（原独立"导出"按钮已移除）
+        m.addSeparator()
+        m.addAction(Action(FluentIcon.FOLDER, "导出 PSD", triggered=self.act_export_psd))
+        m.addAction(Action(FluentIcon.CODE, "导出 AE 脚本", triggered=self.act_export_ae))
+        m.addAction(Action(FluentIcon.SYNC, "导出 JSON", triggered=self.act_export_json))
+        m.addAction(Action(FluentIcon.PLAY, "导出 MP4", triggered=self._choose_mp4))
+        m.addAction(Action(FluentIcon.IMAGE_EXPORT, "导出 GIF", triggered=self._choose_gif))
         menu.setMenu(m)
         self.menu_btn = menu
         self.menu_ref = m          # 防止被 GC
         menu.menu_opened.connect(lambda _m: self._rebuild_recent_menu())
 
-        exp = ToggleDropDownButton("导出", self)
+        edit = ToggleDropDownButton("编辑", self)
         em = RoundMenu(parent=self)
-        em.addAction(Action(FluentIcon.FOLDER, "导出 PSD", triggered=self.act_export_psd))
-        em.addAction(Action(FluentIcon.CODE, "导出 AE 脚本", triggered=self.act_export_ae))
-        em.addAction(Action(FluentIcon.SYNC, "导出 JSON", triggered=self.act_export_json))
-        em.addSeparator()
-        em.addAction(Action(FluentIcon.PLAY, "导出 MP4", triggered=self._choose_mp4))
-        em.addAction(Action(FluentIcon.IMAGE_EXPORT, "导出 GIF", triggered=self._choose_gif))
-        exp.setMenu(em)
-        self.exp_btn = exp
-        self.exp_ref = em
+        em.addAction(Action(FluentIcon.HISTORY, "撤销  Ctrl+Z", triggered=self.act_undo))
+        em.addAction(Action(FluentIcon.HISTORY, "重做  Ctrl+Y", triggered=self.act_redo))
+        edit.setMenu(em)
+        self.edit_btn = edit
+        self.edit_ref = em
         menu.setFixedHeight(30)
-        exp.setFixedHeight(30)
+        edit.setFixedHeight(30)
         tb_lay.addWidget(menu)
-        tb_lay.addWidget(exp)
+        tb_lay.addWidget(edit)
 
         # 兜底：下拉菜单打开期间轮询光标，移出菜单矩形 250ms 即收起。
         # 状态全部由按钮自己记账（menu_opened / aboutToHide），不依赖 isVisible 时机。
-        self._dropdowns = [(menu, m), (exp, em)]     # 看门狗管理所有下拉按钮
+        self._dropdowns = [(menu, m), (edit, em)]     # 看门狗管理所有下拉按钮
         self._menu_open = False
         menu.menu_opened.connect(self._menu_about_to_show)
-        exp.menu_opened.connect(self._menu_about_to_show)
+        edit.menu_opened.connect(self._menu_about_to_show)
         self._menu_timer = QTimer(self)
         self._menu_timer.setInterval(120)
         self._menu_timer.timeout.connect(self._menu_watch)
         self._menu_out_since = None
         self._menu_cur = None
         m.aboutToHide.connect(lambda: self._menu_about_to_hide(menu))
-        em.aboutToHide.connect(lambda: self._menu_about_to_hide(exp))
+        em.aboutToHide.connect(lambda: self._menu_about_to_hide(edit))
         # ===== 左列：画布（占整个左边，PS 风格）=====
         leftLay = QVBoxLayout()
         leftLay.setContentsMargins(0, 0, 4, 0)
@@ -654,7 +724,31 @@ class Workbench(QWidget):
         self.canvas.pivot_dragged.connect(self._on_pivot_drag)
         self.canvas.pivot_released.connect(self._push_history)
         self.canvas.image_dropped.connect(self._drop_add_layer)
-        leftLay.addWidget(self.canvas, 1)
+        self.canvas.move_grabbed.connect(self._on_move_grab)
+        self.canvas.move_dragged.connect(self._on_move_drag)
+        self.canvas.move_released.connect(self._push_history)
+        # PS 风格竖排工具栏：导航栏右侧、画布左侧。先内置移动工具一个按钮。
+        self.tool_bar = QWidget()
+        _tbl = QVBoxLayout(self.tool_bar)
+        _tbl.setContentsMargins(4, 6, 4, 6)
+        _tbl.setSpacing(4)
+        self.btn_move = TransparentToggleToolButton(FluentIcon.MOVE, self)
+        self.btn_move.setToolTip("移动工具：在画布上拖动图层（Ctrl+Z 撤销）。\n"
+                                 "未选中时左键仍用于拖动骨架支点。")
+        # 默认不选中：保持原有"左键拖支点"行为，点按钮才进入移动模式
+        self.btn_move.toggled.connect(
+            lambda on: self.canvas.set_tool("move" if on else "pan"))
+        _tbl.addWidget(self.btn_move)
+        _tbl.addStretch(1)
+        self.tool_bar.setFixedWidth(44)
+        self.tool_bar.setStyleSheet(
+            "background:#252a33; border-radius:8px;")
+        canvas_row = QHBoxLayout()
+        canvas_row.setContentsMargins(0, 0, 0, 0)
+        canvas_row.setSpacing(6)
+        canvas_row.addWidget(self.tool_bar)
+        canvas_row.addWidget(self.canvas, 1)
+        leftLay.addLayout(canvas_row, 1)
         row = QHBoxLayout()
         self.btn_play = PushButton("播放", self)
         self.btn_play.clicked.connect(self._toggle_play)
@@ -822,6 +916,10 @@ class Workbench(QWidget):
                                   "拖入图片开始")
             return
         hidden = {l["name"] for l in self.layers if not self.visible.get(l["name"], True)}
+        # 移动工具命中测试数据：列表顺序=前为叠放顶，与视觉一致
+        self.canvas.set_layers([(l["name"], l["bbox"],
+                                 self.visible.get(l["name"], True))
+                                for l in self.layers])
         # 播放走半分辨率 LOD + 预乘直出（省出口除法，~30ms/帧），透明区画布显示棋盘格
         img = C.render_frame_rgba(self.rig, self.t, hidden=hidden,
                                   scale=PREVIEW_SCALE, premul=True)
@@ -842,6 +940,36 @@ class Workbench(QWidget):
         snap = self.history.snapshot(self)
         if snap:
             self.history.push(self)
+
+    # ---------- 移动工具 ----------
+    def _on_move_grab(self, name):
+        """按下命中图层：记原始 bbox（累计偏移基准，避免逐帧增量误差），并同步选中列表项"""
+        self._mv_orig = None
+        for l in self.layers:
+            if l["name"] == name:
+                self._mv_orig = tuple(l["bbox"])
+                break
+        self._select_in_list(name)
+
+    def _on_move_drag(self, name, dx, dy):
+        if self._mv_orig is None:
+            return
+        x0, y0, x1, y1 = self._mv_orig
+        nx0, ny0 = int(round(x0 + dx)), int(round(y0 + dy))
+        for l in self.layers:
+            if l["name"] == name:
+                # 必须 int：渲染切片 img[y0:y1] 只吃整数 bbox（load_layers 契约）
+                l["bbox"] = (nx0, ny0, nx0 + int(x1 - x0), ny0 + int(y1 - y0))
+                break
+        self.redraw()
+
+    def _select_in_list(self, name):
+        self._selected = name
+        for i in range(self.layer_list.count()):
+            it = self.layer_list.item(i)
+            if it is not None and it.data(Qt.UserRole) == name:
+                self.layer_list.setCurrentItem(it)
+                return
 
     def _toggle_item(self, item):
         nm = item.data(Qt.UserRole)
@@ -1587,7 +1715,7 @@ class MainWindow(FluentWindow):
         tbar = self.titleBar.hBoxLayout
         tbar.insertWidget(0, self.btn_collapse, 0, Qt.AlignLeft | Qt.AlignVCenter)
         tbar.insertWidget(1, self.wb.menu_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        tbar.insertWidget(2, self.wb.exp_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        tbar.insertWidget(2, self.wb.edit_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
         # 快捷键
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.wb.act_undo)
         QShortcut(QKeySequence("Ctrl+Y"), self, activated=self.wb.act_redo)
