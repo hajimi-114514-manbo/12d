@@ -19,3 +19,4 @@ launcher.log
 recent_projects.json
 __pycache__
 *.pyc
+dist/MuppetStudio-Setup.exe

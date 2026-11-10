@@ -22,8 +22,9 @@ import types
 from datetime import datetime
 
 ST_ROOT = os.path.dirname(os.path.abspath(__file__))
-# 模型目录：优先自带 models\，其次相对位置 ../l2d_rig/models（V1 共享副本），
-# 全部相对应用根目录，整体搬家不受影响
+# 模型目录：优先自带 models\（唯一实际使用的路径）；
+# ../l2d_rig/models 的 V1 回退仅为兼容旧部署保留——V1 已于 2026-11-10 退役，
+# 源码归档在本仓库 legacy/v1/，本地目录已删除，该回退不会再命中。
 MODELS_DIR = os.path.join(ST_ROOT, "models")
 if not os.path.isdir(MODELS_DIR):
     MODELS_DIR = os.path.normpath(os.path.join(ST_ROOT, "..", "l2d_rig", "models"))
