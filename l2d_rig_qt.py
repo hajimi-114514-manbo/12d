@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
-功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/拆分/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做）。
+功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做/拆分图片）。
 SeeThrough 拆分走 QThread，绝不阻塞 UI。
 引擎接口全部复用 l2d_rig_core / decompose（v2 副本）。
 """
@@ -21,7 +21,9 @@ from PySide6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout,
                                QStackedWidget, QListWidgetItem, QTreeWidgetItem,
                                QSplitter)
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QSize, QEvent, QRect
-from PySide6.QtGui import QImage, QPixmap, QPainter, QColor, QKeySequence, QShortcut, QIcon, QCursor, QPen, QBrush
+from PySide6.QtGui import (QImage, QPixmap, QPainter, QColor, QKeySequence,
+                           QShortcut, QIcon, QCursor, QPen, QBrush,
+                           QIntValidator)
 
 from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             PrimaryPushButton, ToolButton, ToggleToolButton,
@@ -31,7 +33,7 @@ from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             TreeWidget, Slider, BodyLabel, CaptionLabel,
                             StrongBodyLabel, FluentStyleSheet, setTheme, Theme,
                             MessageBox, InfoBar, InfoBarPosition,
-                            MessageBoxBase, SpinBox, SubtitleLabel)
+                            MessageBoxBase, SubtitleLabel, LineEdit)
 
 
 class ToggleDropDownButton(TransparentDropDownPushButton):
@@ -109,6 +111,28 @@ DEFAULT_DIR = os.path.join(V2, "示例工程")
 # ffmpeg 回退：应用自带优先，其次历史上放过的共享位置
 FFMPEG_CANDIDATES = [os.path.join(V2, "ffmpeg.exe"),
                      r"D:\BaiduNetdiskDownload\Vocal2Midi\ffmpeg.exe"]
+
+PROJ_BASE = os.path.join(V2, "projects")   # 新建工程默认根目录
+
+
+def sanitize_proj_name(name, maxlen=60):
+    """清洗工程名：去掉路径/文件名非法字符与首尾空白，截断 maxlen。"""
+    name = (name or "").strip()
+    for ch in r'\/:*?"<>|':
+        name = name.replace(ch, "")
+    return name.strip()[:maxlen]
+
+
+def unique_proj_name(base, base_dir=None):
+    """返回不重名的工程名：重名自动加 _2/_3…"""
+    base = sanitize_proj_name(base) or "工程"
+    base_dir = base_dir or PROJ_BASE
+    cand, n = base, 2
+    while os.path.isdir(os.path.join(base_dir, cand)):
+        cand = "%s_%d" % (base, n)
+        n += 1
+    return cand
+
 
 
 # ---------------- 历史栈（撤销/重做） ----------------
@@ -221,9 +245,10 @@ class RigCanvas(QWidget):
         self.pan = [0.0, 0.0]           # manual 模式相对居中的平移
         self._space = False             # 空格按住 -> 拖拽平移
         self._panning = None            # 平移起点 (x,y,panx,pany)
-        # 工具："pan"=默认（左键拖支点）；"move"=移动图层（左键按 bbox 命中选取并拖动）
+        # 工具："pan"=默认（左键拖支点）；"move"=移动图层（只拖当前选中层）
         self.tool = "pan"
         self._layers_ref = []           # [(name, bbox_full, visible)] 列表前=叠放顶
+        self.selected_name = None       # 当前选中图层名（图层列表 currentItem 同步）
         self._mv = None                 # 移动拖拽态 (name, 按下点全分辨率坐标)
 
     def set_tool(self, t):
@@ -383,12 +408,18 @@ class RigCanvas(QWidget):
                 bestd, best = d ** 0.5, node
         return best
 
-    def _layer_at(self, ix, iy):
-        """移动工具命中测试：按图层列表顺序（前=最上）找第一个包含该点的可见层"""
-        for name, (x0, y0, x1, y1), vis in self._layers_ref:
-            if vis and x0 <= ix < x1 and y0 <= iy < y1:
-                return name
-        return None
+    def _selected_layer_hit(self, ix, iy):
+        """移动工具命中测试：只认当前选中层。按下点在选中层 bbox 内
+        且该层可见才返回层名，否则 None（什么都不发生，无 InfoBar）。"""
+        name = self.selected_name
+        if not name:
+            return None
+        for nm, (x0, y0, x1, y1), vis in self._layers_ref:
+            if nm == name:
+                if vis and x0 <= ix < x1 and y0 <= iy < y1:
+                    return name
+                return None            # 选中层被隐藏或点在 bbox 外：不可拖
+        return None                    # 选中层已不在画布数据里（刚被删）
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MiddleButton or self._space:
@@ -399,10 +430,11 @@ class RigCanvas(QWidget):
         if e.button() == Qt.LeftButton:
             if self.tool == "move":
                 ix, iy = self._to_full(e.position().toPoint())
-                name = self._layer_at(ix, iy)
+                name = self._selected_layer_hit(ix, iy)
                 if name:
                     self._mv = (name, ix, iy)
                     self.move_grabbed.emit(name)
+                # 没按在选中层 bbox 内：什么都不发生（不自动换层、无 InfoBar）
                 return
             n = self._node_at(e.position().toPoint())
             if n:
@@ -625,33 +657,137 @@ class DecomposeWorker(QThread):
 
 
 # ---------------- 新建画布尺寸对话框 ----------------
-class NewCanvasDialog(MessageBoxBase):
-    """「文件 → 新建」弹窗：输入画布宽高（像素）。默认 1024×1024，1..8192。"""
+class NumSpinBox(QWidget):
+    """替代 qfluentwidgets SpinBox（1.11.3 缺陷：InlineSpinBoxBase 建了
+    hBoxLayout 只装 up/down 按钮，没把 QSpinBox 自己的 lineEdit 装进去，
+    lineEdit 被挤成 1x31——数字区不可见不可点，"宽高输入框无法使用"）。
 
-    def __init__(self, parent=None):
+    结构：qfw LineEdit(QIntValidator) + 右侧上下箭头（复用 qfw 的
+    SpinButton，就是原 SpinBox 那两个箭头的实现，支持长按连发）。
+    对外接口兼容：value() / setValue() / setRange()。
+    """
+
+    valueChanged = Signal(int)
+
+    def __init__(self, minimum=1, maximum=8192, value=1024, parent=None):
+        super().__init__(parent)
+        from qfluentwidgets.components.widgets.spin_box import SpinButton, SpinIcon
+        self._min = int(minimum)
+        self._max = int(maximum)
+        self._value = max(self._min, min(self._max, int(value)))
+        self._guard = False             # 程序化 setText 时不回环触发
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(5)
+
+        self.editor = LineEdit(self)
+        self.editor.setValidator(QIntValidator(self._min, self._max, self))
+        self.editor.setFixedHeight(33)
+        self.editor.setText(str(self._value))
+        self.editor.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        lay.addWidget(self.editor, 1)
+
+        self.upBtn = SpinButton(SpinIcon.UP, self)
+        self.downBtn = SpinButton(SpinIcon.DOWN, self)
+        for b in (self.upBtn, self.downBtn):
+            b.setAutoRepeat(True)       # 长按连续 ±1
+            b.setAutoRepeatDelay(400)
+            b.setAutoRepeatInterval(80)
+        self.upBtn.clicked.connect(lambda: self.stepBy(1))
+        self.downBtn.clicked.connect(lambda: self.stepBy(-1))
+        lay.addWidget(self.upBtn)
+        lay.addWidget(self.downBtn)
+
+        self.editor.textChanged.connect(self._on_text_changed)
+        self.editor.editingFinished.connect(self._normalize)
+
+    # ---- 对外接口（兼容 qfw SpinBox 调用方） ----
+    def value(self):
+        return self._value
+
+    def setValue(self, v):
+        v = max(self._min, min(self._max, int(v)))
+        if v == self._value and self.editor.text() == str(v):
+            return
+        self._value = v
+        self._guard = True
+        self.editor.setText(str(v))
+        self._guard = False
+        self.valueChanged.emit(v)
+
+    def setRange(self, minimum, maximum):
+        self._min, self._max = int(minimum), int(maximum)
+        self.editor.setValidator(QIntValidator(self._min, self._max, self))
+        self.setValue(self._value)
+
+    def stepBy(self, n):
+        self.setValue(self._value + int(n))
+
+    # ---- 内部 ----
+    def _on_text_changed(self, text):
+        """过滤非法输入：validator 已拦非数字；中间态（空串/超范围）不更新，
+        editingFinished 统一规范化。"""
+        if self._guard:
+            return
+        t = text.strip()
+        if not t:
+            return                      # 空串等失焦规范化回退
+        try:
+            v = int(t)
+        except ValueError:
+            return
+        if self._min <= v <= self._max:
+            self._value = v
+            self.valueChanged.emit(v)
+
+    def _normalize(self):
+        """失焦/回车规范化：空串或超范围 -> 回退旧值。"""
+        t = self.editor.text().strip()
+        try:
+            v = int(t)
+        except ValueError:
+            v = None
+        if v is None or not (self._min <= v <= self._max):
+            self.setValue(self._value)
+        elif str(v) != self.editor.text():
+            self.setValue(v)
+
+
+class NewCanvasDialog(MessageBoxBase):
+    """「文件 → 新建」弹窗：输入工程名 + 画布宽高（像素）。默认 1024×1024，1..8192。"""
+
+    def __init__(self, parent=None, default_name="工程"):
         super().__init__(parent)
         self.titleLabel = SubtitleLabel("新建工程", self)
         self.viewLayout.addWidget(self.titleLabel)
+
+        # 工程名输入（顶部一行）
+        name_row = QHBoxLayout()
+        name_row.addWidget(BodyLabel("工程名", self))
+        self.name_edit = LineEdit(self)
+        self.name_edit.setFixedWidth(240)
+        self.name_edit.setText(default_name)
+        name_row.addWidget(self.name_edit)
+        name_row.addStretch(1)
+        self.viewLayout.addLayout(name_row)
+
         self.hint = CaptionLabel("设置画布尺寸（像素），之后拖入或导入的图片将按此画布摆放。",
                                  self)
         self.viewLayout.addWidget(self.hint)
 
         row1 = QHBoxLayout()
         row1.addWidget(BodyLabel("宽度", self))
-        self.w_spin = SpinBox(self)
-        self.w_spin.setRange(1, 8192)
-        self.w_spin.setValue(1024)
-        self.w_spin.setFixedWidth(140)
+        self.w_spin = NumSpinBox(1, 8192, 1024, self)
+        self.w_spin.setMinimumWidth(140)
         row1.addWidget(self.w_spin)
         row1.addStretch(1)
         self.viewLayout.addLayout(row1)
 
         row2 = QHBoxLayout()
         row2.addWidget(BodyLabel("高度", self))
-        self.h_spin = SpinBox(self)
-        self.h_spin.setRange(1, 8192)
-        self.h_spin.setValue(1024)
-        self.h_spin.setFixedWidth(140)
+        self.h_spin = NumSpinBox(1, 8192, 1024, self)
+        self.h_spin.setMinimumWidth(140)
         row2.addWidget(self.h_spin)
         row2.addStretch(1)
         self.viewLayout.addLayout(row2)
@@ -660,10 +796,53 @@ class NewCanvasDialog(MessageBoxBase):
         self.cancelButton.setText("取消")
         self.widget.setMinimumWidth(360)
 
+    def validate(self):
+        # 工程名空则不允许关闭（MessageBoxBase 在 yes 时先调 validate）
+        if not sanitize_proj_name(self.name_edit.text()):
+            InfoBar.warning("工程名不能为空", "请输入工程名后再创建",
+                            parent=self, position=InfoBarPosition.TOP, duration=2500)
+            return False
+        return super().validate()
+
+    def project_name(self):
+        return sanitize_proj_name(self.name_edit.text())
+
     def canvas_size(self):
         # 注意：绝不能叫 size()——那会覆盖 QWidget.size()，
         # 基类 MaskDialogBase.__init__ 内部调 self.size() 时控件还没建好（实测崩）
         return self.w_spin.value(), self.h_spin.value()
+
+
+# ---------------- 工程名输入弹窗（另存为用） ----------------
+class ProjectNameDialog(MessageBoxBase):
+    """单行输入弹窗：默认填当前工程名，用户可改。"""
+
+    def __init__(self, parent=None, title="另存为工程", prompt="工程名：",
+                 default_name="工程"):
+        super().__init__(parent)
+        self.titleLabel = SubtitleLabel(title, self)
+        self.viewLayout.addWidget(self.titleLabel)
+        row = QHBoxLayout()
+        row.addWidget(BodyLabel(prompt, self))
+        self.name_edit = LineEdit(self)
+        self.name_edit.setFixedWidth(260)
+        self.name_edit.setText(default_name)
+        row.addWidget(self.name_edit)
+        row.addStretch(1)
+        self.viewLayout.addLayout(row)
+        self.yesButton.setText("保存")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(380)
+
+    def validate(self):
+        if not sanitize_proj_name(self.name_edit.text()):
+            InfoBar.warning("工程名不能为空", "请输入工程名后再保存",
+                            parent=self, position=InfoBarPosition.TOP, duration=2500)
+            return False
+        return super().validate()
+
+    def project_name(self):
+        return sanitize_proj_name(self.name_edit.text())
 
 
 # ---------------- 工作台页 ----------------
@@ -681,6 +860,8 @@ class Workbench(QWidget):
         self._mv_orig = None          # 移动工具按下时的原始 bbox
         self._selected = None         # 当前选中图层名（列表/画布共用）
         self._new_canvas = None       # 「新建」弹窗指定的画布尺寸 (W,H)，首张拖入图消费
+        self.proj_name = None         # 当前工程名（新建/载入时写回）
+        self.proj_dir = None          # 当前工程目录（新建时指向 projects\<名>\）
         self._build()
         # 启动即空工作台（不自动载入任何工程）
         self.cur_dir = None
@@ -717,9 +898,6 @@ class Workbench(QWidget):
         m.addAction(act_open)
         m.addAction(act_import)
         m.insertMenu(act_import, self.recent_menu)
-        # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
-        m.addAction(Action(FluentIcon.ZOOM, "拆分图片（SeeThrough）",
-                           triggered=self._pick_image))
         m.addSeparator()
         m.addAction(Action(FluentIcon.SAVE, "保存", triggered=self.act_save))
         m.addAction(Action(FluentIcon.SAVE_AS, "另存为", triggered=self.act_saveas))
@@ -739,6 +917,10 @@ class Workbench(QWidget):
         em = RoundMenu(parent=self)
         em.addAction(Action(FluentIcon.HISTORY, "撤销  Ctrl+Z", triggered=self.act_undo))
         em.addAction(Action(FluentIcon.HISTORY, "重做  Ctrl+Y", triggered=self.act_redo))
+        # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
+        em.addSeparator()
+        em.addAction(Action(FluentIcon.ZOOM, "拆分图片（SeeThrough）",
+                            triggered=self._pick_image))
         edit.setMenu(em)
         self.edit_btn = edit
         self.edit_ref = em
@@ -840,6 +1022,8 @@ class Workbench(QWidget):
         self.layer_list.model().rowsMoved.connect(self._on_rows_moved)
         self.layer_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.layer_list.customContextMenuRequested.connect(self._layer_menu)
+        # 选中层同步：画布移动工具只拖列表当前选中层（currentItem 是唯一真源）
+        self.layer_list.currentItemChanged.connect(self._on_current_layer_changed)
         botLay.addWidget(self.layer_list, 1)
         ball = PushButton("显示/隐藏全部", self)
         ball.clicked.connect(self._toggle_all)
@@ -930,18 +1114,63 @@ class Workbench(QWidget):
         self.layers.sort(key=lambda l: -pos.get(l["name"], 0))
         self.visible = {l["name"]: True for l in self.layers}
         self.cur_dir = d
+        self.proj_name = self._read_proj_name(d)
+        self.proj_dir = d
         self._record_recent(d)
         self.reload_widgets()
         self.history.seed(self)      # 新不变式：undo_stack 栈底=载入基线
+        self._notify_nav(self.proj_name, d)
         return True
 
+    def _read_proj_name(self, d):
+        """读工程名：优先 rig_project.json 的 name，否则用目录名。"""
+        try:
+            p = json.load(open(os.path.join(d, "rig_project.json"), encoding="utf8"))
+            nm = sanitize_proj_name(p.get("name") or "")
+            if nm:
+                return nm
+        except Exception:
+            pass
+        return os.path.basename(os.path.normpath(d))
+
+    def _notify_nav(self, name, d):
+        """把工程加进/刷新导航栏（MainWindow 维护 _proj_items）。"""
+        fn = getattr(getattr(self, "win", None), "add_project_entry", None)
+        if fn is None:
+            return
+        try:
+            fn(name, d)
+        except Exception:
+            pass
+
+    def _write_project_placeholder(self, d, name, W, H):
+        """写最小工程占位：rig_project.json + 空 layers_meta.json，导航一点就能 load。"""
+        os.makedirs(d, exist_ok=True)
+        json.dump({"name": name, "width": W, "height": H,
+                   "draw_order": [], "nodes": [], "layers": []},
+                  open(os.path.join(d, "rig_project.json"), "w", encoding="utf8"),
+                  ensure_ascii=False, indent=2)
+        json.dump({"width": W, "height": H, "layers": []},
+                  open(os.path.join(d, "layers_meta.json"), "w", encoding="utf8"),
+                  ensure_ascii=False, indent=2)
+
     def reload_widgets(self):
+        # clear 会触发 currentItemChanged 把选中层洗成 None，先屏蔽；
+        # 重建列表后按 _selected 恢复选中（保持"列表选中=画布可拖层"一致）
+        self.layer_list.blockSignals(True)
         self.layer_list.clear()
         for l in self.layers:
             mark = "●" if self.visible.get(l["name"], True) else "○"
             it = QListWidgetItem("%s %s [%s]" % (mark, l["name"], l["tag"]))
             it.setData(Qt.UserRole, l["name"])
             self.layer_list.addItem(it)
+        if self._selected:
+            for i in range(self.layer_list.count()):
+                it = self.layer_list.item(i)
+                if it is not None and it.data(Qt.UserRole) == self._selected:
+                    self.layer_list.setCurrentItem(it)
+                    break
+        self.layer_list.blockSignals(False)
         self.tree.clear()
         if self.rig:
             for n in self.rig["nodes"]:
@@ -986,14 +1215,18 @@ class Workbench(QWidget):
             self.history.push(self)
 
     # ---------- 移动工具 ----------
+    def _on_current_layer_changed(self, cur, _prev=None):
+        """图层列表 currentItem 变化 -> 同步画布选中层（移动工具只拖该层）。"""
+        self._selected = cur.data(Qt.UserRole) if cur is not None else None
+        self.canvas.selected_name = self._selected
+
     def _on_move_grab(self, name):
-        """按下命中图层：记原始 bbox（累计偏移基准，避免逐帧增量误差），并同步选中列表项"""
+        """按下命中选中层：记原始 bbox（累计偏移基准，避免逐帧增量误差）。"""
         self._mv_orig = None
         for l in self.layers:
             if l["name"] == name:
                 self._mv_orig = tuple(l["bbox"])
                 break
-        self._select_in_list(name)
 
     def _on_move_drag(self, name, dx, dy):
         if self._mv_orig is None:
@@ -1027,7 +1260,7 @@ class Workbench(QWidget):
                                            interpolation=cv2.INTER_AREA)
 
     def _select_in_list(self, name):
-        self._selected = name
+        """程序化选中列表项（会经 currentItemChanged 同步到画布）。"""
         for i in range(self.layer_list.count()):
             it = self.layer_list.item(i)
             if it is not None and it.data(Qt.UserRole) == name:
@@ -1160,6 +1393,9 @@ class Workbench(QWidget):
         for nd in self.rig["nodes"]:
             if name in nd["layers"]:
                 nd["layers"].remove(name)
+        if self._selected == name:
+            self._selected = None
+            self.canvas.selected_name = None
         self.rig.pop("_lite", None)      # LOD 缓存里有被删层，作废重建
         self.reload_widgets()
         self.history.push(self)
@@ -1185,13 +1421,18 @@ class Workbench(QWidget):
 
         # 空工作台 -> 建空 rig（只有 root 语义），并播基线快照让 Ctrl+Z 能回空
         if self.rig is None:
-            # 「新建」弹窗指定的画布尺寸优先；没指定则沿用首图尺寸（旧行为）
+            # 「新建」弹窗指定的画布尺寸优先；否则画布=图片尺寸（自适应）
             cw, ch = getattr(self, "_new_canvas", None) or (w, h)
             self.rig = {"width": cw, "height": ch, "fps": 30.0,
                         "nodes": [], "_layers": [], "draw_order": []}
             self.W, self.H = cw, ch
             self.cur_dir = None
             self._new_canvas = None      # 消费掉，避免后续再建 rig 时误用旧尺寸
+            # 无弹窗来源的空画布拖图：以图片名建工程目录（中文文件名保留中文）
+            if not self.proj_name and not self.proj_dir:
+                stem = os.path.splitext(os.path.basename(img_path))[0]
+                pname, pd = self._create_project_dir(stem, self.W, self.H)
+                self.proj_name, self.proj_dir = pname, pd
             self.history.seed(self)
 
         W, H = self.W, self.H
@@ -1358,23 +1599,56 @@ class Workbench(QWidget):
             InfoBar.success("已打开工程", os.path.basename(d), parent=self,
                             position=InfoBarPosition.TOP, duration=2000)
 
+    def _create_project_dir(self, name, W, H):
+        """建工程目录 + 占位工程（act_new 与空画布拖图共用，勿复制粘贴）。
+        name 已保证唯一；返回 (proj_name, 目录)。"""
+        proj_name = unique_proj_name(name)
+        d = os.path.join(PROJ_BASE, proj_name)
+        os.makedirs(d, exist_ok=True)
+        self._write_project_placeholder(d, proj_name, W, H)
+        self._notify_nav(proj_name, d)
+        return proj_name, d
+
     def act_new(self, ask_size=False):
-        """新建工程。ask_size=True（菜单触发）弹窗问画布尺寸；
-        False（启动初始化/程序化调用）直接建空白工作台，不弹窗。"""
-        W = H = None
-        if ask_size:
-            dlg = NewCanvasDialog(self)
-            if not dlg.exec():
-                return                      # 取消：保持当前工作台不动
-            W, H = dlg.canvas_size()
+        """新建工程。ask_size=True（菜单触发）弹窗问工程名+画布尺寸；
+        False（启动初始化/程序化调用）直接清空为空白工作台，不弹窗、不建工程。"""
+        if not ask_size:
+            self._clear_workbench()
+            return
+        dlg = NewCanvasDialog(self, default_name=unique_proj_name("工程"))
+        if not dlg.exec():
+            return                          # 取消：保持当前工作台不动
+        W, H = dlg.canvas_size()
+        name = dlg.project_name()
+        if not W or not name:
+            self._clear_workbench()
+            return
+        # 建工程目录 + 占位工程 + 空画布 rig（新建即有画布）
+        self._clear_workbench()
+        proj_name, d = self._create_project_dir(name, W, H)
+        self.rig = {"width": W, "height": H, "fps": 30.0,
+                    "nodes": [], "_layers": [], "draw_order": []}
+        self.W, self.H = W, H
+        self.cur_dir = d
+        self.proj_name = proj_name
+        self.proj_dir = d
+        self.reload_widgets()
+        self.history.seed(self)
+        self.prog.setText("新工程 %s（%d×%d）：拖入图片开始" % (proj_name, W, H))
+
+    def _clear_workbench(self):
+        """清空工作台（不建工程目录）。"""
         self.rig = None
         self.layers = []
         self.visible = {}
         self.cur_dir = None
-        self._new_canvas = (W, H) if W else None   # 首张拖入图按此画布尺寸摆放
+        self.proj_name = None
+        self.proj_dir = None
+        self._new_canvas = None
+        self._selected = None
+        self.canvas.selected_name = None
         self.reload_widgets()
-        self.prog.setText("空白工作台：拖入图片开始"
-                          if not W else "新画布 %d×%d：拖入图片开始" % (W, H))
+        self.prog.setText("空白工作台：拖入图片开始")
 
     def act_import(self):
         p, _ = QFileDialog.getOpenFileName(self, "导入 PSD", "",
@@ -1449,7 +1723,8 @@ class Workbench(QWidget):
                           position=InfoBarPosition.TOP, duration=6000)
 
     def _project_payload(self):
-        return {"width": self.W, "height": self.H,
+        return {"name": getattr(self, "proj_name", None),
+                "width": self.W, "height": self.H,
                 "draw_order": self.rig["draw_order"],
                 "nodes": [{"node": n["node"], "parent": n["parent"],
                            "pivot": n["pivot"], "layers": n["layers"]}
@@ -1460,11 +1735,25 @@ class Workbench(QWidget):
             self.act_saveas()
             return
         self._write_project(self.cur_dir)
+        self._notify_nav(getattr(self, "proj_name", None), self.cur_dir)
 
     def act_saveas(self):
-        d = QFileDialog.getExistingDirectory(self, "选择工程目录", V2)
-        if d:
-            self._write_project(d)
+        """另存为：默认工程名 = 当前工程名，用户可改；落到 projects/<名>/。"""
+        base = getattr(self, "proj_name", None) or "工程"
+        dlg = ProjectNameDialog(self, default_name=base)
+        if not dlg.exec():
+            return
+        proj_name = dlg.project_name() or "工程"
+        # 与当前工程同名 -> 原地覆盖；否则重名自动加序号
+        if proj_name != (getattr(self, "proj_name", None) or ""):
+            proj_name = unique_proj_name(proj_name)
+        d = os.path.join(PROJ_BASE, proj_name)
+        os.makedirs(d, exist_ok=True)
+        self.proj_name = proj_name
+        self._write_project(d)
+        self.cur_dir = d
+        self.proj_dir = d
+        self._notify_nav(proj_name, d)
 
     def _write_project(self, d):
         try:
@@ -1597,19 +1886,19 @@ class Workbench(QWidget):
             self.set_nav_progress(pct)   # 单调不回退在 set_nav_progress 里保证
 
     def set_nav_progress(self, pct):
-        """导航栏「工作台」按钮显示/清除拆分百分比。pct=None 恢复原文字。"""
+        """拆分进度注入工作台状态栏（工作台导航项已隐藏）。pct=None 清除。"""
         setter = getattr(self, "nav_setter", None)
         if setter is None:
             return
         if pct is None:
             self._nav_pct = None
-            setter("工作台", "")
+            setter("", "")
             return
         cur = getattr(self, "_nav_pct", None)
         if cur is not None and pct < cur:
             pct = cur                      # 防倒退
         self._nav_pct = pct
-        setter("工作台 %d%%" % pct, "拆分中 %d%%" % pct)
+        setter("拆分进度 %d%%" % pct, "拆分中 %d%%" % pct)
 
     def _decompose_done(self, meta, out_dir):
         self.busy = False
@@ -1757,16 +2046,22 @@ class MainWindow(FluentWindow):
         self.wb.setObjectName("workbench")
         self.addSubInterface(self.wb, FluentIcon.BRUSH, "工作台")
         self.navigationInterface.setMenuButtonVisible(False)
-        # 拆分进度注入导航栏「工作台」按钮（addSubInterface 不返回导航项，
-        # 实测用 widget(objectName) 取；setText/setToolTip 往返验证可用）
+        # 去掉导航栏「工作台」按钮（用户需求）：保留 addSubInterface 让 wb 进
+        # stackedWidget，但把导航项隐藏（最小改动，内容显示不受影响）。
         self.nav_item = self.navigationInterface.widget("workbench")
         if self.nav_item is not None:
-            def _set_nav(text, tip):
-                self.nav_item.setText(text)
-                self.nav_item.setToolTip(tip)
-            self.wb.nav_setter = _set_nav
+            self.nav_item.setVisible(False)
+        # 工程列表（导航项）
+        self._proj_items = {}          # routeKey -> 工程目录
+        # 拆分进度注入：工作台按钮已隐藏，写进工作台状态栏（prog）即可，进度不丢
+        def _set_nav(text, tip):
+            try:
+                self.wb.prog.setText(text)
+            except Exception:
+                pass
+        self.wb.nav_setter = _set_nav
         # 导航栏：默认隐藏（单页应用常驻导航无益，用户要求直接去掉）。
-        # 标题栏侧栏按钮可唤出，唤出时 140px 完整显示「工作台」（图标+文字）。
+        # 标题栏侧栏按钮可唤出，唤出时 140px 完整显示工程列表（图标+文字）。
         # 库机制：isCompacted 时 paintEvent 只画图标，必须 EXPAND 模式；
         # setCollapsible(False) 关自动展开/收起，双层定宽钉死 140。
         self.nav_width = 140
@@ -1783,6 +2078,8 @@ class MainWindow(FluentWindow):
             tgt.setFixedWidth(self.nav_width)
         self.nav_collapsed = True
         ni.setVisible(False)
+        # 启动扫描 projects\ 把已有工程加进导航栏
+        self._scan_projects()
         # ---- 标题栏左上角工具条（DSH 风格）：折叠按钮 + 菜单 + 导出 ----
         self.btn_collapse = TransparentToggleToolButton(SidebarIcon(), self)
         self.btn_collapse.setFixedSize(32, 30)
@@ -1806,6 +2103,46 @@ class MainWindow(FluentWindow):
         """折叠/展开最左导航栏：直接隐藏，布局自动把空间让给内容区"""
         self.nav_collapsed = not self.nav_collapsed
         self.navigationInterface.setVisible(not self.nav_collapsed)
+
+    def add_project_entry(self, name, d):
+        """导航栏加入/更新工程项。同目录只一项（更新文字）。"""
+        try:
+            d = os.path.normpath(d)
+        except Exception:
+            return
+        name = name or os.path.basename(d)
+        ni = self.navigationInterface
+        items = getattr(self, "_proj_items", None)
+        if items is None:
+            items = self._proj_items = {}
+        for key, dd in list(items.items()):
+            if os.path.normpath(dd) == d:
+                try:
+                    ni.widget(key).setText(name)
+                except Exception:
+                    pass
+                return
+        n = len(items) + 1
+        key = "proj:%d" % n
+        while key in items:
+            n += 1
+            key = "proj:%d" % n
+        try:
+            ni.addItem(key, FluentIcon.FOLDER, name,
+                       onClick=lambda checked=False, dd=d: self.wb.load_dir(dd),
+                       tooltip=d)
+            items[key] = d
+        except Exception:
+            pass
+
+    def _scan_projects(self):
+        """启动时扫描 PROJ_BASE 目录，把已有工程加进导航栏。"""
+        if not os.path.isdir(PROJ_BASE):
+            return
+        for fn in sorted(os.listdir(PROJ_BASE)):
+            d = os.path.join(PROJ_BASE, fn)
+            if os.path.isdir(d):
+                self.add_project_entry(fn, d)
 
 
 def run_app():

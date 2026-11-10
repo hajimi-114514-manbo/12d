@@ -5,6 +5,17 @@
 
 ---
 
+## 2026-11-10（下午3）新建弹窗：自定义画布尺寸
+
+- **用户需求原文**：「文件下拉菜单选择新建后，需要弹窗让用户输入长和宽(像素)，根据输入创建画布尺寸」。
+- **实现**：新增 `NewCanvasDialog(MessageBoxBase)`——标题 + 说明 + 两行 `BodyLabel` + `SpinBox`（宽/高，range 1..8192，默认 1024×1024），yesButton 文字「创建」。`act_new(ask_size=False)`：菜单触发传 `True` 弹窗，取消则直接 `return` 保持当前工作台不动；启动初始化 `act_new(False)` 不弹（**这个默认值是有意的**：任何遗漏的无参调用都不会阻塞）。弹窗结果存 `wb._new_canvas = (W, H)`，`_drop_add_layer` 建 rig 时消费（优先用它，没有则沿用首图尺寸=旧行为），消费后置 `None` 防止后续误用。
+- **踩坑两个（重点记）**：
+  - **对话框方法绝不能命名 `size()`**——会覆盖 `QWidget.size()`，而基类 `MaskDialogBase.__init__` 第 28 行内部就调 `self.size()`，那时 `w_spin` 还没创建，直接 `AttributeError`。已改名 `canvas_size()`。
+  - **offscreen 测试弹窗不能用 `app.activeModalWidget()` 找对话框**——不可靠（定时器找不到对象 → `exec` 永远等待，实测卡死 10 分钟被 kill）。可靠做法：monkeypatch 对话框类为 Spy 子类，`__init__` 里把实例 append 进列表，定时器里对 `captured[-1]` 设值并 `yesButton.click()`。另外 `MaskDialogBase.done()` 有 100ms 淡出动画依赖事件循环推进，click 后要多 `processEvents`。
+- **MessageBoxBase API 备忘（1.11.3）**：无标题属性，用 `viewLayout.addWidget(SubtitleLabel(...))` 自建；`validate()` 返回 `False` 可阻止关闭（本次没用上）；`SpinBox` 注意是 **B 大写**（`Spinbox` 导入会报错）。
+- **测试**：弹窗专项 9/9（启动不弹 / 确认后 `_new_canvas` / 首图后画布=指定尺寸 / bbox 在画布内 / 取消不动 / 默认 1024 / 上下限钳制）；`layer_menu_test` 32 项 ALL PASS rc=0。
+- **打包**：本轮 Setup 由 Lead 重打包。
+
 ## 2026-11-10（下午2）PS 风格工具栏 + 移动工具 + 去箭头
 
 - **用户需求原文**：「顶层按钮下拉小箭头去掉」+「左侧导航栏右侧加一列工具栏，参考 Photoshop，先内置一个移动按钮，选中后可移动选定图层」。
