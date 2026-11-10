@@ -105,7 +105,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -284,11 +284,17 @@ class RigCanvas(QWidget):
         self._layers_ref = []           # [(name, bbox_full, (visible, locked))] 列表前=叠放顶
         self.selected_name = None       # 当前选中图层名（图层列表 currentItem 同步）
         self._mv = None                 # 移动拖拽态 (name, 按下点全分辨率坐标)
-        self._lasso = []                # 多边形套索顶点（图像全分辨率坐标）
+        # 多边形套索：_lasso 是当前正在画的顶点；_lasso_done 是已闭合的选区列表
+        # [{"points": [...], "op": "add"|"sub"}]，多次圈选可累积（PS 的加选/减选）
+        self._lasso = []
+        self._lasso_done = []
+        self._lasso_drag = None         # 顶点拖拽态 (索引, 起点)
+        self._lasso_op = "add"          # 当前圈的选区操作：add / sub
 
     def set_tool(self, t):
         if t != self.tool:
             self._lasso = []          # 换工具清掉未闭合的选区
+            self._lasso_done = []     # 已闭合的选区也清掉
         self.tool = t
         if t == "move":
             self.setCursor(Qt.SizeAllCursor)
@@ -418,21 +424,35 @@ class RigCanvas(QWidget):
         p.drawPixmap(QPoint(ox, oy), self.pixmap.scaled(
             dw, dh, Qt.IgnoreAspectRatio, xform))
         p.setClipping(False)
-        # ---- 多边形套索：绘制选区路径（图像坐标 -> widget 坐标）----
-        if self._lasso:
+        # ---- 多边形套索：绘制已闭合选区（蚂蚁线）+ 当前正在画的路径 ----
+        if self._lasso_done or self._lasso:
             sc = PREVIEW_SCALE
-            # 全分辨率坐标 -> LOD 坐标(px*sc) -> widget 坐标(ox + lod*s)
-            pts = [QPoint(int(ox + px * sc * s), int(oy + py * sc * s))
-                   for px, py in self._lasso]
-            p.setPen(QPen(QColor("#4d88ff"), 1, Qt.DashLine))
-            p.setBrush(Qt.NoBrush)
-            if len(pts) >= 2:
+            def _w(px, py):
+                return QPoint(int(ox + px * sc * s), int(oy + py * sc * s))
+            # 已闭合选区：加选=蓝色实线，减选=红色虚线（PS 的加/减选配色）
+            for sel in self._lasso_done:
+                pts = [_w(px, py) for px, py in sel.get("points", [])]
+                if len(pts) < 2:
+                    continue
+                sub = sel.get("op") == "sub"
+                p.setPen(QPen(QColor("#e05c5c" if sub else "#4d88ff"), 1,
+                              Qt.DashLine if sub else Qt.SolidLine))
+                p.setBrush(Qt.NoBrush)
                 poly = QPolygon(pts)
                 poly.append(pts[0])
                 p.drawPolyline(poly)
-            p.setBrush(QColor("#4d88ff"))
-            for pt in pts:
-                p.drawEllipse(pt, 2, 2)
+            # 正在画的路径
+            if self._lasso:
+                pts = [_w(px, py) for px, py in self._lasso]
+                p.setPen(QPen(QColor("#4d88ff"), 1, Qt.DashLine))
+                p.setBrush(Qt.NoBrush)
+                if len(pts) >= 2:
+                    poly = QPolygon(pts)
+                    poly.append(pts[0])
+                    p.drawPolyline(poly)
+                p.setBrush(QColor("#4d88ff"))
+                for pt in pts:
+                    p.drawEllipse(pt, 2, 2)
         for node, (x, y) in self.pivots.items():
             cx, cy = ox + x * s, oy + y * s
             p.setPen(QColor("#ffd166"))
@@ -489,6 +509,23 @@ class RigCanvas(QWidget):
                 return None            # 选中层被隐藏/锁定：不可拖
         return None                    # 选中层已不在画布数据里（刚被删）
 
+    def lasso_reapply(self):
+        """顶点拖动后重新提交选区（形状变了，需要重新裁剪）"""
+        if self._lasso_done:
+            self.lasso_committed.emit(list(self._lasso_done))
+
+    def _lasso_vertex_at(self, pos, radius=7):
+        """命中已闭合选区的顶点：返回 (选区索引, 顶点索引) 或 None。"""
+        sc = PREVIEW_SCALE
+        ox, oy, s, dw, dh = self._geom
+        for si, sel in enumerate(self._lasso_done):
+            for vi, (px, py) in enumerate(sel.get("points", [])):
+                wx = ox + px * sc * s
+                wy = oy + py * sc * s
+                if (wx - pos.x()) ** 2 + (wy - pos.y()) ** 2 <= radius * radius:
+                    return (si, vi)
+        return None
+
     def mousePressEvent(self, e):
         if e.button() == Qt.MiddleButton or self._space:
             # 平移：中键 或 空格+左键（任何工具模式下都保留）
@@ -497,7 +534,15 @@ class RigCanvas(QWidget):
             return
         if e.button() == Qt.LeftButton:
             if self.tool == "lasso":
+                # 已闭合选区的顶点可拖动（调整选区形状）
+                hit = self._lasso_vertex_at(e.position().toPoint())
+                if hit is not None:
+                    self._lasso_drag = hit
+                    return
                 # 多边形套索：左键加点，双击闭合（mouseDoubleClickEvent 负责闭合）
+                # Shift = 加选(默认)，Alt = 减选
+                op = "sub" if (e.modifiers() & Qt.AltModifier) else "add"
+                self._lasso_op = op
                 self._lasso.append(self._to_full(e.position().toPoint()))
                 self.update()
                 return
@@ -520,8 +565,12 @@ class RigCanvas(QWidget):
             return
         super().mouseDoubleClickEvent(e)
 
-    def _commit_lasso(self):
-        """闭合多边形并发出选区（<3 点视为取消）"""
+    def _commit_lasso(self, op=None):
+        """闭合多边形：记入选区列表并提交。
+
+        op: "add"=加选（默认）、"sub"=减选（Alt 修饰）。
+        已闭合的选区累积在 _lasso_done，提交时一次性做布尔运算。
+        """
         pts = list(self._lasso)
         # 双击最后一点闭合时，鼠标按下已加过一个重复顶点 —— 去掉末尾重复点
         if len(pts) >= 2 and abs(pts[-1][0] - pts[-2][0]) < 0.5 and \
@@ -529,8 +578,13 @@ class RigCanvas(QWidget):
             pts = pts[:-1]
         self._lasso = []
         self.update()
-        if len(pts) >= 3:
-            self.lasso_committed.emit(pts)
+        if len(pts) < 3:
+            return
+        if op is None:
+            op = getattr(self, "_lasso_op", "add")
+        self._lasso_done.append({"points": pts, "op": op})
+        self.lasso_committed.emit(list(self._lasso_done))
+        self._lasso_done = []          # 提交后清空（下次从新选区开始）
 
     def lasso_reset(self):
         """外部要求清空选区（切工具/取消）"""
@@ -544,6 +598,16 @@ class RigCanvas(QWidget):
             self.pan[0] = bpx + (e.position().x() - px)
             self.pan[1] = bpy + (e.position().y() - py)
             self.update()
+            return
+        if self._lasso_drag is not None:
+            # 拖动已闭合选区的顶点
+            si, vi = self._lasso_drag
+            try:
+                ix, iy = self._to_full(e.position().toPoint())
+                self._lasso_done[si]["points"][vi] = (ix, iy)
+                self.update()
+            except Exception:
+                pass
             return
         if self._mv:
             name, sx, sy = self._mv
@@ -564,6 +628,9 @@ class RigCanvas(QWidget):
             self.unsetCursor()
             if self.tool == "move":
                 self.setCursor(Qt.SizeAllCursor)
+            return
+        if self._lasso_drag is not None:
+            self._lasso_drag = None
             return
         if self._mv:
             self._mv = None
@@ -1239,8 +1306,29 @@ class Workbench(QWidget):
                                   "把选中的图层裁剪成只剩选区内像素（Esc 取消）。")
         self.btn_lasso.toggled.connect(self._on_tool_toggled)
         _tbl.addWidget(self.btn_lasso)
+        # 羽化半径（像素）：套索选区边缘软化，0 = 硬边
+        self.lasso_feather = 0
+        _fr = QHBoxLayout()
+        _fr.setContentsMargins(0, 0, 0, 0)
+        _fr.setSpacing(2)
+        _feather_lbl = CaptionLabel("羽化", self.tool_bar)
+        _feather_lbl.setFixedWidth(28)
+        _fr.addWidget(_feather_lbl)
+        self.spin_feather = NumSpinBox(minimum=0, maximum=20, value=0, parent=self.tool_bar)
+        self.spin_feather.setToolTip("羽化半径（像素）：选区边缘软化，0=硬边")
+        self.spin_feather.setFixedWidth(52)
+        self.spin_feather.valueChanged.connect(
+            lambda v: setattr(self, "lasso_feather", int(v)))
+        _fr.addWidget(self.spin_feather)
+        _tbl.addLayout(_fr)
+        # 顶点拖动后重新应用选区
+        self.btn_lasso_apply = TransparentToolButton(FluentIcon.ACCEPT, self.tool_bar)
+        self.btn_lasso_apply.setToolTip("重新应用选区（拖动顶点调整形状后点此）")
+        self.btn_lasso_apply.setFixedSize(24, 24)
+        self.btn_lasso_apply.clicked.connect(lambda: self.canvas.lasso_reapply())
+        _tbl.addWidget(self.btn_lasso_apply)
         _tbl.addStretch(1)
-        self.tool_bar.setFixedWidth(44)
+        self.tool_bar.setFixedWidth(72)      # 容纳"羽化"标签 + 数字框
         self.tool_bar.setStyleSheet(
             "background:#252a33; border-radius:8px;")
         canvas_row = QHBoxLayout()
@@ -1513,15 +1601,20 @@ class Workbench(QWidget):
             if not (self.btn_move.isChecked() or self.btn_lasso.isChecked()):
                 self.canvas.set_tool("pan")
 
-    def _on_lasso_committed(self, points):
+    def _on_lasso_committed(self, selections):
         """多边形套索提交：把当前选中图层裁剪到选区内。
 
-        实现：lasso_tool.clip_layer_by_polygon 生成新 img（alpha 与掩码相乘）
-        + 收紧 bbox，替换 layers / rig['_layers'] 里的该层；
-        历史快照存的是**对象引用**，所以这里用**新 dict**替换（原地改 img
+        selections: [{"points": [...], "op": "add"|"sub"}, ...]
+            —— 画布侧累积的已闭合选区；"add" 是加选、"sub" 是减选，
+            最终掩码 = 所有加选区并集 - 所有减选区（PS 的布尔运算）。
+
+        实现：lasso_tool 生成布尔掩码 -> 与原图 alpha 相乘 -> 收紧 bbox，
+        替换 layers / rig['_layers'] 里的该层；
+        历史快照存的是**对象引用**，所以用**新 dict**替换（原地改 img
         会让旧快照的引用看到新内容、撤销失效）——与图层改名同一套路。
+        首次裁剪时把原图另存到 _orig_img，供「还原」使用。
         """
-        if self.rig is None or not points:
+        if self.rig is None or not selections:
             return
         name = self._selected
         if not name:
@@ -1536,11 +1629,40 @@ class Workbench(QWidget):
                             position=InfoBarPosition.TOP, duration=2500)
             return
         import lasso_tool
-        newL = lasso_tool.clip_layer_by_polygon(layer, points)
+        bbox = layer.get("bbox")
+        img = layer.get("img")
+        if not bbox or img is None:
+            return
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        h, w = img.shape[:2]
+        # 各选区掩码画在图层自身坐标系
+        add_masks, sub_masks = [], []
+        for sel in selections:
+            pts = sel.get("points") or []
+            op = sel.get("op", "add")
+            local = [(px - x0, py - y0) for px, py in pts]
+            m = lasso_tool.polygon_mask(local, w, h)
+            if m is None:
+                continue
+            (sub_masks if op == "sub" else add_masks).append(m)
+        mask = lasso_tool.combine_masks(add_masks, sub_masks, w, h,
+                                        feather=self.lasso_feather)
+        if mask is None:
+            InfoBar.warning("选区无效", "选区与图层没有重叠，或图层完全被裁空",
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            return
+        # L2：保留原图（首次裁剪时存），供「还原」与"在原图上再次选取"
+        if "_orig_img" not in layer or layer.get("_orig_bbox") is None:
+            layer["_orig_img"] = img
+            layer["_orig_bbox"] = tuple(bbox)
+        newL = lasso_tool.clip_layer_by_mask(layer, mask)
         if newL is None:
             InfoBar.warning("选区无效", "选区与图层没有重叠，或图层完全被裁空",
                             parent=self, position=InfoBarPosition.TOP, duration=3000)
             return
+        # _orig_img/_orig_bbox 随新 dict 传递（dict(layer) 是浅拷贝，引用仍在）
+        newL["_orig_img"] = layer["_orig_img"]
+        newL["_orig_bbox"] = layer["_orig_bbox"]
         # 替换 layers 与 rig['_layers'] 里的该层（两者可能是同一个 list）
         for arr in (self.layers, self.rig.get("_layers", [])):
             for i, x in enumerate(arr):
@@ -1556,6 +1678,33 @@ class Workbench(QWidget):
         self._select_in_list(name)
         InfoBar.success("已裁剪图层", "%s：保留选区内像素" % name, parent=self,
                         position=InfoBarPosition.TOP, duration=2500)
+
+    def _layer_restore_original(self, name):
+        """还原图层到裁剪前的原始像素（L2：保留原图）。"""
+        layer = self.layer_by_name(name)
+        if layer is None or not layer.get("_orig_img") is not None:
+            InfoBar.info("还原原图", "该图层没有裁剪记录", parent=self,
+                         position=InfoBarPosition.TOP, duration=2000)
+            return
+        orig_img = layer["_orig_img"]
+        orig_bbox = layer["_orig_bbox"]
+        newL = dict(layer)
+        newL["img"] = orig_img
+        newL["bbox"] = tuple(orig_bbox)
+        for arr in (self.layers, self.rig.get("_layers", [])):
+            for i, x in enumerate(arr):
+                if x["name"] == name:
+                    arr[i] = newL
+        if self.rig.get("_layers") is not self.layers:
+            self.rig["_layers"] = [newL if x is layer else x
+                                    for x in self.rig.get("_layers", [])]
+        self.rig.pop("_lite", None)
+        self._sync_layer_index()
+        self.history.push(self)
+        self.reload_widgets()
+        self._select_in_list(name)
+        InfoBar.success("已还原原图", name, parent=self,
+                        position=InfoBarPosition.TOP, duration=2000)
 
     def toggle_visible(self, name):
         """切换某层显隐（delegate 的眼睛点击入口）。
@@ -1729,7 +1878,51 @@ class Workbench(QWidget):
             self.history.push(self)
             self.redraw()
 
-    # ---------- 图层右键菜单（置顶 / 拆分 / 删除） ----------
+    # ---------- 复制图层 ----------
+    def _layer_copy(self, name):
+        """复制图层：新层紧邻源层上方（列表索引更小，列表顶=最前）。
+
+        浅拷贝 dict（img 共享同一份数组引用，图片数据不修改），tag/node/depth
+        照抄；visible 复制可见状态、locked 默认 False。同步 visible/locked/
+        draw_order/_layers，history.push 可撤销。"""
+        if self.rig is None:
+            return
+        src = self.layer_by_name(name)
+        if src is None:
+            return
+        idx = next((i for i, l in enumerate(self.layers) if l is src), None)
+        if idx is None:
+            return
+        # 新名：原名_copy，冲突则 _copy_2/_copy_3…
+        base = name + "_copy"
+        new_name = base
+        n = 2
+        existing = {l["name"] for l in self.layers}
+        while new_name in existing:
+            new_name = "%s_%d" % (base, n)
+            n += 1
+        # 浅拷贝 dict（img 共享引用）
+        new_layer = dict(src)
+        new_layer["name"] = new_name
+        # 紧邻源层上方插入（列表顶=最前）
+        self.layers.insert(idx, new_layer)
+        # rig["_layers"] 可能与 self.layers 是同一 list，也可能是独立 list
+        if self.rig["_layers"] is not self.layers:
+            self.rig["_layers"].insert(idx, new_layer)
+        # visible 复制可见状态；locked 默认 False
+        self.visible[new_name] = self.visible.get(name, True)
+        self.locked[new_name] = False
+        # draw_order 按插入后的 layers 顺序重算（末位=最前=最后绘制）
+        self.rig["draw_order"] = [l["name"] for l in reversed(self.layers)]
+        self._sync_layer_index()
+        self.rig.pop("_lite", None)
+        self.reload_widgets()
+        self.history.push(self)
+        self._select_in_list(new_name)
+        InfoBar.success("已复制图层", new_name, parent=self,
+                        position=InfoBarPosition.TOP, duration=2500)
+
+    # ---------- 图层右键菜单（置顶 / 重命名 / 复制 / 拆分 / 删除） ----------
     def _layer_menu(self, pos):
         if self.rig is None:
             return
@@ -1737,11 +1930,16 @@ class Workbench(QWidget):
         if it is None:
             return
         name = it.data(Qt.UserRole)
+        layer = self.layer_by_name(name)
         menu = RoundMenu(parent=self.layer_list)
         menu.addAction(Action(FluentIcon.UP, "置顶",
                               triggered=lambda: self._layer_to_top(name)))
         menu.addAction(Action(FluentIcon.EDIT, "重命名",
                               triggered=lambda: self.start_rename_edit(name)))
+        # 还原原图（L2：套索裁剪前保存了原始像素，可还原）
+        if layer and layer.get("_orig_img") is not None:
+            menu.addAction(Action(FluentIcon.UPDATE, "还原原图",
+                                  triggered=lambda: self._layer_restore_original(name)))
         menu.addAction(Action(text=("解锁" if self.locked.get(name) else "锁定"),
                               triggered=lambda: self.toggle_lock(name)))
         # 拆分此层：两级子菜单（A 连通域 / B SAM）
@@ -1751,6 +1949,8 @@ class Workbench(QWidget):
         sub.addAction(Action(FluentIcon.SEARCH, "智能拆分（SAM）",
                              triggered=lambda: self._layer_subsplit(name, "sam")))
         menu.addMenu(sub)
+        menu.addAction(Action(FluentIcon.COPY, "复制图层",
+                              triggered=lambda: self._layer_copy(name)))
         menu.addAction(Action(FluentIcon.DELETE, "删除",
                               triggered=lambda: self._layer_delete(name)))
         self._layer_ctx_menu = menu      # 防 GC
