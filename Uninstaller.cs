@@ -1,5 +1,5 @@
 // 木偶工作室 卸载器（内置于安装目录）
-// 编译: csc /target:winexe /win32icon:laowu_icon.ico /r:System.Management.dll /out:卸载木偶工作室.exe Uninstaller.cs
+// 编译: csc /target:winexe /win32icon:anon_sewing_icon.ico /r:System.Management.dll /out:卸载木偶工作室.exe Uninstaller.cs
 // 安全铁律：只删"确认是木偶工作室安装目录"内的文件；拒绝盘根/系统目录/含 .git 的源码目录；
 //           目录联接(junction)只删链接本身，绝不跟随删除链接目标。
 using System;
