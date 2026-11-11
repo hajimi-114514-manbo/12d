@@ -104,7 +104,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.9.0"
+VERSION = "2.9.1"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -2200,50 +2200,73 @@ class Workbench(QWidget):
         self.canvas.lasso_cancel_selection()
         self._sync_edit_menu_state()
 
+    def _asset_clear_menu(self):
+        """彻底清空资产菜单（含 view 残留行）。
+
+        坑：RoundMenu.clear() 只清 actions 与 _subMenus，view(QListWidget)
+        里的行会残留，每重建一次就多一行，菜单越点越长（"蜈蚣"效应）。
+        这里显式把 view 也清空，并丢掉旧子菜单的引用。
+        """
+        menu = getattr(self, "asset_menu", None)
+        if menu is None:
+            return
+        try:
+            menu.clear()
+        except Exception:
+            pass
+        try:
+            while menu.view.count() > 0:
+                menu.view.takeItem(0)
+        except Exception:
+            pass
+        # 清掉旧的子菜单引用（防累积持有已废弃的 RoundMenu）
+        try:
+            self._asset_subs = []
+        except Exception:
+            pass
+
     def _rebuild_asset_menu(self):
-        """构建「资产管理」菜单：列出全部可下载资产 + 已下载状态 + 下载入口。
-    
-        每次打开菜单都重建（本地可能刚下载完、或用户手动删了目录），
-        所以状态判定走 asset_catalog 的实时检查而不是缓存。
+        """构建「资产管理」菜单（平铺样式）。
+
+        每次打开菜单都重建（本地可能刚下载完、或用户手动删过目录），
+        所以状态走 asset_catalog 的实时检查而不是缓存。
+        清空走 _asset_clear_menu —— 必须先清 view 残留行，否则每点一次
+        菜单就多一行，会越点越长（蜈蚣效应）。
         """
         try:
             import asset_catalog as AC
         except Exception as e:
-            self.asset_menu.clear()
+            self._asset_clear_menu()
             self.asset_menu.addAction(Action(
                 FluentIcon.INFO, "资产清单模块缺失: %s" % e))
             return
-        self.asset_menu.clear()
+        self._asset_clear_menu()
         base = V2
         try:
             miss = {a["id"] for a in AC.missing_assets(base)}
         except Exception:
             miss = set()
-        # 运行时单独一组（最影响"装完能不能打开"）
+
+        # 运行环境（最影响"装完能不能打开"）
         self.asset_menu.addAction(Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
         for a in AC.ASSETS:
-            try:
-                if a.get("kind") != "runtime":
-                    continue
-            except Exception:
-                continue
-            self._add_asset_action(a, a["id"] not in miss)
+            if (a.get("kind") or "") == "runtime":
+                self._add_asset_action(a, a.get("id") not in miss)
         self.asset_menu.addSeparator()
+        # 模型
         self.asset_menu.addAction(Action(FluentIcon.FOLDER, "— 模型 —"))
         for a in AC.ASSETS:
-            try:
-                if a.get("kind") == "runtime":
-                    continue
-            except Exception:
-                continue
-            self._add_asset_action(a, a["id"] not in miss)
+            if (a.get("kind") or "model") != "runtime":
+                self._add_asset_action(a, a.get("id") not in miss)
         self.asset_menu.addSeparator()
         self.asset_menu.addAction(Action(
             FluentIcon.SYNC, "刷新状态",
             triggered=self._rebuild_asset_menu))
-    
-    def _add_asset_action(self, a, done):
+
+    def _add_asset_action(self, a, done, menu=None):
+        """往指定菜单加一条资产项：已装显示 ✔+占用，未装显示 ⬇+体积并可点击下载。"""
         import asset_catalog as AC
+        menu = menu if menu is not None else self.asset_menu
         mb = a.get("size", 0) / (1024.0 * 1024.0)
         if done:
             try:
@@ -2251,13 +2274,13 @@ class Workbench(QWidget):
             except Exception:
                 got = mb
             text = "✔ %s（已下载 %.0f MB）" % (a.get("name", a["id"]), got)
-            self.asset_menu.addAction(Action(FluentIcon.ACCEPT, text))
+            menu.addAction(Action(FluentIcon.ACCEPT, text))
         else:
             text = "⬇ %s（%.0f MB）" % (a.get("name", a["id"]), mb)
             act = Action(FluentIcon.DOWNLOAD, text,
-                          triggered=lambda _=False, x=a: self._start_asset_download(x))
-            self.asset_menu.addAction(act)
-    
+                         triggered=lambda _=False, x=a: self._start_asset_download(x))
+            menu.addAction(act)
+
     def _start_asset_download(self, a):
         """启动资产下载（后台线程）。下载器在 asset_downloader.py，
         不在主线程做网络：5GB 会卡死 UI。"""

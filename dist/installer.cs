@@ -308,60 +308,37 @@ class Installer
         string msg = "更新完成：覆盖 " + written + " 个程序文件。\n" +
                      "models\\（模型）与 seethrough_out\\（你的产物）未改动。";
 
-        // 更新时模型处理（三分支）：
-        //   1) 完整 -> 走老路，绝不动 models 目录
-        //   2) 不完整（缺失/截断）-> 只重下坏文件（DownloadModels 跳过大小正确的）
-        //   3) 完全没有 -> 勾选了就下，没勾选只提示
-        if (HasModels(dir))
+        // 更新时模型处理：**只检查完整性 + 分类归位，不下载**（v2.9.0 起下载移到应用内「资产管理」）。
+        //   1) 模型完整 -> 走老路，绝不动 models 目录
+        //   2) 不完整/有平铺文件 -> RepairModels 归位整理 + 报告缺哪些，提示去应用里下载
+        //   3) 完全没有 -> 提示安装后到「资产管理」下载
+        // 注意：这里刻意不再调用 DownloadModels —— 安装包不再承担 5.3GB 模型下载，
+        //       用户装完即可打开应用，缺什么在资产中心按需下（可续传、有进度、可最小化）。
+        if (Directory.Exists(Path.Combine(dir, "models", "24yearsold")))
         {
-            List<string> bad = FindBadModels(dir);
+            SetStatus("正在检查模型完整性并分类整理…");
+            int moved2 = 0;
+            List<string> bad = RepairModels(dir, out moved2);
+            if (moved2 > 0)
+                msg += "\n模型目录已整理：归位 " + moved2 + " 个文件（旧版平铺存放的已放回 repo 子目录）。";
             if (bad.Count == 0)
             {
                 msg += "\n模型完整性检查通过，未改动。";
             }
             else
             {
-                string linkErr2 = CheckLinkAvailable();
-                if (linkErr2 != null)
-                {
-                    msg += "\n\n检测到模型不完整（" + bad.Count + " 个文件损坏/缺失），"
-                           + "但当前无法连接下载源，本次未修复。可稍后联网重跑安装器自动修复。";
-                }
-                else
-                {
-                    SetStatus("检测到模型不完整，正在修复（重下 " + bad.Count + " 个文件）…");
-                    try
-                    {
-                        DownloadModels(dir);
-                        List<string> stillBad = FindBadModels(dir);
-                        if (stillBad.Count == 0)
-                            msg += "\n模型已修复（重下 " + bad.Count + " 个文件）。";
-                        else
-                            errors.Add("模型修复后仍有 " + stillBad.Count + " 个文件不完整");
-                    }
-                    catch (Exception ex) { errors.Add("模型修复: " + ex.Message); }
-                }
-            }
-        }
-        else if (withModels)
-        {
-            string linkErr2 = CheckLinkAvailable();
-            if (linkErr2 != null)
-            {
-                msg += "\n\n模型下载失败：无法连接模型下载源。\n" + linkErr2
-                       + "\n可稍后联网时重新运行安装器补装。";
-            }
-            else
-            {
-                try { DownloadModels(dir); msg += "\n模型已下载就位。"; }
-                catch (Exception ex) { errors.Add("模型: " + ex.Message); }
+                msg += "\n\n检测到模型不完整（" + bad.Count + " 个文件缺失/大小不符）。"
+                       + "\n本次更新不下载模型，请打开应用后在顶部「资产管理」里下载缺失的模型"
+                       + "（支持断点续传，可最小化后台下载）。";
             }
         }
         else
         {
-            msg += "\n\n提示：未检测到模型（5.3GB），拆分功能不可用；"
-                   + "可重新运行安装器勾选下载模型。";
+            msg += "\n\n未检测到模型。安装完成后请打开应用，在顶部「资产管理」里下载"
+                   + "「分层模型 LayerDiff3D」与「深度模型 Marigold」即可开始拆图"
+                   + "（支持断点续传、可最小化后台下载）。";
         }
+
         if (withAmd)
         {
             List<string> aerrs = DownloadAmdExtras(dir);

@@ -155,7 +155,10 @@ class AssetDownloadThread(QThread):
                     continue
                 target = os.path.join(dest_dir, rel.replace("/", os.sep))
                 # 防 zip slip
-                if not os.path.abspath(target).startswith(os.path.abspath(dest_dir)):
+                # 防 zip slip：必须带分隔符比较，否则 dest 末段名是兄弟目录名前缀时
+                # 字符串前缀匹配会让 ../destEVIL/x 逃出 dest（实测可写出目录）
+                if not os.path.abspath(target).startswith(
+                        os.path.abspath(dest_dir) + os.sep):
                     continue
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with z.open(n) as src, open(target, "wb") as dst:

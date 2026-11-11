@@ -5,6 +5,22 @@
 
 ---
 
+## v2.9.1（2026-11-11 18:00）修资产菜单"蜈蚣"叠加 + 安装器去掉模型下载
+
+- **修 bug（用户反馈）**：每点一次「资产管理」，菜单就像叠了一层，越点越长成"蜈蚣"。
+  - **根因**：`RoundMenu.clear()` 只清 `actions` 与 `_subMenus`，**`view`(QListWidget) 里的行会残留**。实测连续重建 6 次，view 行数 4→5→6→7 单调增长，视觉上就是一层层叠加的菜单。
+  - **修法**：新增 `_asset_clear_menu()` —— 除了 `clear()` 还显式 `while view.count(): view.takeItem(0)`，并丢弃旧子菜单引用。实测连续重建 6 次，view 稳定 **9 行 / 7 个 action 不变**。
+  - 菜单**保持原来的平铺样式**（不改成子菜单，用户明确要求）。
+- **安装器去掉模型下载（架构调整落地）**：`DoUpdate` 里原三分支（完整/不完整就重下/没有就下）改为——
+  - 模型完整 → 提示"完整性检查通过，未改动"；
+  - 不完整 → **`RepairModels` 归位整理 + 报告缺几个文件**，提示「打开应用后在顶部资产管理里下载」（不再调 `DownloadModels`）；
+  - 完全没有 → 提示"安装后到资产管理下载 LayerDiff3D 与 Marigold"。
+  - 按用户要求：**安装时依旧检查模型文件并分类归位**，只是不再负责下载。
+- **安全加固**：`asset_downloader._extract_zip` 的 zip slip 校验补 `os.sep`。原写法 `startswith(abspath(dest))` 是字符串前缀匹配，当 dest 末段名是兄弟目录名前缀时（如 `models/sam` vs `models/samEVIL`），恶意 zip 里的 `../samEVIL/x` 能写出目标目录。由队友测试实测复现后修复。
+- **新增回归**：`asset_download_test.py`（队友交付，**44 项全 PASS**）——用本地 `http.server` 动态生成 zip，实测**断点续传真的生效**（服务器收到 `Range: bytes=110-`，起点精确等于预写半截长度）、服务器不支持 Range 时降级全量、截断包正确判失败、cancel 235ms 退出、`.part` 清理、进度信号、zip slip 两种变体拦截。
+- **实测**：八套回归全绿（layer_menu / finisher / proj_nav / transform_test / mesh_test 96 / asset_catalog 22 / asset_ui 13 / asset_download 44）。注：layer_menu 的 `21c` 是性能项，偶发波动（单跑 3 次全过，37.9~43.2ms vs 基线 26.7~29.6ms）。
+- **版本号**：bug 修复 -> patch+1 -> **v2.9.1**。
+
 ## v2.9.0（2026-11-11 17:20）资产管理中心 + 安装包不再下模型
 
 - **「资产管理」菜单**（顶栏 `文件 / 编辑 / 资产管理`，编辑右侧）：下拉列出全部可下载资产，**已下载的显示 ✔ 和实际占用**，未下载的显示 ⬇ 和体积，点一下即下载。分两组：运行环境 / 模型。菜单每次打开都实时重建（本地可能刚下完或用户手删了目录），底部有「刷新状态」。
