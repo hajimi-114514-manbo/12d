@@ -9,6 +9,7 @@ import os
 import sys
 import copy
 import json
+import math
 import re
 import time
 import shutil
@@ -105,7 +106,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -357,6 +358,9 @@ class RigCanvas(QWidget):
     move_released = Signal()
     lasso_committed = Signal(object)               # 多边形套索：提交选区点集（图像坐标）
     selection_changed = Signal(object)            # 选区状态变化（进入/更新选区，尚未裁剪）
+    ft_committed = Signal(object)                 # 自由变换：提交最终状态（图像坐标）
+    ft_changed = Signal(object)                   # 自由变换：拖动中状态变化（选项栏实时显示）
+    ft_cancelled = Signal()                       # 自由变换：取消（Esc）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -390,6 +394,9 @@ class RigCanvas(QWidget):
         self._selection_active = False  # 选区已激活（闭合后等用户复制/剪切/应用）
         self._selection_invert = False  # 反选显示（选区=多边形之外）
         self._lasso_curve = False       # 曲线套索模式（选项栏开关）
+        # 自由变换（Ctrl+T）：状态 dict{cx,cy,hw,hh,ang}（图像坐标）
+        self._ft = None                 # None = 未激活
+        self._ft_drag = None            # ("handle",name)/("move",)/("rotate",) + 按下点
 
     def set_tool(self, t):
         if t != self.tool:
@@ -524,6 +531,29 @@ class RigCanvas(QWidget):
         p.drawPixmap(QPoint(ox, oy), self.pixmap.scaled(
             dw, dh, Qt.IgnoreAspectRatio, xform))
         p.setClipping(False)
+        # ---- 自由变换（Ctrl+T）：虚线框 + 8 控制点 + 中心标记 ----
+        if self._ft is not None:
+            import transform_tool as TT
+            sc = PREVIEW_SCALE
+            def _fw(px, py):
+                return QPoint(int(ox + px * sc * s), int(oy + py * sc * s))
+            pts = [_fw(x, y) for x, y in TT.corners(self._ft)]
+            pen = QPen(QColor("#ffffff"), 1, Qt.DashLine)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            poly = QPolygon(pts)
+            poly.append(pts[0])
+            p.drawPolyline(poly)
+            # 中心标记（PS 的锚点）
+            c0 = _fw(self._ft["cx"], self._ft["cy"])
+            p.drawLine(c0.x() - 5, c0.y(), c0.x() + 5, c0.y())
+            p.drawLine(c0.x(), c0.y() - 5, c0.x(), c0.y() + 5)
+            # 8 控制点：白底黑框小方块
+            p.setPen(QPen(QColor("#20242c"), 1))
+            p.setBrush(QColor("#ffffff"))
+            for _, hx, hy in TT.handle_points(self._ft):
+                q = _fw(hx, hy)
+                p.drawRect(q.x() - 4, q.y() - 4, 8, 8)
         # ---- 多边形套索：绘制已闭合选区（蚂蚁线）+ 当前正在画的路径 ----
         if self._lasso_done or self._lasso:
             sc = PREVIEW_SCALE
@@ -633,6 +663,47 @@ class RigCanvas(QWidget):
         if self._lasso_done:
             self.lasso_committed.emit(list(self._lasso_done))
 
+    # ---------- 自由变换（Ctrl+T）----------
+    def ft_begin(self, bbox):
+        """进入自由变换：bbox=图层当前 bbox（图像坐标）"""
+        import transform_tool as TT
+        self._ft = TT.state_from_bbox(bbox)
+        self._ft_drag = None
+        self.update()
+
+    def ft_active(self):
+        return self._ft is not None
+
+    def ft_commit(self):
+        if self._ft is not None:
+            st = dict(self._ft)
+            # 先清状态再 emit：槽函数里会刷新选项栏可见性，
+            # 若此时 _ft 仍在，ft_active() 为 True -> 提交后选项栏不会隐藏
+            self._ft = None
+            self._ft_drag = None
+            self.update()
+            self.ft_committed.emit(st)
+
+    def ft_cancel(self):
+        if self._ft is not None:
+            self._ft = None
+            self._ft_drag = None
+            self.update()
+            self.ft_cancelled.emit()
+
+    def _ft_hit(self, pos):
+        """widget 坐标 -> 变换框命中（控制点/内部/角外）"""
+        if self._ft is None:
+            return None
+        import transform_tool as TT
+        ix, iy = self._to_full(pos)
+        ox, oy, s, dw, dh = self._geom
+        thr = 8.0 / max(0.01, s * PREVIEW_SCALE)   # 8 widget px 折算回图像坐标
+        return TT.hit(self._ft, ix, iy, thr)
+
+    def _ft_handle_at(self, pos):
+        return self._ft_hit(pos)
+
     def _lasso_vertex_at(self, pos, radius=7):
         """命中已闭合选区的顶点：返回 (选区索引, 顶点索引) 或 None。"""
         sc = PREVIEW_SCALE
@@ -652,6 +723,15 @@ class RigCanvas(QWidget):
             self.setCursor(Qt.ClosedHandCursor if self._space else Qt.OpenHandCursor)
             return
         if e.button() == Qt.LeftButton:
+            if self._ft is not None:
+                # 自由变换激活：左键只用于操作变换框
+                h = self._ft_hit(e.position().toPoint())
+                if h is not None:
+                    kind, name = h
+                    ix, iy = self._to_full(e.position().toPoint())
+                    self._ft_drag = (kind, name, ix, iy)
+                self.update()
+                return
             if self.tool == "lasso":
                 # 已闭合选区的顶点可拖动（调整选区形状）
                 hit = self._lasso_vertex_at(e.position().toPoint())
@@ -678,7 +758,10 @@ class RigCanvas(QWidget):
                 self.drag_node = n
 
     def mouseDoubleClickEvent(self, e):
-        """多边形套索：双击闭合并提交选区"""
+        """多边形套索：双击闭合并提交选区；自由变换：双击=提交（PS 行为）"""
+        if self._ft is not None and e.button() == Qt.LeftButton:
+            self.ft_commit()
+            return
         if self.tool == "lasso" and e.button() == Qt.LeftButton:
             self._commit_lasso()
             return
@@ -742,6 +825,21 @@ class RigCanvas(QWidget):
             self.pan[1] = bpy + (e.position().y() - py)
             self.update()
             return
+        if self._ft is not None and self._ft_drag is not None:
+            # 自由变换拖动：控制点缩放 / 框内平移 / 角外旋转
+            import transform_tool as TT
+            kind, name, sx, sy = self._ft_drag
+            ix, iy = self._to_full(e.position().toPoint())
+            keep_ar = bool(e.modifiers() & Qt.ShiftModifier)
+            if kind == "handle":
+                self._ft = TT.drag_handle(self._ft, name, ix, iy, keep_aspect=keep_ar)
+            elif kind == "move":
+                self._ft = TT.drag_move(self._ft, ix, iy, sx, sy)
+            elif kind == "rotate":
+                self._ft = TT.drag_rotate(self._ft, ix, iy, sx, sy)
+            self.ft_changed.emit(dict(self._ft))
+            self.update()
+            return
         if self._lasso_drag is not None:
             # 拖动已闭合选区的顶点
             si, vi = self._lasso_drag
@@ -771,6 +869,9 @@ class RigCanvas(QWidget):
             self.unsetCursor()
             if self.tool == "move":
                 self.setCursor(Qt.SizeAllCursor)
+            return
+        if self._ft_drag is not None:
+            self._ft_drag = None
             return
         if self._lasso_drag is not None:
             self._lasso_drag = None
@@ -804,6 +905,16 @@ class RigCanvas(QWidget):
         if e.key() == Qt.Key_Space and not e.isAutoRepeat():
             self._space = True
             self.setCursor(Qt.OpenHandCursor)
+            return
+        # 自由变换激活：Enter/双击=提交，Esc=取消（优先于其它按键逻辑）
+        if self._ft is not None:
+            if e.key() in (Qt.Key_Return, Qt.Key_Enter):
+                self.ft_commit()
+                return
+            if e.key() == Qt.Key_Escape:
+                self.ft_cancel()
+                return
+            super().keyPressEvent(e)
             return
         # 套索工具：Enter 闭合选区（有选区则应用裁剪）、Esc 取消
         if self.tool == "lasso":
@@ -1348,6 +1459,10 @@ class Workbench(QWidget):
         self._selection_data = []     # [{"points":[...], "op":"add"/"sub"}]
         self._selection_active = False
         self._selection_invert = False   # 反选（Ctrl+Shift+I）：选区=多边形之外
+        # 自由变换（Ctrl+T）
+        self._ft_layer = None         # 正在变换的图层名
+        self._ft_orig = None          # {"img","bbox"} 原图层备份（warp 源）
+        self._ft_spin_syncing = False # 选项栏回填时防死循环
         self.proj_name = None         # 当前工程名（新建/载入时写回）
         self.proj_dir = None          # 当前工程目录（新建时指向 projects\<名>\）
         self._build()
@@ -1431,6 +1546,13 @@ class Workbench(QWidget):
         self.act_inpaint.setEnabled(False)   # 需要选中图层
         em.addAction(self.act_inpaint)
         em.addSeparator()
+        # 自由变换（PS Ctrl+T）：需要选中图层
+        self.act_free_transform_item = Action(
+            FluentIcon.ROTATE, "自由变换  Ctrl+T",
+            triggered=self.act_free_transform)
+        self.act_free_transform_item.setEnabled(False)
+        em.addAction(self.act_free_transform_item)
+        em.addSeparator()
         # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
         em.addAction(Action(FluentIcon.ZOOM, "拆分图片（SeeThrough）",
                             triggered=self._pick_image))
@@ -1470,6 +1592,9 @@ class Workbench(QWidget):
         self.canvas.move_released.connect(self._push_history)
         self.canvas.lasso_committed.connect(self._on_lasso_committed)
         self.canvas.selection_changed.connect(self._on_selection_changed)
+        self.canvas.ft_committed.connect(self._on_ft_committed)
+        self.canvas.ft_changed.connect(lambda st: self._update_ft_spins())
+        self.canvas.ft_cancelled.connect(self._on_ft_cancelled)
         # 工具互斥：移动 / 多边形套索。
         # **不用 QButtonGroup 的 exclusive 模式**——它不允许取消已选中的按钮
         # （setChecked(False) 被吞），会破坏"取消移动工具回到左键拖支点"的行为。
@@ -1495,16 +1620,22 @@ class Workbench(QWidget):
         self.tool_bar.setStyleSheet(
             "background:#252a33; border-radius:8px;")
 
-        # ===== 画布上方选项栏（PS 风格）：套索工具激活时显示 =====
-        # 未选套索工具时整条隐藏（setVisible），不占空间。
+        # ===== 画布上方选项栏（PS 风格）：按模式显示不同控件组 =====
+        # 套索模式 -> 羽化/曲线/重新应用；自由变换模式 -> 宽/高/角度/提交/取消。
+        # 两者都不激活时整条隐藏（setVisible），不占空间。
         self.canvas_options = QWidget()
         _opl = QHBoxLayout(self.canvas_options)
         _opl.setContentsMargins(8, 3, 8, 3)
         _opl.setSpacing(6)
         self.lasso_feather = 0
-        _opl.addWidget(CaptionLabel("羽化", self.canvas_options))
+        # ---- 套索控件组 ----
+        self.opt_lasso_group = QWidget(self.canvas_options)
+        _olg = QHBoxLayout(self.opt_lasso_group)
+        _olg.setContentsMargins(0, 0, 0, 0)
+        _olg.setSpacing(6)
+        _olg.addWidget(CaptionLabel("羽化", self.opt_lasso_group))
         self.spin_feather = NumSpinBox(minimum=0, maximum=20, value=0,
-                                       parent=self.canvas_options)
+                                       parent=self.opt_lasso_group)
         self.spin_feather.setToolTip("羽化半径（像素）：选区边缘软化，0=硬边")
         self.spin_feather.setFixedWidth(96)
         # 高度不能固定：内部 editor 高 33，setFixedHeight(26) 会把它压扁错位
@@ -1512,25 +1643,72 @@ class Workbench(QWidget):
         self.spin_feather.setMaximumHeight(33)
         self.spin_feather.valueChanged.connect(
             lambda v: setattr(self, "lasso_feather", int(v)))
-        _opl.addWidget(self.spin_feather)
-        _opl.addWidget(CaptionLabel("px", self.canvas_options))
+        _olg.addWidget(self.spin_feather)
+        _olg.addWidget(CaptionLabel("px", self.opt_lasso_group))
         # 曲线模式（PS 曲线套索）：控制点之间用 Catmull-Rom 样条平滑
-        self.btn_curve = TransparentToggleToolButton(make_curve_icon(), self.canvas_options)
+        self.btn_curve = TransparentToggleToolButton(make_curve_icon(),
+                                                     self.opt_lasso_group)
         self.btn_curve.setToolTip("曲线套索：闭合后控制点间用样条曲线平滑（少点圈大形）")
         self.btn_curve.setFixedSize(28, 28)
         self.btn_curve.toggled.connect(
             lambda on: setattr(self.canvas, "_lasso_curve", bool(on)))
-        _opl.addWidget(self.btn_curve)
-        _opl.addStretch(1)
+        _olg.addWidget(self.btn_curve)
+        _olg.addStretch(1)
         # 顶点拖动后重新应用选区
         self.btn_lasso_apply = TransparentToolButton(FluentIcon.ACCEPT,
-                                                     self.canvas_options)
+                                                     self.opt_lasso_group)
         self.btn_lasso_apply.setToolTip("重新应用选区（拖动顶点调整形状后点此）")
         self.btn_lasso_apply.setFixedSize(24, 24)
         self.btn_lasso_apply.clicked.connect(lambda: self.canvas.lasso_reapply())
-        _opl.addWidget(self.btn_lasso_apply)
+        _olg.addWidget(self.btn_lasso_apply)
+        _opl.addWidget(self.opt_lasso_group)
+        # ---- 自由变换控件组（宽/高/角度 + 提交/取消）----
+        self.opt_ft_group = QWidget(self.canvas_options)
+        _ofg = QHBoxLayout(self.opt_ft_group)
+        _ofg.setContentsMargins(0, 0, 0, 0)
+        _ofg.setSpacing(6)
+        _ofg.addWidget(CaptionLabel("宽", self.opt_ft_group))
+        self.spin_ft_w = NumSpinBox(minimum=1, maximum=99999, value=100,
+                                    parent=self.opt_ft_group)
+        self.spin_ft_w.setFixedWidth(96)
+        self.spin_ft_w.setMinimumHeight(33)
+        self.spin_ft_w.setMaximumHeight(33)
+        self.spin_ft_w.valueChanged.connect(self._on_ft_spin_edited)
+        _ofg.addWidget(self.spin_ft_w)
+        _ofg.addWidget(CaptionLabel("高", self.opt_ft_group))
+        self.spin_ft_h = NumSpinBox(minimum=1, maximum=99999, value=100,
+                                    parent=self.opt_ft_group)
+        self.spin_ft_h.setFixedWidth(96)
+        self.spin_ft_h.setMinimumHeight(33)
+        self.spin_ft_h.setMaximumHeight(33)
+        self.spin_ft_h.valueChanged.connect(self._on_ft_spin_edited)
+        _ofg.addWidget(self.spin_ft_h)
+        _ofg.addWidget(CaptionLabel("角度", self.opt_ft_group))
+        self.spin_ft_ang = NumSpinBox(minimum=-360, maximum=360, value=0,
+                                      parent=self.opt_ft_group)
+        self.spin_ft_ang.setFixedWidth(96)
+        self.spin_ft_ang.setMinimumHeight(33)
+        self.spin_ft_ang.setMaximumHeight(33)
+        self.spin_ft_ang.valueChanged.connect(self._on_ft_spin_edited)
+        _ofg.addWidget(self.spin_ft_ang)
+        _ofg.addWidget(CaptionLabel("°", self.opt_ft_group))
+        _ofg.addStretch(1)
+        self.btn_ft_cancel = TransparentToolButton(FluentIcon.CANCEL,
+                                                   self.opt_ft_group)
+        self.btn_ft_cancel.setToolTip("取消自由变换（Esc）")
+        self.btn_ft_cancel.setFixedSize(24, 24)
+        self.btn_ft_cancel.clicked.connect(lambda: self.canvas.ft_cancel())
+        _ofg.addWidget(self.btn_ft_cancel)
+        self.btn_ft_commit = TransparentToolButton(FluentIcon.ACCEPT,
+                                                   self.opt_ft_group)
+        self.btn_ft_commit.setToolTip("提交自由变换（Enter）")
+        self.btn_ft_commit.setFixedSize(24, 24)
+        self.btn_ft_commit.clicked.connect(lambda: self.canvas.ft_commit())
+        _ofg.addWidget(self.btn_ft_commit)
+        self.opt_ft_group.setVisible(False)
+        _opl.addWidget(self.opt_ft_group)
         self.canvas_options.setFixedHeight(38)
-        self.canvas_options.setVisible(False)      # 默认隐藏（非套索工具）
+        self.canvas_options.setVisible(False)      # 默认隐藏（非套索/变换）
 
         canvas_row = QHBoxLayout()
         canvas_row.setContentsMargins(0, 0, 0, 0)
@@ -1806,11 +1984,54 @@ class Workbench(QWidget):
         self._sync_canvas_options()
 
     def _sync_canvas_options(self):
-        """画布上方选项栏只在套索工具激活时显示（用户要求）"""
+        """画布上方选项栏：套索模式显示羽化/曲线组，自由变换模式显示宽高角组。
+        两者都不激活时整条隐藏。自由变换优先（激活时套索组让位）。"""
         try:
-            self.canvas_options.setVisible(self.canvas.tool == "lasso")
+            ft = self.canvas.ft_active()
+            lasso = (self.canvas.tool == "lasso") and not ft
+            self.canvas_options.setVisible(ft or lasso)
+            self.opt_ft_group.setVisible(ft)
+            self.opt_lasso_group.setVisible(lasso)
+            if ft:
+                self._update_ft_spins()
         except Exception:
             pass
+
+    def _update_ft_spins(self):
+        """把当前变换状态回填到宽/高/角度输入框（拖动控制点时实时刷新）。
+        _ft_spin_syncing 防止 spin 与画布互相触发死循环。"""
+        st = getattr(self.canvas, "_ft", None)
+        if st is None:
+            return
+        self._ft_spin_syncing = True
+        try:
+            self.spin_ft_w.setValue(max(1, int(round(st["hw"] * 2))))
+            self.spin_ft_h.setValue(max(1, int(round(st["hh"] * 2))))
+            self.spin_ft_ang.setValue(int(round(math.degrees(st["ang"]))) % 360)
+        finally:
+            self._ft_spin_syncing = False
+
+    def _on_ft_spin_edited(self, *args):
+        """宽/高/角度输入框改变 -> 反算变换状态（PS 在选项栏输入数值）。
+        以图层原始 bbox 为基准（未变换时的宽高），避免多次输入累积漂移。"""
+        if getattr(self, "_ft_spin_syncing", False):
+            return
+        st = getattr(self.canvas, "_ft", None)
+        if st is None:
+            return
+        import transform_tool as TT
+        orig = getattr(self, "_ft_orig", None)
+        if orig is None:
+            return
+        ob = orig["bbox"]
+        ow, ohh = ob[2] - ob[0], ob[3] - ob[1]
+        ang = math.radians(self.spin_ft_ang.value())
+        hw = max(1.0, self.spin_ft_w.value() / 2.0)
+        hh = max(1.0, self.spin_ft_h.value() / 2.0)
+        self.canvas._ft = {"cx": st["cx"], "cy": st["cy"],
+                           "hw": hw, "hh": hh, "ang": ang}
+        self.canvas.update()
+
 
     # ---------- 选区：复制 / 剪切 / 粘贴（PS 风格）----------
     def _selection_layer(self):
@@ -1876,8 +2097,17 @@ class Workbench(QWidget):
                 ok2 = False
                 if layer is not None and not self.locked.get(layer["name"]):
                     a = layer["img"][:, :, 3]
-                    ok2 = int((a == 0).sum()) >= 16   # 至少 16 个透明像素才算有洞
+                    # 有"被包围的洞"才算可补（bbox 角上的外部透明不算洞）
+                    ok2 = find_enclosed_holes(a) is not None
                 ip.setEnabled(ok2)
+            # 自由变换：需要选中图层（未锁定、有 img）；已在变换中则禁用（避免套娃）
+            ft = getattr(self, "act_free_transform_item", None)
+            if ft is not None:
+                layer = self.layer_by_name(self._selected) if self._selected else None
+                ok3 = (layer is not None and layer.get("img") is not None
+                       and not self.locked.get(layer["name"])
+                       and not self.canvas.ft_active())
+                ft.setEnabled(ok3)
         except Exception:
             pass
 
@@ -1939,6 +2169,97 @@ class Workbench(QWidget):
         InfoBar.success("图层补洞", "%s：填充了 %d 个洞（%d 像素）" % (
             name, hole_cnt, hole_area), parent=self,
             position=InfoBarPosition.TOP, duration=2500)
+
+    def _replace_layer(self, name, newL):
+        """把 layers / rig['_layers'] 里名为 name 的层换成 newL（新 dict）。
+
+        历史快照存的是**对象引用**，原地改 img/bbox 会让旧快照看到新内容、
+        撤销失效 —— 所以所有像素级/几何级编辑都必须用新 dict 替换（同一套路）。
+        """
+        for arr in (self.layers, self.rig.get("_layers", [])):
+            for i, x in enumerate(arr):
+                if x["name"] == name:
+                    arr[i] = newL
+        if self.rig.get("_layers") is not self.layers:
+            self.rig["_layers"] = [newL if x["name"] == name else x
+                                    for x in self.rig.get("_layers", [])]
+        self.rig.pop("_lite", None)          # LOD 缓存作废
+        self._sync_layer_index()
+
+    def act_free_transform(self):
+        """自由变换（Ctrl+T，PS 的编辑 > 自由变换）。
+
+        对**当前选中图层**开启交互式变换框：拖 8 个控制点缩放（Shift 等比）、
+        框内拖动=移动、框角外拖动=旋转；Enter/双击提交，Esc 取消。
+        提交=用 cv2.warpAffine 重采样图层像素并收紧 bbox（引擎零改动）。
+        """
+        if self.rig is None:
+            return
+        if self.canvas.ft_active():
+            return                              # 已在变换中：不重复进入
+        name = self._selected
+        if not name:
+            InfoBar.info("自由变换", "请先在图层面板选中一个图层", parent=self,
+                         position=InfoBarPosition.TOP, duration=2500)
+            return
+        layer = self.layer_by_name(name)
+        if layer is None or layer.get("img") is None:
+            return
+        if self.locked.get(name):
+            InfoBar.warning("图层已锁定", "「%s」已锁定，无法变换" % name, parent=self,
+                            position=InfoBarPosition.TOP, duration=2500)
+            return
+        self._ft_layer = name
+        self._ft_orig = {"img": layer["img"], "bbox": tuple(layer["bbox"])}
+        self.canvas.ft_begin(layer["bbox"])
+        self._sync_canvas_options()
+        self._sync_edit_menu_state()
+        InfoBar.info("自由变换", "%s：拖控制点缩放(Shift 等比)/框内移动/角外旋转，"
+                     "Enter 提交、Esc 取消" % name, parent=self,
+                     position=InfoBarPosition.TOP, duration=3200)
+
+    def _on_ft_committed(self, st):
+        """变换提交：warp 原图层 -> 新 img/bbox -> 替换 + 压历史。"""
+        name = getattr(self, "_ft_layer", None)
+        orig = getattr(self, "_ft_orig", None)
+        if not name or orig is None:
+            return
+        import transform_tool as TT
+        res = TT.warp_state(orig["img"], orig["bbox"], st)
+        if res is None:
+            InfoBar.warning("自由变换", "变换结果退化（过小或空），未应用", parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            self._ft_layer = None
+            self._ft_orig = None
+            self._sync_canvas_options()
+            return
+        new_img, new_bbox = res
+        layer = self.layer_by_name(name)
+        newL = dict(layer) if layer is not None else {}
+        newL["name"] = name
+        newL["img"] = new_img
+        newL["bbox"] = new_bbox
+        # 保留原图备份（与套索裁剪同一套「还原原图」机制）
+        if layer is not None and "_orig_img" not in layer:
+            newL["_orig_img"] = orig["img"]
+            newL["_orig_bbox"] = tuple(orig["bbox"])
+        self._replace_layer(name, newL)
+        self.history.push(self)
+        self.reload_widgets()
+        self._select_in_list(name)
+        self._ft_layer = None
+        self._ft_orig = None
+        self._sync_canvas_options()
+        InfoBar.success("已变换", "%s：%d×%d" % (name, new_bbox[2]-new_bbox[0],
+                                                 new_bbox[3]-new_bbox[1]),
+                        parent=self, position=InfoBarPosition.TOP, duration=2200)
+
+    def _on_ft_cancelled(self):
+        """变换取消：图层未动，只清状态"""
+        self._ft_layer = None
+        self._ft_orig = None
+        self._sync_canvas_options()
+        self._sync_edit_menu_state()
 
     def act_invert_selection(self):
         """反选（Ctrl+Shift+I，PS 的"选择 > 反向"）。
@@ -2275,6 +2596,9 @@ class Workbench(QWidget):
         """图层列表 currentItem 变化 -> 同步画布选中层（移动工具只拖该层）。"""
         self._selected = cur.data(Qt.UserRole) if cur is not None else None
         self.canvas.selected_name = self._selected
+        # 选中层变了 -> 编辑菜单里"自由变换/图层补洞"的可用性要立刻跟上
+        # （菜单打开时也会刷，但选中变化就刷更健壮：快捷键不经过菜单）
+        self._sync_edit_menu_state()
 
     def _on_move_grab(self, name):
         """按下命中选中层：记原始 bbox（累计偏移基准，避免逐帧增量误差）。
@@ -3291,6 +3615,9 @@ class MainWindow(FluentWindow):
         # 反选（PS 的选择反向）
         QShortcut(QKeySequence("Ctrl+Shift+I"), self,
                   activated=self.wb.act_invert_selection)
+        # 自由变换（PS Ctrl+T）
+        QShortcut(QKeySequence("Ctrl+T"), self,
+                  activated=self.wb.act_free_transform)
         # 取消选择（PS Ctrl+D）
         QShortcut(QKeySequence("Ctrl+D"), self,
                   activated=self.wb.act_deselect_selection)
