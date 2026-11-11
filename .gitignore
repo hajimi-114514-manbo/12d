@@ -1,4 +1,4 @@
-# 模型权重（5.4GB，8 个文件均 >100MB，GitHub 连 LFS 都拒收）
+﻿# 模型权重（5.4GB，8 个文件均 >100MB，GitHub 连 LFS 都拒收）
 # 用户自行按 README 说明放置到 models/ 下
 # 注意前面的 / 只锚定根目录，避免误伤 see-through 内部的 models 代码目录
 /models/
@@ -20,3 +20,6 @@ recent_projects.json
 __pycache__
 *.pyc
 dist/MuppetStudio-Setup.exe
+
+# 用户工程目录（测试/实际使用都会生成，不入库）
+/projects/

@@ -168,59 +168,230 @@ class AssetDownloadThread(QThread):
         return True
 
     def run(self):
+        """执行下载。两种形态：
+           逐文件（模型）：asset 有 "files" -> 按相对路径逐个下（支持逐文件续传）
+           zip   （运行时/sam）：asset 有 "url" -> 下整包再解压
+        """
         try:
-            urls = asset_file_urls(self.asset)
-            if not urls:
+            import asset_catalog as AC
+            plan = AC.asset_urls(self.asset)
+            if not plan:
                 self.failed.emit("该资产没有配置下载地址")
                 return
             dest_dir = self._dest_dir()
-            parent = os.path.dirname(dest_dir.rstrip("\\/")) or self.base_dir
             try:
-                os.makedirs(parent, exist_ok=True)
+                os.makedirs(dest_dir, exist_ok=True)
             except Exception:
                 pass
-            # 下载到父目录下的 .part（同盘，解压后再搬）
-            base_name = os.path.basename(dest_dir.rstrip("\\/")) or "asset"
-            part = os.path.join(parent, base_name + ".zip.part")
-            total_hint = int(self.asset.get("size") or 0)
+
+            is_multi = bool(self.asset.get("files"))
+            if is_multi:
+                self._run_multi_file(plan, dest_dir)
+            else:
+                urls = plan[0][1] or []
+                first = urls[0] if urls else ""
+                # 以 .zip 结尾才当压缩包；否则是单文件（如 mobile_sam.pt）
+                low = first.lower().split("?")[0]
+                if low.endswith(".zip"):
+                    self._run_single_zip(urls, dest_dir)
+                else:
+                    self._run_single_file(urls, dest_dir)
+        except Exception as e:
+            self.failed.emit("%s: %s" % (type(e).__name__, e))
+
+    # ---------- 逐文件模式（模型）----------
+    def _run_multi_file(self, plan, dest_dir):
+        total_files = len(plan)
+        done_bytes = 0
+        total_bytes = int(self.asset.get("size") or 0)
+        for idx, (rel, urls) in enumerate(plan):
+            if self._cancel:
+                self.failed.emit("已取消")
+                return
+            target = os.path.join(dest_dir, rel.replace("/", os.sep))
+            os.makedirs(os.path.dirname(target) or dest_dir, exist_ok=True)
+            self.status.emit("下载 %d/%d：%s" % (idx + 1, total_files, rel))
             ok = False
             for u in urls:
                 if self._cancel:
                     self.failed.emit("已取消")
                     return
-                self.status.emit("连接 %s" % u.split("/")[2])
-                if self._download_one(u, part, total_hint):
-                    ok = True
-                    break
+                try:
+                    size = self._download_file(u, target, done_bytes, total_bytes)
+                    if size is not None:
+                        done_bytes += size
+                        self.progressed.emit(done_bytes, total_bytes or done_bytes)
+                        ok = True
+                        break
+                except Exception as e:
+                    self.status.emit("镜像失败：%s" % str(e)[:60])
             if not ok:
-                self.failed.emit("所有镜像都失败；已下载部分保留，可重试续传")
+                self.failed.emit("下载失败：%s（已下部分保留，可重试续传）" % rel)
                 return
-            # 校验
+        # ---- 下载后严格校验：清单里每个文件都必须真实落地且大小 > 0 ----
+        # 这一步是防"读完不到文件却反复重下"的关键：如果落盘位置与清单/应用
+        # 读取路径不一致，这里会立刻报出来，而不是让调用方以为成功。
+        try:
+            import asset_catalog as AC
+            present, missing = AC.asset_files_missing(self.asset, self.base_dir)
+        except Exception as e:
+            self.failed.emit("校验失败：%s" % e)
+            return
+        if missing:
+            self.status.emit("校验：%d 个文件未落地" % len(missing))
+            self.failed.emit("下载后校验未通过：缺 %d 个文件（如 %s）"
+                             % (len(missing), missing[0]))
+            return
+        self.finished_ok.emit(dest_dir)
+
+    def _download_file(self, url, target, base_bytes=0, total_bytes=0):
+        """单文件断点续传（.part）。成功返回文件大小，失败返回 None。"""
+        import urllib.request
+        part = target + ".part"
+        have = os.path.getsize(part) if os.path.exists(part) else 0
+        # 目标已存在且 .part 不存在：视为已完成（大小>0 即认）
+        if os.path.isfile(target) and os.path.getsize(target) > 0 and not os.path.exists(part):
+            return os.path.getsize(target)
+
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        if have > 0:
+            req.add_header("Range", "bytes=%d-" % have)
+        try:
+            resp = urllib.request.urlopen(req, timeout=30)
+        except Exception:
+            return None
+        code = getattr(resp, "status", 200)
+        mode = "ab" if code == 206 else "wb"
+        if code != 206:
+            have = 0
+        total = 0
+        try:
+            cr = resp.headers.get("Content-Range") or ""
+            mm = re.search(r"/(\d+)", cr)
+            if mm:
+                total = int(mm.group(1))
+            elif resp.headers.get("Content-Length"):
+                total = have + int(resp.headers["Content-Length"])
+        except Exception:
+            pass
+        got = have
+        with open(part, mode) as f:
+            while True:
+                if self._cancel:
+                    f.flush()
+                    return None
+                chunk = resp.read(1024 * 256)
+                if not chunk:
+                    break
+                f.write(chunk)
+                got += len(chunk)
+                self.progressed.emit(base_bytes + got,
+                                     total_bytes or (base_bytes + got))
+        if total and got < total:
+            self.status.emit("不完整 %s/%s" % (human_mb(got), human_mb(total)))
+            return None
+        # 校验通过 -> .part 转正
+        if os.path.exists(target):
+            try:
+                os.remove(target)
+            except Exception:
+                pass
+        os.replace(part, target)
+        return got
+
+    # ---------- 单文件模式（如 mobile_sam.pt）----------
+    def _run_single_file(self, urls, dest_dir):
+        """把单个文件下到 dest_dir/<url 末段文件名>，下完做 check 校验。"""
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+        except Exception:
+            pass
+        fname = ""
+        for u in urls:
+            seg = u.split("?")[0].rstrip("/").split("/")[-1]
+            if seg:
+                fname = seg
+                break
+        if not fname:
+            self.failed.emit("无法从下载地址推断文件名")
+            return
+        target = os.path.join(dest_dir, fname)
+        size = None
+        for u in urls:
             if self._cancel:
                 self.failed.emit("已取消")
                 return
-            self.status.emit("校验完成，准备解压")
-            if zipfile.is_zipfile(part):
-                if not self._extract_zip(part, dest_dir):
-                    self.failed.emit("解压失败")
-                    return
-            else:
-                # 不是 zip：直接当单个文件放到 dest_dir
-                os.makedirs(dest_dir, exist_ok=True)
-                single = os.path.join(dest_dir, base_name)
-                if os.path.exists(single):
-                    os.remove(single)
-                shutil.move(part, single)
-            # 清理 .part
+            self.status.emit("连接 %s" % u.split("/")[2])
             try:
-                if os.path.exists(part):
-                    os.remove(part)
+                sz = self._download_file(u, target, 0,
+                                         int(self.asset.get("size") or 0))
+            except Exception as e:
+                self.status.emit("镜像失败：%s" % str(e)[:60])
+                sz = None
+            if sz is not None:
+                size = sz
+                break
+        if size is None:
+            self.failed.emit("所有镜像都失败；已下载部分保留，可重试续传")
+            return
+        # 校验
+        try:
+            import asset_catalog as AC
+            if not AC.is_installed(self.asset, self.base_dir):
+                self.failed.emit("下载后校验未通过：%s 不在预期位置或过小" % target)
+                return
+        except Exception as e:
+            self.failed.emit("校验失败：%s" % e)
+            return
+        self.finished_ok.emit(dest_dir)
+
+    # ---------- 单包模式（运行时 / sam）----------
+    def _run_single_zip(self, urls, dest_dir):
+        import zipfile
+        parent = os.path.dirname(dest_dir.rstrip("\\/")) or self.base_dir
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except Exception:
+            pass
+        base_name = os.path.basename(dest_dir.rstrip("\\/")) or "asset"
+        part = os.path.join(parent, base_name + ".zip.part")
+        size = None
+        for u in urls:
+            if self._cancel:
+                self.failed.emit("已取消")
+                return
+            self.status.emit("连接 %s" % u.split("/")[2])
+            try:
+                sz = self._download_file(u, os.path.join(parent, base_name + ".zip"),
+                                        0, int(self.asset.get("size") or 0))
+            except Exception as e:
+                self.status.emit("镜像失败：%s" % str(e)[:60])
+                sz = None
+            if sz is not None:
+                size = sz
+                break
+        if size is None:
+            self.failed.emit("所有镜像都失败；已下载部分保留，可重试续传")
+            return
+        zpath = os.path.join(parent, base_name + ".zip")
+        if zipfile.is_zipfile(zpath):
+            if not self._extract_zip(zpath, dest_dir):
+                self.failed.emit("解压失败")
+                return
+            try:
+                os.remove(zpath)
             except Exception:
                 pass
-            self.finished_ok.emit(dest_dir)
+        # 解压后校验：check 指向的目标必须存在且够大（否则报错而非静默成功）
+        try:
+            import asset_catalog as AC
+            if not AC.is_installed(self.asset, self.base_dir):
+                self.failed.emit("解压后校验未通过：目标文件不在预期位置 %s" % dest_dir)
+                return
         except Exception as e:
-            self.failed.emit("%s: %s" % (type(e).__name__, e))
-
+            self.failed.emit("校验失败：%s" % e)
+            return
+        self.finished_ok.emit(dest_dir)
 
 class AssetDownloadDialog(QDialog):
     """下载进度对话框：进度条 + 速度 + 取消。"""

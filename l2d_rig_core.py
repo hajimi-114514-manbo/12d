@@ -371,8 +371,13 @@ def _blink_s(t):
     return 1.0
 
 
-def animation_for(node, t, nd=None):
-    """nd 为 rig 节点字典（提供 blink_h/blink_dy 等预计算参数）"""
+def animation_for(node, t, nd=None, tracks=None):
+    """nd 为 rig 节点字典（提供 blink_h/blink_dy 等预计算参数）。
+
+    tracks（v2.11.0 关键帧）为可选参数：
+      - None / 空 -> 完全保持旧的 sin 循环行为（向后兼容，老工程不变）
+      - 有轨道    -> 先算 sin 基线，再用关键帧覆盖用户显式打过帧的通道
+    """
     a = {"rot": 0.0, "tx": 0.0, "ty": 0.0, "sc": 1.0, "sc_y": None}
     if node == "body":
         a["ty"] = 3.0 * math.sin(t * 2.1)
@@ -392,14 +397,26 @@ def animation_for(node, t, nd=None):
     elif node in ("brow_left", "brow_right"):
         # 眉毛：静止（旧版跟着眼睛一起缩放消失，这就是修正点）
         pass
+    # 关键帧覆盖（只覆盖确实有轨道的通道）
+    if tracks:
+        try:
+            import anim as _A
+            _A.apply_to(node, t, a, tracks)
+        except Exception:
+            pass
     return a
 
 
 def _cum_transforms(rig, t):
-    """BFS 自 root 向下，算每个节点的累积 3x3 变换"""
+    """BFS 自 root 向下，算每个节点的累积 3x3 变换
+
+    v2.11.0：关键帧存在 rig["keyframes"]（节点 -> 参数 -> 帧列表），
+    这里取出后传给 animation_for 做"sin 基线 + 关键帧覆盖"。
+    """
     children = {}
     for n in rig["nodes"]:
         children.setdefault(n["parent"], []).append(n["node"])
+    tracks = rig.get("keyframes") if isinstance(rig, dict) else None
     cum = {"root": np.eye(3)}
     queue = ["root"]
     seen = {"root"}
@@ -411,7 +428,7 @@ def _cum_transforms(rig, t):
                 continue
             seen.add(ch)
             nd = next(n for n in rig["nodes"] if n["node"] == ch)
-            a = animation_for(ch, t, nd)
+            a = animation_for(ch, t, nd, tracks)
             cum[ch] = cum[node] @ _affine(a["rot"], a["tx"], a["ty"], a["sc"],
                                           nd["pivot"], a.get("sc_y"))
             queue.append(ch)

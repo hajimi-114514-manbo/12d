@@ -16,14 +16,65 @@ import os
 # 1MB 阈值（exe 完整性判定）
 _EXE_MIN = 1024 * 1024
 
+# 下载镜像（与安装器一致：国内镜像优先，官方兜底）
+HF_MIRRORS = ["https://hf-mirror.com/", "https://huggingface.co/"]
+
+# 模型仓库 -> 文件清单（相对 repo 根）。
+# 这些文件是 HF 上 24yearsold 的公开模型，**不需要我们自己上传**，
+# 直接用 hf-mirror 镜像地址下载即可（已实测 200 OK）。
+_LAYERDIFF_FILES = [
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "model_index.json",
+    "scheduler/scheduler_config.json",
+    "text_encoder/config.json",
+    "text_encoder/model.safetensors",
+    "text_encoder_2/config.json",
+    "text_encoder_2/model.safetensors",
+    "tokenizer/merges.txt",
+    "tokenizer/special_tokens_map.json",
+    "tokenizer/tokenizer_config.json",
+    "tokenizer/vocab.json",
+    "tokenizer_2/merges.txt",
+    "tokenizer_2/special_tokens_map.json",
+    "tokenizer_2/tokenizer_config.json",
+    "tokenizer_2/vocab.json",
+    "trans_vae/config.json",
+    "trans_vae/diffusion_pytorch_model.safetensors",
+    "unet/config.json",
+    "unet/diffusion_pytorch_model.safetensors",
+    "vae/config.json",
+    "vae/diffusion_pytorch_model.safetensors",
+]
+_MARIGOLD_FILES = [
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "model_index.json",
+    "scheduler/scheduler_config.json",
+    "text_encoder/config.json",
+    "text_encoder/model.safetensors",
+    "tokenizer/merges.txt",
+    "tokenizer/special_tokens_map.json",
+    "tokenizer/tokenizer_config.json",
+    "tokenizer/vocab.json",
+    "unet/config.json",
+    "unet/diffusion_pytorch_model.safetensors",
+    "vae/config.json",
+    "vae/diffusion_pytorch_model.safetensors",
+]
+
 ASSETS = [
     {
         "id": "runtime",
         "name": "内置 Python 运行时",
-        "desc": "无需自己装 Python，安装后即可启动（约 600MB）",
+        "desc": "无需自己装 Python，装完即可启动（约 600MB）",
         "kind": "runtime",
         "size": 620000000,
-        "url": "",
+        # 运行时是我们自己打包的，走 GitHub Release 资产
+        "url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
+                "download/v2.7.1/runtime.zip"),
         "dest": "runtime",
         "check": {"type": "exe", "path": "runtime/python.exe"},
     },
@@ -33,38 +84,44 @@ ASSETS = [
         "desc": "拆分图层必需，约 3.4GB",
         "kind": "model",
         "repo": "24yearsold/seethroughv0.0.2_layerdiff3d_nf4",
-        "size": 3400000000,
+        "files": _LAYERDIFF_FILES,
+        "size": 3764505415,
         "url": "",
         "dest": "models/24yearsold/seethroughv0.0.2_layerdiff3d_nf4",
         "check": {"type": "files",
                   "marker": "unet/diffusion_pytorch_model.safetensors",
-                  "min_bytes": 2900000000},
+                  "min_bytes": 2700000000},
     },
     {
         "id": "model_marigold",
         "name": "深度模型 Marigold (nf4)",
-        "desc": "生成深度信息，拆分图层必需，约 1.9GB",
+        "desc": "生成深度信息，拆分图层必需，约 1.8GB",
         "kind": "model",
         "repo": "24yearsold/seethroughv0.0.1_marigold_nf4",
-        "size": 1900000000,
+        "files": _MARIGOLD_FILES,
+        "size": 1928811596,
         "url": "",
         "dest": "models/24yearsold/seethroughv0.0.1_marigold_nf4",
         "check": {"type": "files",
                   "marker": "unet/diffusion_pytorch_model.safetensors",
-                  "min_bytes": 1500000000},
+                  "min_bytes": 1400000000},
     },
     {
         "id": "model_sam",
         "name": "MobileSAM（精细拆分）",
         "desc": "智能分割辅助，约 40MB",
         "kind": "model",
-        "size": 40000000,
-        "url": "",
+        "size": 40728226,
+        # 官方 MobileSAM 权重（与安装包曾内置的文件 SHA256 完全一致，已实测）
+        "url": ("https://hf-mirror.com/dhkim2810/MobileSAM/resolve/main/"
+                "mobile_sam.pt"),
+        # 单文件 url 形态：dest 是存放目录，落盘文件名由 url 末段决定
         "dest": "models/sam",
         "check": {"type": "files", "marker": "mobile_sam.pt",
                   "min_bytes": 30000000},
     },
 ]
+
 
 
 def asset_id(a):
@@ -169,3 +226,56 @@ def asset_by_id(aid):
     except Exception:
         return None
     return None
+
+
+def asset_urls(asset):
+    """资产 -> [(相对文件路径, [候选URL...]), ...]。
+
+    两种资产形态：
+      - 有 "files"（模型）：逐文件下载，路径相对 dest，URL 由 repo + 镜像拼出
+      - 只有 "url"（zip 包）：单文件下载，相对路径为 ""，解压到 dest
+    返回空列表表示未配置。
+    """
+    try:
+        if not isinstance(asset, dict):
+            return []
+        files = asset.get("files") or []
+        repo = asset.get("repo") or ""
+        if files and repo:
+            repo_path = repo.split("/", 1)[-1] if "/" in repo else repo
+            out = []
+            for f in files:
+                urls = [m + repo + "/resolve/main/" + f for m in HF_MIRRORS]
+                out.append((f, urls))
+            return out
+        url = (asset.get("url") or "").strip()
+        if url:
+            return [("", [url])]
+        return []
+    except Exception:
+        return []
+
+
+def asset_files_missing(asset, base_dir):
+    """模型类资产：返回已存在且大小>0 的文件 vs 缺失文件。
+
+    返回 (present, missing)，元素为相对路径字符串。非模型资产返回 ([], [])。
+    """
+    try:
+        files = asset.get("files") or []
+        if not files:
+            return [], []
+        root = installed_path(asset, base_dir)
+        present, missing = [], []
+        for f in files:
+            p = os.path.join(root, _norm(f))
+            try:
+                if os.path.isfile(p) and os.path.getsize(p) > 0:
+                    present.append(f)
+                else:
+                    missing.append(f)
+            except Exception:
+                missing.append(f)
+        return present, missing
+    except Exception:
+        return [], list((asset or {}).get("files") or [])

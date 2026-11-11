@@ -38,7 +38,9 @@ class Installer
     Label status;
     Button browseBtn, installBtn;
     Button repairBtn;
-    string appZip, manifest;
+    string appZip, manifest, runtimeZip;
+    // 由打包脚本注入（从 l2d_rig_qt.py 的 VERSION 读取）
+    const string APP_VERSION = "@@APP_VERSION@@";
     string detected = "";
     volatile bool running = false;
     volatile bool cancelFlag = false;
@@ -152,6 +154,89 @@ class Installer
             manifest = r.ReadToEnd();
         appZip = Path.Combine(Path.GetTempPath(), "muppet_app_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".zip");
         File.WriteAllBytes(appZip, zip);
+
+        // 内嵌运行时（可选资源：未打入安装包时为 null）
+        try
+        {
+            using (Stream rs = asm.GetManifestResourceStream("runtime.zip"))
+            {
+                if (rs != null && rs.Length > 0)
+                {
+                    runtimeZip = Path.Combine(Path.GetTempPath(),
+                        "muppet_runtime_" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".zip");
+                    using (FileStream fs = File.Create(runtimeZip))
+                        rs.CopyTo(fs);
+                }
+            }
+        }
+        catch { runtimeZip = null; }
+    }
+
+    // 把内嵌运行时解压到 <dir>/runtime。已装好则跳过。
+    // 返回 true=已就位或解压成功；false=无内嵌包/失败（不阻断主安装）
+    bool ExtractRuntime(string dir, List<string> errors)
+    {
+        string rtDir = Path.Combine(dir, "runtime");
+        string pyExe = Path.Combine(rtDir, "python.exe");
+        try
+        {
+            if (File.Exists(pyExe) && new FileInfo(pyExe).Length > 50000)
+                return true;                       // 已有完整运行时
+        }
+        catch { }
+        if (string.IsNullOrEmpty(runtimeZip) || !File.Exists(runtimeZip))
+        {
+            if (errors != null) errors.Add("\u8fd0\u884c\u65f6\uff1a\u5b89\u88c5\u5305\u672a\u5185\u7f6e runtime.zip\uff0c\u53ef\u5728\u300c\u8d44\u4ea7\u7ba1\u7406\u300d\u4e2d\u4e0b\u8f7d");
+            return false;
+        }
+        try
+        {
+            SetStatus("\u6b63\u5728\u89e3\u538b\u5185\u7f6e\u8fd0\u884c\u73af\u5883\uff08\u7ea6 1 \u5206\u949f\uff09\u2026");
+            Directory.CreateDirectory(rtDir);
+            long n = ExtractOverwrite(runtimeZip, rtDir, errors);
+            bool ok = File.Exists(pyExe);
+            if (!ok && errors != null) errors.Add("\u8fd0\u884c\u65f6\uff1a\u89e3\u538b\u540e\u672a\u627e\u5230 python.exe");
+            // \u5173\u952e\uff1a\u91cd\u5199 launcher.ini \u628a python= \u6307\u5411\u5185\u7f6e\u8fd0\u884c\u65f6\u3002
+            // \u6253\u5305\u8fdb\u6765\u7684 launcher.ini \u5e26\u7740\u5f00\u53d1\u673a\u7684\u7edd\u5bf9\u8def\u5f84\uff0c\u7528\u6237\u673a\u5668\u4e0a\u4e0d\u5b58\u5728\u3002
+            if (ok)
+            {
+                try { WriteLauncherIni(dir, pyExe); }
+                catch (Exception ex2) { if (errors != null) errors.Add("launcher.ini: " + ex2.Message); }
+            }
+            return ok;
+        }
+        catch (Exception ex)
+        {
+            if (errors != null) errors.Add("\u8fd0\u884c\u65f6\u89e3\u538b\u5931\u8d25\uff1a" + ex.Message);
+            return false;
+        }
+    }
+    // \u5199 launcher.ini\uff1apython= \u6307\u5411\u5185\u7f6e\u8fd0\u884c\u65f6\u7684\u7edd\u5bf9\u8def\u5f84\uff08\u4fdd\u7559\u5176\u4ed6\u952e\uff09
+    void WriteLauncherIni(string dir, string pyExe)
+    {
+        string ini = Path.Combine(dir, "launcher.ini");
+        string script = "l2d_rig_qt.py";
+        List<string> lines = new List<string>();
+        if (File.Exists(ini))
+        {
+            foreach (string raw in File.ReadAllLines(ini))
+            {
+                string line = raw.Trim();
+                int eq = line.IndexOf('=');
+                if (eq > 0)
+                {
+                    string k2 = line.Substring(0, eq).Trim().ToLower();
+                    string v2 = line.Substring(eq + 1).Trim();
+                    if (k2 == "python") continue;          // \u4e22\u6389\u65e7\u8def\u5f84
+                    if (k2 == "script" && v2.Length > 0) script = v2;
+                }
+                lines.Add(raw);
+            }
+        }
+        lines.Insert(0, "python=" + pyExe);
+        if (!lines.Exists(delegate(string s) { return s.Trim().ToLower().StartsWith("script="); }))
+            lines.Add("script=" + script);
+        File.WriteAllLines(ini, lines.ToArray(), new UTF8Encoding(false));
     }
 
     // ---------------- 旧版本检测 ----------------
@@ -303,6 +388,10 @@ class Installer
         SetStatus("正在覆盖程序文件（保留模型与用户产物）…");
         List<string> errors = new List<string>();
         long written = ExtractOverwrite(appZip, dir, errors);
+        // 更新时确保运行时在位（已存在则内部直接跳过）
+        bool rtOk = ExtractRuntime(dir, errors);
+        if (!rtOk)
+            errors.Add("\u8fd0\u884c\u65f6\u672a\u5c31\u4f4d\uff1a\u8bf7\u5728\u5e94\u7528\u300c\u8d44\u4ea7\u7ba1\u7406\u300d\u4e2d\u4e0b\u8f7d\u300c\u5185\u7f6e Python \u8fd0\u884c\u65f6\u300d\u3002");
         WriteRegistry(dir);
         try { MakeShortcuts(dir); } catch { }
         string msg = "更新完成：覆盖 " + written + " 个程序文件。\n" +
@@ -726,6 +815,8 @@ class Installer
         try { Directory.CreateDirectory(full); } catch (Exception ex) { Report(noPause, "无法创建目录: " + ex.Message); return 2; }
         List<string> errors = new List<string>();
         ExtractOverwrite(appZip, full, errors);
+        // 解压内置 Python 运行时 -> <dir>/runtime（失败不阻断，应用可在资产管理里补下）
+        bool rtOk = ExtractRuntime(full, errors);
         WriteRegistry(full);
         try { MakeShortcuts(full); } catch { }
         bool linkOk = true;
@@ -1081,7 +1172,7 @@ class Installer
         detected = DetectInstall();
 
         win = new Form();
-        win.Text = "木偶工作室 安装向导";
+        win.Text = "木偶工作室 v" + APP_VERSION + " 安装向导";
         win.ClientSize = new System.Drawing.Size(760, 400);
         win.FormBorderStyle = FormBorderStyle.FixedDialog;
         win.MaximizeBox = false; win.MinimizeBox = true;   // 允许最小化，下载时可缩到任务栏后台跑
@@ -1146,7 +1237,7 @@ class Installer
         win.Controls.Add(browseBtn);
 
         modelChk = new CheckBox();
-        modelChk.Text = "下载模型权重（nf4 量化，约 5.3 GB，需联网，支持断点续传）";
+        modelChk.Text = "检查并整理已有模型（模型改由应用内「资产管理」下载）";
         modelChk.SetBounds(LX + 2, 86, LW - 4, 24);
         win.Controls.Add(modelChk);
 
@@ -1316,7 +1407,7 @@ class Installer
             {
                 modelChk.Checked = false;
                 modelChk.Enabled = false;
-                modelChk.Text = "模型完整（5.3 GB），无需下载";
+                modelChk.Text = "模型已就位，无需重复动作";
             }
             else
             {
@@ -1332,10 +1423,10 @@ class Installer
             modelChk.Enabled = gpuV != "amd";
             modelChk.Checked = gpuV != "amd";
             modelChk.Text = gpuV == "amd"
-                ? "本地引擎模型（nf4 5.3GB）— A 卡不可用，已跳过"
+                ? "已安装模型，A 卡不适用，可跳过"
                 : (upd
-                    ? "未检测到模型，本次更新顺带下载（约 5.3 GB，支持断点续传）"
-                    : "下载模型权重（nf4 量化，约 5.3 GB，需联网，支持断点续传）");
+                    ? "未检测到模型（安装后在应用内「资产管理」下载）"
+                    : "检查并整理已有模型（模型改由应用内「资产管理」下载）");
         }
         // A 卡才需要 ComfyUI 路线；N 卡用户禁用该项（不影响其原有流程）
         if (gpuV == "nvidia")

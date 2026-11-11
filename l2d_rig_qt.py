@@ -36,7 +36,11 @@ from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             TreeWidget, Slider, BodyLabel, CaptionLabel,
                             StrongBodyLabel, FluentStyleSheet, setTheme, Theme,
                             MessageBox, InfoBar, InfoBarPosition,
-                            MessageBoxBase, SubtitleLabel, LineEdit)
+                            MessageBoxBase, SubtitleLabel, LineEdit,
+                            ProgressBar)
+
+import anim as A          # v2.11.0 关键帧动画数据层
+from timeline_panel import TimelinePanel   # v2.11.0 时间轴面板
 
 class ToggleDropDownButton(TransparentDropDownPushButton):
     """下拉按钮自管理开合状态，不依赖 isVisible() 时机：
@@ -104,7 +108,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.9.1"
+VERSION = "2.11.1"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -285,6 +289,9 @@ class History:
             "pivots": {n["node"]: list(n["pivot"]) for n in studio.rig["nodes"]},
             "node_layers": {n["node"]: list(n["layers"]) for n in studio.rig["nodes"]},
             "_layers": list(studio.rig.get("_layers", [])),
+            # v2.11.0：关键帧是可变嵌套数据 -> 必须做**深拷贝值记录**，
+            # 否则 undo 拿到的是同一个引用（和 bboxes/names 一样的坑）
+            "keyframes": A.clone_tracks(studio.rig.get("keyframes")),
         }
 
     def seed(self, studio):
@@ -304,7 +311,8 @@ class History:
            snap["draw_order"] == prev["draw_order"] and \
            snap["pivots"] == prev["pivots"] and \
            snap.get("bboxes") == prev.get("bboxes") and \
-           snap.get("names") == prev.get("names"):
+           snap.get("names") == prev.get("names") and \
+           snap.get("keyframes") == prev.get("keyframes"):
             return                               # 无变化不压栈
         self.undo_stack.append(snap)
         if len(self.undo_stack) > self.limit:
@@ -352,7 +360,17 @@ class History:
             if n["node"] in snap["node_layers"]:
                 n["layers"] = list(snap["node_layers"][n["node"]])
         studio.rig.pop("_lite", None)           # 结构变了，LOD 缓存作废
+        # v2.11.0：恢复关键帧（深拷贝，避免后续编辑污染历史快照）
+        if "keyframes" in snap:
+            studio.rig["keyframes"] = A.clone_tracks(snap.get("keyframes"))
         studio.reload_widgets()
+        # 时间轴面板跟着刷新（撤销/重做后关键帧点要跟着变）
+        panel = getattr(studio, "anim_panel", None)
+        if panel is not None:
+            try:
+                panel.refresh()
+            except Exception:
+                pass
 
     def undo(self, studio):
         if len(self.undo_stack) < 2:
@@ -1535,6 +1553,35 @@ class Workbench(QWidget):
         split.setStyleSheet(SPLIT_QSS)
         root.addWidget(split)
 
+        # ===== v2.11.0 时间轴（底部面板）=====
+        # 结构：root(H) -> _outer(QWidget, V) -> [split(1), timeline(0)]
+        # 注意：TimelinePanel 的父必须是 _outer 而不是 self，
+        # 否则会被 Workbench 直接管理、脱离 _outer 布局（曾导致真实窗口看不到）。
+        self.anim_panel = None
+        try:
+            _outer = QWidget(self)
+            _outer.setObjectName("workbenchMain")
+            _ol = QVBoxLayout(_outer)
+            _ol.setContentsMargins(0, 0, 0, 0)
+            _ol.setSpacing(4)
+            root.removeWidget(split)
+            _ol.addWidget(split, 1)
+            self.anim_panel = TimelinePanel(_outer, wb=self)
+            self.anim_panel.seeked.connect(self._on_timeline_seek)
+            self.anim_panel.keyframes_changed.connect(self._on_keyframes_changed)
+            self.anim_panel.duration_changed.connect(self._on_duration_changed)
+            self.anim_panel.fps_changed.connect(self._on_fps_changed)
+            _ol.addWidget(self.anim_panel, 0)
+            root.addWidget(_outer)
+        except Exception:
+            # 时间轴构建失败不能挡住主界面
+            import traceback
+            traceback.print_exc()
+            if split.parent() is None or split.parent() is not self:
+                pass
+            root.addWidget(split)
+            self.anim_panel = None
+
         # 菜单/导出按钮（临时父容器，MainWindow 会把它们插进标题栏）
         self.toolbar_widget = QWidget()
         tb_lay = QHBoxLayout(self.toolbar_widget)
@@ -1802,6 +1849,19 @@ class Workbench(QWidget):
         row.addWidget(self.slider, 1)
         self.time_lbl = BodyLabel("0.00s")
         row.addWidget(self.time_lbl)
+        # 拆分进度条：放在时间标签右侧（原来挤在导航栏，现在归位到画布底栏）
+        self.pbar = ProgressBar(self)
+        self.pbar.setRange(0, 100)
+        self.pbar.setValue(0)
+        self.pbar.setFixedHeight(8)
+        self.pbar.setMinimumWidth(120)
+        self.pbar.setMaximumWidth(220)
+        self.pbar.setToolTip("拆分进度")
+        self.pbar.setVisible(False)          # 空闲时不占位，拆分时才出现
+        row.addWidget(self.pbar)
+        self.pbar_lbl = CaptionLabel("")
+        self.pbar_lbl.setVisible(False)
+        row.addWidget(self.pbar_lbl)
         leftLay.addLayout(row)
         self.prog = CaptionLabel("")
         leftLay.addWidget(self.prog)
@@ -1865,6 +1925,9 @@ class Workbench(QWidget):
         self.timer.timeout.connect(self._tick)
         self.t = 0.0
         self.playing = False
+        # v2.11.0 时间轴设置（替换原来写死的 10s / 30fps）
+        self.duration = 4.0
+        self.fps = 30
 
     def _menu_about_to_show(self, menu):
         self._menu_open = True
@@ -1937,6 +2000,8 @@ class Workbench(QWidget):
         self.cur_dir = d
         self.proj_name = self._read_proj_name(d)
         self.proj_dir = d
+        # v2.11.0：读回关键帧与时间轴设置（老工程没有这些字段 -> 空/默认）
+        self._load_anim_settings(d)
         self._record_recent(d)
         self.reload_widgets()
         self.history.seed(self)      # 新不变式：undo_stack 栈底=载入基线
@@ -1953,6 +2018,37 @@ class Workbench(QWidget):
         except Exception:
             pass
         return os.path.basename(os.path.normpath(d))
+
+    # ---------- v2.11.0 关键帧动画：载入/初始状态 ----------
+    def _load_anim_settings(self, d):
+        """从 rig_project.json 读回 keyframes / duration / fps。
+
+        老工程没有这些字段时：keyframes={}（走原来的 sin 动画），
+        duration=4.0、fps=30（新默认）。全程容错，不让脏文件挡住工程打开。
+        """
+        kf, dur, f = {}, 4.0, 30
+        try:
+            p = json.load(open(os.path.join(d, "rig_project.json"), encoding="utf8"))
+            if isinstance(p.get("keyframes"), dict):
+                kf = A.clone_tracks(p["keyframes"])
+            an = p.get("anim")
+            if isinstance(an, dict):
+                d2 = an.get("duration")
+                if isinstance(d2, (int, float)) and 0.2 <= float(d2) <= 600:
+                    dur = float(d2)
+                f2 = an.get("fps")
+                if isinstance(f2, int) and 1 <= f2 <= 120:
+                    f = f2
+        except Exception:
+            pass
+        self.rig["keyframes"] = kf
+        self.duration = dur
+        self.fps = f
+        if getattr(self, "anim_panel", None) is not None:
+            try:
+                self.anim_panel.refresh()
+            except Exception:
+                pass
 
     def _notify_nav(self, name, d):
         """把工程加进/刷新导航栏（MainWindow 维护 _proj_items）。"""
@@ -3249,9 +3345,11 @@ class Workbench(QWidget):
             self.timer.stop()
 
     def _tick(self):
-        self.t = (self.t + 0.033) % 10.0
+        # v2.11.0：循环上限用可调 duration（原来写死 10.0）
+        dur = max(0.2, float(getattr(self, "duration", 4.0)))
+        self.t = (self.t + 0.033) % dur
         self.slider.blockSignals(True)
-        self.slider.setValue(int(self.t * 100))
+        self.slider.setValue(int(round(self.t / dur * 1000)))
         self.slider.blockSignals(False)
         self.time_lbl.setText("%.2fs" % self.t)
         self.redraw()
@@ -3259,9 +3357,65 @@ class Workbench(QWidget):
     def _on_scrub(self, v):
         if self.playing:
             return
-        self.t = v / 100.0
+        dur = max(0.2, float(getattr(self, "duration", 4.0)))
+        self.t = (v / 1000.0) * dur
         self.time_lbl.setText("%.2fs" % self.t)
         self.redraw()
+
+    # ---------- v2.11.0 时间轴联动 ----------
+    def push_history(self):
+        """时间轴改关键帧前先存快照（等价于 history.push(self)）。"""
+        try:
+            self.history.push(self)
+        except Exception:
+            pass
+
+    def _on_timeline_seek(self, t):
+        """拖播放头 / 点时间轴空白：跳到该时刻。"""
+        self.t = max(0.0, min(float(getattr(self, "duration", 4.0)), float(t)))
+        self.playing = False
+        try:
+            self.timer.stop()
+            self.btn_play.setText("播放")
+        except Exception:
+            pass
+        dur = max(0.2, float(getattr(self, "duration", 4.0)))
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(round(self.t / dur * 1000)))
+        self.slider.blockSignals(False)
+        self.time_lbl.setText("%.2fs" % self.t)
+        self.redraw()
+
+    def _on_keyframes_changed(self):
+        """关键帧变了：清 LOD 缓存（不改像素，但保险）并重绘。"""
+        try:
+            if isinstance(self.rig, dict):
+                self.rig.pop("_lite", None)
+        except Exception:
+            pass
+        self.redraw()
+        # 时间轴自己的播放头位置也跟着刷新
+        if getattr(self, "anim_panel", None) is not None:
+            try:
+                self.anim_panel.area.update()
+            except Exception:
+                pass
+
+    def _on_duration_changed(self, d):
+        """时长改了：把当前 t 夹回范围内，滑块重映射。"""
+        self.duration = max(0.2, float(d))
+        if self.t > self.duration:
+            self.t = self.duration
+        dur = self.duration
+        self.slider.blockSignals(True)
+        self.slider.setValue(int(round(self.t / dur * 1000)))
+        self.slider.blockSignals(False)
+        self.time_lbl.setText("%.2fs" % self.t)
+        self.redraw()
+
+    def _on_fps_changed(self, f):
+        """帧率改了：只影响导出（MP4/GIF 取帧间隔）。"""
+        self.fps = max(1, int(f))
 
     def _edit_pivot(self, item, col):
         if col != 2 or self.rig is None:
@@ -3477,6 +3631,10 @@ class Workbench(QWidget):
         return {"name": getattr(self, "proj_name", None),
                 "width": self.W, "height": self.H,
                 "draw_order": self.rig["draw_order"],
+                # v2.11.0：关键帧动画 + 时间轴设置
+                "keyframes": getattr(self.rig, "get", lambda *a: None)("keyframes") or {},
+                "anim": {"duration": float(getattr(self, "duration", 4.0)),
+                          "fps": int(getattr(self, "fps", 30))},
                 "nodes": [{"node": n["node"], "parent": n["parent"],
                            "pivot": n["pivot"], "layers": n["layers"]}
                           for n in self.rig["nodes"]]}
@@ -3571,7 +3729,11 @@ class Workbench(QWidget):
         if not p.lower().endswith("." + kind):
             p += "." + kind
         hidden = {l["name"] for l in self.layers if not self.visible.get(l["name"], True)}
-        self.export_worker = ExportWorker(self.rig, hidden, kind, p)
+        # v2.11.0：导出时长/帧率用时间轴上的可调设置（原来写死 10s/30fps）
+        self.export_worker = ExportWorker(
+            self.rig, hidden, kind, p,
+            seconds=max(0.2, float(getattr(self, "duration", 4.0))),
+            fps=max(1, int(getattr(self, "fps", 30))))
         self.export_worker.progress.connect(self._export_progress)
         self.export_worker.done.connect(self._export_done)
         self.prog.setText("导出 %s：0%%" % kind.upper())
@@ -3637,18 +3799,38 @@ class Workbench(QWidget):
             self.set_nav_progress(pct)   # 单调不回退在 set_nav_progress 里保证
 
     def set_nav_progress(self, pct):
-        """拆分进度注入工作台状态栏（工作台导航项已隐藏）。pct=None 清除。"""
+        """拆分进度显示在画布底栏（播放条右侧）的进度条上。
+
+        pct=None 表示结束：清空并隐藏进度条。
+        历史：这块进度原先是"塞进导航栏"，但导航栏本身默认隐藏，
+        用户根本看不到，所以挪回工作台底栏。
+        """
+        # ---- 新位置：底栏进度条 ----
+        try:
+            if pct is None:
+                self._nav_pct = None
+                self.pbar.setVisible(False)
+                self.pbar_lbl.setVisible(False)
+                self.pbar.setValue(0)
+                self.pbar_lbl.setText("")
+            else:
+                cur = getattr(self, "_nav_pct", None)
+                if cur is not None and pct < cur:
+                    pct = cur                      # 防倒退
+                self._nav_pct = pct
+                self.pbar.setVisible(True)
+                self.pbar_lbl.setVisible(True)
+                self.pbar.setValue(int(pct))
+                self.pbar_lbl.setText("%d%%" % int(pct))
+        except Exception:
+            pass
+        # ---- 兼容旧通道：仍通知 nav_setter（外部可能有依赖）----
         setter = getattr(self, "nav_setter", None)
         if setter is None:
             return
         if pct is None:
-            self._nav_pct = None
             setter("", "")
             return
-        cur = getattr(self, "_nav_pct", None)
-        if cur is not None and pct < cur:
-            pct = cur                      # 防倒退
-        self._nav_pct = pct
         setter("拆分进度 %d%%" % pct, "拆分中 %d%%" % pct)
 
     def _decompose_done(self, meta, out_dir):
@@ -3792,6 +3974,15 @@ class MainWindow(FluentWindow):
         self.wb.setObjectName("workbench")
         self.addSubInterface(self.wb, FluentIcon.BRUSH, "工作台")
         self.navigationInterface.setMenuButtonVisible(False)
+        # 去掉左上角返回按钮（用户需求：单页应用没有"返回"语义，留着是噪音）
+        try:
+            self.navigationInterface.setReturnButtonVisible(False)
+        except Exception:
+            # 库版本差异兜底：直接隐藏控件
+            try:
+                self.navigationInterface.panel.returnButton.setVisible(False)
+            except Exception:
+                pass
         # 去掉导航栏「工作台」按钮（用户需求）：保留 addSubInterface 让 wb 进
         # stackedWidget，但把导航项隐藏（最小改动，内容显示不受影响）。
         self.nav_item = self.navigationInterface.widget("workbench")
@@ -3824,6 +4015,41 @@ class MainWindow(FluentWindow):
             tgt.setFixedWidth(self.nav_width)
         self.nav_collapsed = True
         ni.setVisible(False)
+        # 导航栏顶部留出标题栏高度：库只给内容区加了 48 的顶部边距
+        # （widgetLayout.setContentsMargins(0,48,0,0)），导航栏没加，
+        # 所以展开后第一项会被标题栏压住、看起来像"顶部空白"。
+        try:
+            ni.setContentsMargins(0, 48, 0, 0)
+        except Exception:
+            pass
+        # 导航栏内部的滚动区/布局也补一下顶部间距（不同版本结构不同，逐个试）
+        try:
+            panel = ni.panel
+            for attr in ('scrollWidget', 'viewport', 'vBoxLayout'):
+                o = getattr(panel, attr, None)
+                if o is None:
+                    continue
+                if hasattr(o, 'setContentsMargins'):
+                    o.setContentsMargins(0, 48, 0, 0)
+                    break
+        except Exception:
+            pass
+        # 导航栏宽度调节：在导航栏右缘挂一条 4px 拖拽把手（悬停变蓝）。
+        # 原来宽度被 setFixedWidth(140) 钉死，用户想拉宽看长工程名没法弄。
+        self.nav_min_w = 120
+        self.nav_max_w = 420
+        self._nav_resize = None          # 拖拽起始信息
+        self.nav_grip = QWidget(self)
+        self.nav_grip.setObjectName("navGrip")
+        self.nav_grip.setFixedWidth(4)
+        self.nav_grip.setCursor(Qt.SizeHorCursor)
+        self.nav_grip.setStyleSheet(
+            "#navGrip{background:transparent;}"
+            "#navGrip:hover{background:#4d88ff;}")
+        self.nav_grip.setToolTip("拖动调节导航栏宽度（双击恢复默认 140）")
+        self.nav_grip.installEventFilter(self)
+        self.nav_grip.setVisible(False)   # 导航栏显示时才显示
+        self._nav_grip_shown = False
         # 启动扫描 projects\ 把已有工程加进导航栏
         self._scan_projects()
         # ---- 标题栏左上角工具条（DSH 风格）：折叠按钮 + 菜单 + 导出 ----
@@ -3874,7 +4100,107 @@ class MainWindow(FluentWindow):
     def _toggle_nav(self):
         """折叠/展开最左导航栏：直接隐藏，布局自动把空间让给内容区"""
         self.nav_collapsed = not self.nav_collapsed
-        self.navigationInterface.setVisible(not self.nav_collapsed)
+        ni = self.navigationInterface
+        ni.setVisible(not self.nav_collapsed)
+        # 标题栏是浮在最上层的覆盖层，导航栏展开后会与标题栏按钮重叠
+        # （库把标题栏钉在窗口顶部整宽，不再给导航栏让位），
+        # 所以这里把标题栏整体右移到导航栏右侧，并把导航栏提到标题栏之上。
+        self._sync_titlebar_offset()
+        # 把手显隐跟随折叠状态：折叠时必须隐藏，否则在空处留一条热区
+        self._place_nav_grip()
+        if not self.nav_collapsed:
+            ni.raise_()
+            try:
+                self.nav_grip.raise_()
+            except Exception:
+                pass
+
+    # ---------------- 导航栏宽度调节 ----------------
+    NAV_W_DEFAULT = 140
+
+    def _sync_titlebar_offset(self):
+        """导航栏展开时把标题栏左移出导航栏宽度，避免按钮被压住。"""
+        try:
+            tb = self.titleBar
+            if self.nav_collapsed:
+                tb.setContentsMargins(0, 0, 0, 0)
+                tb.setGeometry(0, 0, self.width(), tb.height() or 48)
+            else:
+                w = int(getattr(self, "nav_width", self.NAV_W_DEFAULT))
+                # 让标题栏从导航栏右缘开始，宽度相应减少
+                tb.setContentsMargins(0, 0, 0, 0)
+                tb.setGeometry(w, 0, max(0, self.width() - w), tb.height() or 48)
+            tb.raise_()
+        except Exception:
+            pass
+
+    def _place_nav_grip(self):
+        """把拖拽把手贴到导航栏右缘（竖直撑满内容区）。"""
+        try:
+            if self.nav_collapsed or not hasattr(self, "nav_grip"):
+                self.nav_grip.setVisible(False)
+                return
+            w = int(getattr(self, "nav_width", self.NAV_W_DEFAULT))
+            top = 48                      # 标题栏高度
+            h = max(1, self.height() - top)
+            self.nav_grip.setGeometry(w - 2, top, 4, h)
+            self.nav_grip.setVisible(True)
+            self.nav_grip.raise_()
+        except Exception:
+            pass
+
+    def _apply_nav_width(self, w):
+        """把导航栏宽度设为 w（夹在 [120, 420]）并刷新标题栏/把手。"""
+        try:
+            w = int(max(self.nav_min_w, min(self.nav_max_w, int(w))))
+            if w == int(getattr(self, "nav_width", 0)):
+                return
+            self.nav_width = w
+            ni = self.navigationInterface
+            try:
+                ni.setExpandWidth(w)
+            except Exception:
+                pass
+            for tgt in (ni, ni.panel):
+                tgt.setMinimumWidth(w)
+                tgt.setFixedWidth(w)
+            self._sync_titlebar_offset()
+            self._place_nav_grip()
+            ni.raise_()
+        except Exception:
+            pass
+
+    def eventFilter(self, obj, ev):
+        """导航栏宽度拖拽把手。"""
+        try:
+            if obj is getattr(self, "nav_grip", None):
+                et = ev.type()
+                if et == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
+                    self._nav_resize = {"x": int(ev.globalPosition().x()),
+                                        "w": int(self.nav_width)}
+                    return True
+                if et == QEvent.MouseMove and self._nav_resize is not None:
+                    dx = int(ev.globalPosition().x()) - self._nav_resize["x"]
+                    self._apply_nav_width(self._nav_resize["w"] + dx)
+                    return True
+                if et == QEvent.MouseButtonRelease and self._nav_resize is not None:
+                    self._nav_resize = None
+                    return True
+                if et == QEvent.MouseButtonDblClick:
+                    self._apply_nav_width(self.NAV_W_DEFAULT)
+                    return True
+        except Exception:
+            pass
+        return super().eventFilter(obj, ev)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        # 窗口尺寸变化时把手与标题栏偏移都要跟着重算
+        try:
+            self._sync_titlebar_offset()
+            self._place_nav_grip()
+        except Exception:
+            pass
 
     def add_project_entry(self, name, d):
         """导航栏加入/更新工程项。同目录只一项（更新文字）。"""
