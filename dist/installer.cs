@@ -952,7 +952,7 @@ class Installer
             if (File.Exists(dest) && new FileInfo(dest).Length == size) { doneBytes += size; continue; }
             long have = File.Exists(part) ? new FileInfo(part).Length : 0;
             if (have > size) { File.Delete(part); have = 0; }
-            SetStatus(string.Format("下载模型 %s（%d/%d MB）", Path.GetFileName(f["file"]), have / 1048576, size / 1048576));
+            SetStatus(string.Format("下载模型 {0}（{1}/{2} MB）", Path.GetFileName(f["file"]), have / 1048576, size / 1048576));
             bool ok = false;
             foreach (string host in HOSTS)
             {
