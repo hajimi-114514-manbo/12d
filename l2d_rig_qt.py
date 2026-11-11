@@ -106,7 +106,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.7.1"
+VERSION = "2.7.2"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -429,6 +429,7 @@ class RigCanvas(QWidget):
         # 自由变换（Ctrl+T）：状态 dict{cx,cy,hw,hh,ang}（图像坐标）
         self._ft = None                 # None = 未激活
         self._ft_drag = None            # ("handle",name)/("move",)/("rotate",) + 按下点
+        self._ft_drag_base = None       # 拖动基准快照（每帧从它重算，避免增量累积飞走）
 
     def set_tool(self, t):
         if t != self.tool:
@@ -719,6 +720,7 @@ class RigCanvas(QWidget):
         import transform_tool as TT
         self._ft = TT.state_from_bbox(bbox)
         self._ft_drag = None
+        self._ft_drag_base = None
         self.update()
 
     def ft_active(self):
@@ -738,6 +740,7 @@ class RigCanvas(QWidget):
         if self._ft is not None:
             self._ft = None
             self._ft_drag = None
+            self._ft_drag_base = None
             self.update()
             self.ft_cancelled.emit()
 
@@ -794,6 +797,9 @@ class RigCanvas(QWidget):
                     kind, name = h
                     ix, iy = self._to_full(e.position().toPoint())
                     self._ft_drag = (kind, name, ix, iy)
+                    # 拖动基准快照：拖动期间每帧从它重算（绝对定位，不累积）
+                    import copy as _copy
+                    self._ft_drag_base = _copy.deepcopy(dict(self._ft))
                 self.update()
                 return
             if self.tool == "lasso":
@@ -890,21 +896,27 @@ class RigCanvas(QWidget):
             self.update()
             return
         if self._ft is not None and self._ft_drag is not None:
-            # 自由变换拖动：控制点缩放 / 框内平移 / 角外旋转
+            # 自由变换拖动：控制点缩放 / 框内平移 / 角外旋转 / 网格点变形
+            #
+            # 关键：所有拖动都从**按下时的快照** (_ft_drag_base) 重算，而不是在
+            # 当前状态上做增量。曾用增量式（每帧 cx += dx），而 dx 是"按下点到
+            # 当前点"的累计量 —— 每帧都从按下点重算一次增量，鼠标一动位移就
+            # 指数级累积，表现为"对象飞走"。绝对重算彻底消除该问题。
             import transform_tool as TT
             kind, name, sx, sy = self._ft_drag
+            base = getattr(self, "_ft_drag_base", None) or self._ft
             ix, iy = self._to_full(e.position().toPoint())
             keep_ar = bool(e.modifiers() & Qt.ShiftModifier)
             if kind == "handle":
-                self._ft = TT.drag_handle(self._ft, name, ix, iy, keep_aspect=keep_ar)
+                self._ft = TT.drag_handle(base, name, ix, iy, keep_aspect=keep_ar)
             elif kind == "mesh":
                 # name 是 (is, js)：拖网格点做局部变形（自由变换的"变形"模式）
                 is_, js_ = name
-                self._ft = TT.drag_mesh(self._ft, is_, js_, ix, iy)
+                self._ft = TT.drag_mesh(base, is_, js_, ix, iy)
             elif kind == "move":
-                self._ft = TT.drag_move(self._ft, ix, iy, sx, sy)
+                self._ft = TT.drag_move(base, ix, iy, sx, sy)
             elif kind == "rotate":
-                self._ft = TT.drag_rotate(self._ft, ix, iy, sx, sy)
+                self._ft = TT.drag_rotate(base, ix, iy, sx, sy)
             self.ft_changed.emit(dict(self._ft))
             self.update()
             return
@@ -940,6 +952,7 @@ class RigCanvas(QWidget):
             return
         if self._ft_drag is not None:
             self._ft_drag = None
+            self._ft_drag_base = None          # 拖动结束，丢弃基准快照
             return
         if self._lasso_drag is not None:
             self._lasso_drag = None
