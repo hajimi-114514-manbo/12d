@@ -43,11 +43,13 @@ def polygon_mask(points, w, h):
     return mask
 
 
-def combine_masks(add_masks, sub_masks, w, h, feather=0):
-    """多选区布尔合并：并集(加选) - 并集(减选)，可选羽化。
+def combine_masks(add_masks, sub_masks, w, h, feather=0, invert=False):
+    """多选区布尔合并：并集(加选) - 并集(减选)，可选羽化、可选反选。
 
     add_masks/sub_masks: 0/255 uint8 掩码列表
     feather: 羽化半径(像素)，0 = 不羽化。羽化用高斯模糊得到软边 alpha。
+    invert: True = 反选（PS 的"选择反向"，Ctrl+Shift+I）：
+            选区边界之外全部选中。羽化在反选**之后**做，边缘才自然。
     返回 uint8 掩码（0..255，软边时中间值）。
     """
     if not add_masks:
@@ -59,6 +61,8 @@ def combine_masks(add_masks, sub_masks, w, h, feather=0):
     for m in sub_masks or []:
         if m is not None:
             acc = cv2.subtract(acc, m)
+    if invert:
+        acc = invert_mask(acc)
     if feather and feather > 0 and cv2 is not None:
         k = int(feather) * 2 + 1
         acc = cv2.GaussianBlur(acc, (k, k), feather)
@@ -131,7 +135,7 @@ def clip_layer_by_polygon(layer, points, feather=0):
     return clip_layer_by_mask(layer, mask)
 
 
-def extract_selection(layer, selections, feather=0):
+def extract_selection(layer, selections, feather=0, invert=False):
     """提取选区内的像素（PS 的"复制选区内容"）。
 
     返回 (rgba, x, y)：
@@ -139,6 +143,7 @@ def extract_selection(layer, selections, feather=0):
         x, y = 该内容在画布全分辨率坐标里的左上角位置
     与 clip_layer_by_mask 的区别：这里**不裁原层**，只是"取一块出来"，
     用于复制到剪贴板 / 粘贴成新图层。
+    invert=True 时取选区之外的内容（配合"反选"）。
     """
     img = layer.get("img")
     if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4:
@@ -157,7 +162,7 @@ def extract_selection(layer, selections, feather=0):
         if m is None:
             continue
         (sub_masks if op == "sub" else add_masks).append(m)
-    mask = combine_masks(add_masks, sub_masks, w, h, feather=feather)
+    mask = combine_masks(add_masks, sub_masks, w, h, feather=feather, invert=invert)
     if mask is None:
         return None
     keep = mask > 0

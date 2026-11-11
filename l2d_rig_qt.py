@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
 功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做/拆分图片）。
@@ -105,7 +105,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -117,6 +117,45 @@ FFMPEG_CANDIDATES = [os.path.join(V2, "ffmpeg.exe"),
                      r"D:\BaiduNetdiskDownload\Vocal2Midi\ffmpeg.exe"]
 
 PROJ_BASE = os.path.join(V2, "projects")   # 新建工程默认根目录
+
+
+def make_lasso_icon(color="#dcdcdc", px=64):
+    """PS 风格「多边形套索」图标（自绘）。
+
+    qfluentwidgets 没有套索图标，用 QPainter 画一个：
+      直线段围成的套索环（多边形套索的特征）+ 收口处甩出的绳尾 + 起点方块标记。
+    深色工具栏上用浅灰；渲染 64px 由 Qt 平滑缩放到按钮尺寸。
+    """
+    from PySide6.QtGui import QPainterPath
+    pm = QPixmap(px, px)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    s = float(px)
+    pen = QPen(QColor(color))
+    pen.setWidthF(max(1.8, s * 0.08))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    # 套索环：直线段（多边形套索 = 逐点连线），收口回到起点
+    ring = [(0.32, 0.19), (0.63, 0.15), (0.86, 0.38), (0.76, 0.67),
+            (0.47, 0.80), (0.23, 0.60)]
+    poly = QPolygon([QPoint(int(x * s), int(y * s)) for x, y in ring])
+    poly.append(QPoint(int(ring[0][0] * s), int(ring[0][1] * s)))
+    p.drawPolyline(poly)
+    # 绳尾：从收口点（0.23,0.60）往左下甩一小段曲线
+    tail = QPainterPath()
+    tail.moveTo(0.23 * s, 0.60 * s)
+    tail.cubicTo(0.08 * s, 0.73 * s, 0.18 * s, 0.90 * s, 0.40 * s, 0.88 * s)
+    p.drawPath(tail)
+    # 起点标记（PS 套索的锚点小方块）
+    d = max(3.0, s * 0.13)
+    p.setBrush(QColor(color))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.drawRect(int(0.32 * s - d / 2), int(0.19 * s - d / 2), int(d), int(d))
+    p.end()
+    return QIcon(pm)
 
 
 def sanitize_proj_name(name, maxlen=60):
@@ -292,6 +331,7 @@ class RigCanvas(QWidget):
         self._lasso_drag = None         # 顶点拖拽态 (索引, 起点)
         self._lasso_op = "add"          # 当前圈的选区操作：add / sub
         self._selection_active = False  # 选区已激活（闭合后等用户复制/剪切/应用）
+        self._selection_invert = False  # 反选显示（选区=多边形之外）
 
     def set_tool(self, t):
         if t != self.tool:
@@ -432,6 +472,7 @@ class RigCanvas(QWidget):
             def _w(px, py):
                 return QPoint(int(ox + px * sc * s), int(oy + py * sc * s))
             # 已闭合选区：加选=蓝色实线，减选=红色虚线（PS 的加/减选配色）
+            inv = bool(getattr(self, "_selection_invert", False))
             for sel in self._lasso_done:
                 pts = [_w(px, py) for px, py in sel.get("points", [])]
                 if len(pts) < 2:
@@ -443,6 +484,11 @@ class RigCanvas(QWidget):
                 poly = QPolygon(pts)
                 poly.append(pts[0])
                 p.drawPolyline(poly)
+            # 反选态：额外描出画布边框（橙黄虚线），表示"框外全部被选中"
+            if inv and self._lasso_done:
+                p.setPen(QPen(QColor("#f0a020"), 1, Qt.DashLine))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(ox, oy, max(1, dw - 1), max(1, dh - 1))
             # 正在画的路径
             if self._lasso:
                 pts = [_w(px, py) for px, py in self._lasso]
@@ -603,6 +649,7 @@ class RigCanvas(QWidget):
         """取消选区（Esc）——不裁剪"""
         self._lasso_done = []
         self._selection_active = False
+        self._selection_invert = False
         self.update()
         self.selection_changed.emit([])     # 通知 Workbench 清状态
 
@@ -612,6 +659,7 @@ class RigCanvas(QWidget):
             self._lasso = []
             self._lasso_done = []
             self._selection_active = False
+            self._selection_invert = False
             self.update()
 
     def mouseMoveEvent(self, e):
@@ -1226,6 +1274,7 @@ class Workbench(QWidget):
         # 选区状态（唯一真源在此，画布只负责绘制）
         self._selection_data = []     # [{"points":[...], "op":"add"/"sub"}]
         self._selection_active = False
+        self._selection_invert = False   # 反选（Ctrl+Shift+I）：选区=多边形之外
         self.proj_name = None         # 当前工程名（新建/载入时写回）
         self.proj_dir = None          # 当前工程目录（新建时指向 projects\<名>\）
         self._build()
@@ -1283,11 +1332,29 @@ class Workbench(QWidget):
         em = RoundMenu(parent=self)
         em.addAction(Action(FluentIcon.HISTORY, "撤销  Ctrl+Z", triggered=self.act_undo))
         em.addAction(Action(FluentIcon.HISTORY, "重做  Ctrl+Y", triggered=self.act_redo))
-        # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
         em.addSeparator()
+        # ===== 选区操作（PS 风格）=====
+        # 复制 / 剪切 / 反选 需要激活的选区（菜单打开时按选区状态启用/禁用）；
+        # 粘贴只要有剪贴板图像就可用（不依赖选区）。
+        self.act_copy = Action(FluentIcon.COPY, "复制  Ctrl+C",
+                               triggered=lambda: self.act_copy_selection(False))
+        self.act_cut = Action(FluentIcon.CUT, "剪切  Ctrl+X",
+                              triggered=lambda: self.act_copy_selection(True))
+        self.act_paste = Action(FluentIcon.PASTE, "粘贴  Ctrl+V",
+                                triggered=self.act_paste_selection)
+        self.act_invert = Action(FluentIcon.SYNC, "反选  Ctrl+Shift+I",
+                                 triggered=self.act_invert_selection)
+        for _a in (self.act_copy, self.act_cut, self.act_invert):
+            _a.setEnabled(False)          # 默认禁用，菜单打开时按选区状态刷新
+        for _a in (self.act_copy, self.act_cut, self.act_paste, self.act_invert):
+            em.addAction(_a)
+        em.addSeparator()
+        # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
         em.addAction(Action(FluentIcon.ZOOM, "拆分图片（SeeThrough）",
                             triggered=self._pick_image))
         edit.setMenu(em)
+        # 菜单每次打开都按当前选区状态刷新可用性（PS 里没选区时复制/剪切是灰的）
+        edit.menu_opened.connect(self._sync_edit_menu_state)
         self.edit_btn = edit
         self.edit_ref = em
         menu.setFixedHeight(30)
@@ -1336,7 +1403,7 @@ class Workbench(QWidget):
         self.btn_move.toggled.connect(self._on_tool_toggled)
         _tbl.addWidget(self.btn_move)
         # 多边形套索
-        self.btn_lasso = TransparentToggleToolButton(FluentIcon.EDIT, self)
+        self.btn_lasso = TransparentToggleToolButton(make_lasso_icon(), self)
         self.btn_lasso.setToolTip("多边形套索：左键逐点圈选，双击(或 Enter)闭合，"
                                   "把选中的图层裁剪成只剩选区内像素（Esc 取消）。")
         self.btn_lasso.toggled.connect(self._on_tool_toggled)
@@ -1679,17 +1746,61 @@ class Workbench(QWidget):
         """
         self._selection_data = list(selections or [])
         self._selection_active = bool(self._selection_data)
+        if not self._selection_active:
+            self._selection_invert = False      # 选区没了，反选标记也清掉
         # 同步画布（画布用它画选区边框）
         self.canvas._lasso_done = list(self._selection_data)
         self.canvas._selection_active = self._selection_active
+        self.canvas._selection_invert = self._selection_invert
         self.canvas.update()
         self._sync_canvas_options()
+        self._sync_edit_menu_state()
 
     def _clear_selection(self):
         """清除选区状态（复制/剪切后、应用后、Esc）"""
         self._selection_data = []
         self._selection_active = False
+        self._selection_invert = False
         self.canvas.lasso_cancel_selection()
+        self._sync_edit_menu_state()
+
+    def _sync_edit_menu_state(self):
+        """刷新「编辑」菜单里选区相关项的可用性（PS：没选区时复制/剪切/反选是灰的）。"""
+        try:
+            has_sel = (bool(getattr(self, "_selection_active", False))
+                       and bool(getattr(self, "_selection_data", None)))
+            for a in (getattr(self, "act_copy", None),
+                      getattr(self, "act_cut", None),
+                      getattr(self, "act_invert", None)):
+                if a is not None:
+                    a.setEnabled(has_sel)
+            p = getattr(self, "act_paste", None)
+            if p is not None:
+                md = QApplication.clipboard().mimeData()
+                ok = bool(md and md.hasImage())
+                p.setEnabled(ok)
+        except Exception:
+            pass
+
+    def act_invert_selection(self):
+        """反选（Ctrl+Shift+I，PS 的"选择 > 反向"）。
+
+        反转后：选区变成「多边形之外的全部区域」——复制/剪切/应用裁剪都会
+        作用在未被圈住的部分。需要先有激活的选区。
+        """
+        if not getattr(self, "_selection_active", False) or not self._selection_data:
+            InfoBar.info("反选", "没有激活的选区（先用套索工具圈选并闭合）",
+                         parent=self, position=InfoBarPosition.TOP, duration=2500)
+            self._sync_edit_menu_state()
+            return
+        self._selection_invert = not getattr(self, "_selection_invert", False)
+        self.canvas._selection_invert = self._selection_invert
+        self.canvas.update()
+        self._sync_canvas_options()
+        InfoBar.success("已反选" if self._selection_invert else "已取消反选",
+                        "选区 = 多边形外全部区域" if self._selection_invert
+                        else "选区 = 多边形内区域",
+                        parent=self, position=InfoBarPosition.TOP, duration=2200)
 
     def act_copy_selection(self, cut=False):
         """Ctrl+C / Ctrl+X：把选区内容复制到系统剪贴板（cut=True 则同时从原层抠掉）。"""
@@ -1710,7 +1821,8 @@ class Workbench(QWidget):
             return
         import lasso_tool
         sels = self._selection_data
-        res = lasso_tool.extract_selection(layer, sels, feather=self.lasso_feather)
+        res = lasso_tool.extract_selection(layer, sels, feather=self.lasso_feather,
+                                            invert=getattr(self, "_selection_invert", False))
         if res is None:
             InfoBar.warning("复制", "选区与图层没有重叠", parent=self,
                             position=InfoBarPosition.TOP, duration=2500)
@@ -1777,7 +1889,8 @@ class Workbench(QWidget):
                 continue
             (sub_masks if op == "sub" else add_masks).append(m)
         return lasso_tool.combine_masks(add_masks, sub_masks, w, h,
-                                        feather=self.lasso_feather)
+                                        feather=self.lasso_feather,
+                                        invert=getattr(self, "_selection_invert", False))
 
     def act_paste_selection(self):
         """Ctrl+V：把剪贴板里的选区内容作为**顶部新图层**插入。"""
@@ -1889,7 +2002,8 @@ class Workbench(QWidget):
                 continue
             (sub_masks if op == "sub" else add_masks).append(m)
         mask = lasso_tool.combine_masks(add_masks, sub_masks, w, h,
-                                        feather=self.lasso_feather)
+                                        feather=self.lasso_feather,
+                                        invert=getattr(self, "_selection_invert", False))
         if mask is None:
             InfoBar.warning("选区无效", "选区与图层没有重叠，未做任何修改",
                             parent=self, position=InfoBarPosition.TOP, duration=3000)
@@ -3016,6 +3130,9 @@ class MainWindow(FluentWindow):
         QShortcut(QKeySequence("Ctrl+X"), self,
                   activated=lambda: self.wb.act_copy_selection(True))
         QShortcut(QKeySequence("Ctrl+V"), self, activated=self.wb.act_paste_selection)
+        # 反选（PS 的选择反向）
+        QShortcut(QKeySequence("Ctrl+Shift+I"), self,
+                  activated=self.wb.act_invert_selection)
         # Delete / Enter：把选区真正裁剪到图层；Esc：取消选区
         QShortcut(QKeySequence("Del"), self,
                   activated=lambda: self.wb.canvas.lasso_apply_selection())
