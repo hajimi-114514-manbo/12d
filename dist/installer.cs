@@ -376,12 +376,17 @@ class Installer
         return errors.Count == 0 ? 0 : 1;
     }
 
-    static bool HasModels(string dir)
+    // 模型"已装好"判定。
+    // 早期版本只检查"某个 unet 权重文件存在"，导致**残缺模型也被判为已装**
+    // （实测一个只有 7 个文件 / 0.01GB 的目录被判"模型已下载就位"，实际缺 32 个文件）。
+    // 现在走 FindBadModels 全量校验：manifest 里每个文件都存在且大小正确才算装好。
+    bool HasModels(string dir)
     {
         try
         {
-            return Directory.Exists(Path.Combine(dir, "models", "24yearsold", "seethroughv0.0.2_layerdiff3d_nf4"))
-                && File.Exists(Path.Combine(dir, "models", "24yearsold", "seethroughv0.0.2_layerdiff3d_nf4", "unet", "diffusion_pytorch_model.safetensors"));
+            if (!Directory.Exists(Path.Combine(dir, "models", "24yearsold"))) return false;
+            List<string> bad = FindBadModels(dir);
+            return (bad == null || bad.Count == 0);
         }
         catch { return false; }
     }
@@ -715,7 +720,6 @@ class Installer
 "  · 模型与产物不受更新影响：更新只覆盖程序文件，models\\ 与 seethrough_out\\ 不动\r\n" +
 "  · 本应用安装目录：" + dir + "\r\n";
     }
-
 
     // ---------------- 全新模式 ----------------
     int DoFresh(string dir, bool withModels, bool noPause, bool withAmd = false)
@@ -1307,7 +1311,6 @@ class Installer
             rt.Start();
         };
         win.Controls.Add(repairBtn);
-
 
         radioUpdate.CheckedChanged += delegate { SyncModeUI(); };
         radioFresh.CheckedChanged += delegate { SyncModeUI(); };

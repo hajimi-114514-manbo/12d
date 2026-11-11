@@ -5,6 +5,26 @@
 
 ---
 
+## v2.8.0（2026-11-11 16:10）启动器 Python 环境自适应 + 修模型"假就位"误报
+
+- **启动器 Python 环境自适应**（解决真实用户反馈：装到 `F:\木偶工作室` 启动报"找不到 Python: D:\Python312\python.exe"）：原启动器把 `D:\Python312\python.exe` 写死为回退值，换台机器就崩。现在按顺序探测：
+  1. `launcher.ini` 里显式 `python=` 且文件存在 → 用它
+  2. 同目录 `runtime\python.exe`（为将来内置便携运行时预留）
+  3. 常见安装位置（`C:\Python312/311/310/313/39`、`D:\` 同款、`Program Files`、`Program Files (x86)`）
+  4. `PATH` 里的 `python.exe`（**主动排除 WindowsApps 商店别名**，避免弹应用商店）
+  5. Windows `py` 启动器：`py -3 -c "import sys;print(sys.executable)"` 问出真实路径
+  - 探测成功会**自动写回 launcher.ini**，下次直接命中，用户无需手改配置。
+  - 全都找不到时不再只报"找不到 Python"，而是弹出**可操作的引导**：列出所需库（PySide6/opencv/numpy/torch/diffusers/transformers/peft/accelerate/bitsandbytes/scikit-image）+ 完整 pip 命令 + N 卡 CUDA 版 torch 的安装建议。
+  - 新增**依赖体检**：找到 Python 后用 `importlib.util.find_spec` 检查 6 个关键库，缺哪个就明确列出并给出对应 pip 命令，不再"黑屏闪退"。
+  - 实测：ini 写死不存在的 `Z:\nope\python.exe` → 自动探测到真实解释器 → 写回 ini → 脚本正常执行（exit 0）。
+- **修"模型已下载就位"误报**（用户反馈截图：更新完成提示"模型已下载就位"，但实际目录只有 7 个文件 / 0.01GB，缺 32 个）：
+  - 根因：`HasModels()` 只检查**单个 unet 权重文件是否存在**，残缺模型也被判为"已装好"，于是更新流程跳过一切模型处理、还打印"已下载就位"。
+  - 修法：`HasModels()` 改为走 `FindBadModels()` **全量 manifest 校验**——每个文件都存在且大小正确才算装好。
+  - 实测：残缺目录（ceshi）判定 `BAD=32`，完整目录判定 `COMPLETE`，两类结果正确区分。
+- 同时规范化了 `installer.cs` 的双倍空行（多次脚本化编辑的残留）。
+- **实测**：五套回归全绿（layer_menu / finisher / proj_nav / transform_test / mesh_test 96 项）；启动器自适应探测、缺库体检、模型完整性判定均端到端验证通过。
+- **版本号**：环境自适应属体系性增强 -> minor+1 -> **v2.8.0**。
+
 ## v2.7.2（2026-11-11 15:35）修自由变换拖动"对象飞走"
 
 - **修 bug（用户反馈）**：自由变换里用鼠标拖动位移时，对象会**飞走**（位移远大于鼠标移动，越拖越失控）。
