@@ -106,7 +106,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.6.1"
+VERSION = "2.7.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -150,6 +150,38 @@ def find_enclosed_holes(alpha):
     if not keep.any():
         return None
     return keep, int((keep > 0).sum()), cnt
+
+
+def make_mesh_icon(color="#dcdcdc", px=64):
+    """选项栏「网格变形」开关图标：3×3 网格 + 中心点偏移（示意弯曲）。"""
+    pm = QPixmap(px, px)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    s = float(px)
+    pen = QPen(QColor(color))
+    pen.setWidthF(max(1.5, s * 0.07))
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    # 4x4 点阵，中心几个点偏移 -> 网格线弯曲
+    N = 3
+    off = {(1, 1): (0.03, -0.03), (2, 1): (0.02, -0.02),
+           (1, 2): (0.03, 0.02), (2, 2): (-0.02, 0.03)}
+    def pt(a, b):
+        ox_, oy_ = off.get((a, b), (0.0, 0.0))
+        return QPoint(int((0.16 + 0.68 * a / N + ox_) * s),
+                      int((0.16 + 0.68 * b / N + oy_) * s))
+    for b in range(N + 1):
+        p.drawPolyline(QPolygon([pt(a, b) for a in range(N + 1)]))
+    for a in range(N + 1):
+        p.drawPolyline(QPolygon([pt(a, b) for b in range(N + 1)]))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    for b in range(N + 1):
+        for a in range(N + 1):
+            p.drawEllipse(pt(a, b), max(1.5, s * 0.05), max(1.5, s * 0.05))
+    p.end()
+    return QIcon(pm)
 
 
 def make_curve_icon(color="#dcdcdc", px=64):
@@ -554,6 +586,24 @@ class RigCanvas(QWidget):
             for _, hx, hy in TT.handle_points(self._ft):
                 q = _fw(hx, hy)
                 p.drawRect(q.x() - 4, q.y() - 4, 8, 8)
+            # ---- 网格变形模式：画 (n+1)x(n+1) 网格线 + 圆点控制点 ----
+            if getattr(self, "_ft_mesh_on", False):
+                st_m = TT.mesh_init(self._ft)
+                n_m = int(st_m.get("mesh_n") or TT.GRID_N)
+                mp = [_fw(x, y) for x, y in TT.mesh_points(st_m, n_m)]
+                at = lambda a, b: mp[b * (n_m + 1) + a]
+                # 横线（沿 is 方向）与竖线（沿 js 方向）
+                p.setPen(QPen(QColor("#4d88ff"), 1, Qt.DotLine))
+                p.setBrush(Qt.NoBrush)
+                for b in range(n_m + 1):
+                    p.drawPolyline(QPolygon([at(a, b) for a in range(n_m + 1)]))
+                for a in range(n_m + 1):
+                    p.drawPolyline(QPolygon([at(a, b) for b in range(n_m + 1)]))
+                # 网格点：蓝点白边（与白色方块控制点区分，避免混淆）
+                p.setPen(QPen(QColor("#ffffff"), 1))
+                p.setBrush(QColor("#4d88ff"))
+                for q in mp:
+                    p.drawEllipse(q, 3, 3)
         # ---- 多边形套索：绘制已闭合选区（蚂蚁线）+ 当前正在画的路径 ----
         if self._lasso_done or self._lasso:
             sc = PREVIEW_SCALE
@@ -692,17 +742,31 @@ class RigCanvas(QWidget):
             self.ft_cancelled.emit()
 
     def _ft_hit(self, pos):
-        """widget 坐标 -> 变换框命中（控制点/内部/角外）"""
+        """widget 坐标 -> 变换框命中。
+
+        优先级：网格点（网格模式开启时）> 8 个边框控制点 > 框内移动 > 角外旋转。
+        网格点优先是因为它面积小、且只在自己位置上出现，不会和边框点打架。
+        """
         if self._ft is None:
             return None
         import transform_tool as TT
         ix, iy = self._to_full(pos)
         ox, oy, s, dw, dh = self._geom
         thr = 8.0 / max(0.01, s * PREVIEW_SCALE)   # 8 widget px 折算回图像坐标
+        if getattr(self, "_ft_mesh_on", False):
+            mh = TT.mesh_hit(self._ft, ix, iy, thr)
+            if mh is not None:
+                return ("mesh", mh)                 # mh = (is, js)
         return TT.hit(self._ft, ix, iy, thr)
 
-    def _ft_handle_at(self, pos):
-        return self._ft_hit(pos)
+    def _ft_mesh_toggle(self, on):
+        """开关网格变形（PS 的「变形」模式）：开启时补 mesh 字段并在画布画网格。"""
+        import transform_tool as TT
+        self._ft_mesh_on = bool(on)
+        if self._ft is not None and on:
+            self._ft = TT.mesh_init(self._ft)
+            self.ft_changed.emit(dict(self._ft))    # 触发重渲染 + 选项栏同步
+        self.update()
 
     def _lasso_vertex_at(self, pos, radius=7):
         """命中已闭合选区的顶点：返回 (选区索引, 顶点索引) 或 None。"""
@@ -833,6 +897,10 @@ class RigCanvas(QWidget):
             keep_ar = bool(e.modifiers() & Qt.ShiftModifier)
             if kind == "handle":
                 self._ft = TT.drag_handle(self._ft, name, ix, iy, keep_aspect=keep_ar)
+            elif kind == "mesh":
+                # name 是 (is, js)：拖网格点做局部变形（自由变换的"变形"模式）
+                is_, js_ = name
+                self._ft = TT.drag_mesh(self._ft, is_, js_, ix, iy)
             elif kind == "move":
                 self._ft = TT.drag_move(self._ft, ix, iy, sx, sy)
             elif kind == "rotate":
@@ -1700,6 +1768,14 @@ class Workbench(QWidget):
         self.btn_ft_cancel.setFixedSize(24, 24)
         self.btn_ft_cancel.clicked.connect(lambda: self.canvas.ft_cancel())
         _ofg.addWidget(self.btn_ft_cancel)
+        # 网格变形开关（PS 自由变换的"变形"模式）：开启后拖内部格点做局部弯曲
+        self.btn_ft_mesh = TransparentToggleToolButton(make_mesh_icon(),
+                                                       self.opt_ft_group)
+        self.btn_ft_mesh.setToolTip("变形（网格）：开启后拖动内部格点做局部弯曲，"
+                                    "适合发丝/布料等不规则形变")
+        self.btn_ft_mesh.setFixedSize(28, 28)
+        self.btn_ft_mesh.toggled.connect(self.canvas._ft_mesh_toggle)
+        _ofg.addWidget(self.btn_ft_mesh)
         self.btn_ft_commit = TransparentToolButton(FluentIcon.ACCEPT,
                                                    self.opt_ft_group)
         self.btn_ft_commit.setToolTip("提交自由变换（Enter）")
@@ -1977,7 +2053,11 @@ class Workbench(QWidget):
         layer = self.layer_by_name(name)
         if layer is None:
             return None
-        res = TT.warp_state(orig["img"], orig["bbox"], st)
+        # 网格模式用 warp_mesh（分段双线性，能弯曲）；否则 warp_state（整体仿射）
+        if getattr(self.canvas, "_ft_mesh_on", False):
+            res = TT.warp_mesh(orig["img"], orig["bbox"], st)
+        else:
+            res = TT.warp_state(orig["img"], orig["bbox"], st)
         if res is None:
             return None
         new_img, new_bbox = res
@@ -2276,7 +2356,12 @@ class Workbench(QWidget):
         if not name or orig is None:
             return
         import transform_tool as TT
-        res = TT.warp_state(orig["img"], orig["bbox"], st)
+        # 与预览同一套：网格模式走 warp_mesh，否则 warp_state
+        # （预览与提交必须同算法，否则"所见非所得"）
+        if getattr(self.canvas, "_ft_mesh_on", False):
+            res = TT.warp_mesh(orig["img"], orig["bbox"], st)
+        else:
+            res = TT.warp_state(orig["img"], orig["bbox"], st)
         if res is None:
             InfoBar.warning("自由变换", "变换结果退化（过小或空），未应用", parent=self,
                             position=InfoBarPosition.TOP, duration=3000)

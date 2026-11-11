@@ -37,6 +37,7 @@ class Installer
     ProgressBar bar;
     Label status;
     Button browseBtn, installBtn;
+    Button repairBtn;
     string appZip, manifest;
     string detected = "";
     volatile bool running = false;
@@ -116,6 +117,20 @@ class Installer
         {
             List<string> bad = inst.FindBadModels(a[1]);
             Console.WriteLine(bad.Count == 0 ? "COMPLETE" : ("BAD=" + bad.Count));
+            foreach (string b in bad) Console.WriteLine("  " + b);
+            Environment.Exit(bad.Count == 0 ? 0 : 1);
+            return;
+        }
+        if (a.Count >= 2 && a[0] == "--repair")
+        {
+            string d = a[1];
+            if (!Directory.Exists(d)) { Console.WriteLine("NO_DIR"); Environment.Exit(2); return; }
+            List<string> uerr = new List<string>();
+            long written = inst.ExtractOverwrite(inst.appZip, d, uerr);
+            Console.WriteLine("UPDATED=" + written + " ERR=" + uerr.Count);
+            int moved = 0;
+            List<string> bad = inst.RepairModels(d, out moved);
+            Console.WriteLine("MOVED=" + moved + " BAD=" + bad.Count);
             foreach (string b in bad) Console.WriteLine("  " + b);
             Environment.Exit(bad.Count == 0 ? 0 : 1);
             return;
@@ -404,6 +419,117 @@ class Installer
             catch { bad.Add(tag); }
         }
         return bad;
+    }
+
+    // 修复模型目录：把"平铺"的模型文件归位到正确的 repo 子目录，再报告缺失项。
+    // 背景：旧版 DownloadModels 把 file 直接写到 models/24yearsold/ 顶层（漏 repo 子目录），
+    // 而两个 repo 有大量同名文件（model_index.json / unet/... / LICENSE…）会互相覆盖，
+    // 同时 HasModels 查的是"带 repo 子目录"的路径 -> 永远判定未安装 -> 每次安装都重下，
+    // 表现为"读不到下载内容却一直在下载"。修复 = 归位 + 只补缺失。
+    // 返回归位后仍缺失/损坏的文件标签列表；moved 输出归位文件数。
+    List<string> RepairModels(string dir, out int moved)
+    {
+        moved = 0;
+        string flatRoot = Path.Combine(dir, "models", "24yearsold");
+        List<Dict> files = ParseManifest();
+        // 建立 "相对路径 -> 应属于的 repo 短名列表"，用于判断平铺文件归属
+        var byRel = new Dictionary<string, List<string>>();
+        foreach (Dict f in files)
+        {
+            string rel = f["file"];
+            if (!byRel.ContainsKey(rel)) byRel[rel] = new List<string>();
+            string full = f["repo"];
+            int cut = full.LastIndexOf('/');
+            byRel[rel].Add(cut >= 0 ? full.Substring(cut + 1) : full);
+        }
+        // 1) 平铺文件归位：models/24yearsold/<rel> -> models/24yearsold/<repoShort>/<rel>
+        //    rel 在多个 repo 里同名时（model_index.json / LICENSE 等），不能靠名字判断归属，
+        //    改用**大小匹配**：候选 repo 里只有一个的大小与平铺文件一致才搬。
+        //    （manifest 只有 size，没有哈希；大小一致已能覆盖绝大多数情形。）
+        try
+        {
+            if (Directory.Exists(flatRoot))
+            {
+                Dictionary<string, long> sizeOf = new Dictionary<string, long>();
+                foreach (Dict f in files)
+                {
+                    string full = f["repo"];
+                    int cut = full.LastIndexOf('/');
+                    string shortName = cut >= 0 ? full.Substring(cut + 1) : full;
+                    long sz;
+                    long.TryParse(f["size"], out sz);
+                    sizeOf[shortName + "|" + f["file"]] = sz;
+                }
+                foreach (string flat in Directory.GetFiles(flatRoot, "*", SearchOption.AllDirectories))
+                {
+                    string rel = flat.Substring(flatRoot.Length).TrimStart(SEP);
+                    if (rel.StartsWith("seethroughv")) continue;   // 已在 repo 子目录里，跳过
+                    List<string> owners;
+                    if (!byRel.TryGetValue(rel, out owners)) continue;
+                    long actual;
+                    try { actual = new FileInfo(flat).Length; } catch { continue; }
+                    // 用大小在候选 repo 里筛出唯一匹配
+                    string pick = null;
+                    int hits = 0;
+                    foreach (string repoShort in owners)
+                    {
+                        long want2;
+                        if (sizeOf.TryGetValue(repoShort + "|" + rel, out want2) && want2 == actual)
+                        { pick = repoShort; hits++; }
+                    }
+                    if (hits != 1) continue;                        // 无法唯一确定，留给重新下载
+                    string want = ModelDest(dir, MakeDict(pick, rel));
+                    if (string.Equals(Path.GetFullPath(flat), Path.GetFullPath(want),
+                                      StringComparison.OrdinalIgnoreCase)) continue;
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(want));
+                        if (!File.Exists(want)) { File.Move(flat, want); moved++; }
+                        else { File.Delete(flat); moved++; }
+                    }
+                    catch { }
+                }
+                // 递归搬完后清掉空的中间目录（如 top-level unet/）
+                try
+                {
+                    foreach (string dn in Directory.GetDirectories(flatRoot))
+                    {
+                        string name = Path.GetFileName(dn);
+                        if (name.StartsWith("seethroughv")) continue;
+                        if (Directory.GetFiles(dn, "*", SearchOption.AllDirectories).Length == 0)
+                            try { Directory.Delete(dn, true); } catch { }
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        // 2) 清掉下载中断残留的 .part
+        try
+        {
+            if (Directory.Exists(flatRoot))
+                foreach (string pz in Directory.GetFiles(flatRoot, "*.part", SearchOption.AllDirectories))
+                    try { File.Delete(pz); } catch { }
+        }
+        catch { }
+        // 3) 归位后重新算缺失（缺 + 大小不符）
+        return FindBadModels(dir);
+    }
+
+    static Dict MakeDict(string repoShort, string rel)
+    {
+        Dict d = new Dict();
+        d["repo"] = "24yearsold/" + repoShort;
+        d["file"] = rel;
+        return d;
+    }
+
+    // 只补缺失：现有 DownloadModels 会遍历 manifest 但跳过大小正确的，
+    // 所以直接调它 —— 缺失文件必然被下载，已完整的不会重下。
+    void DownloadOnlyMissing(string dir, List<string> bad)
+    {
+        if (bad == null || bad.Count == 0) return;
+        DownloadModels(dir);
     }
 
     // ---------------- 显卡检测：安装前自动选路线 ----------------
@@ -1105,9 +1231,83 @@ class Installer
 
         Button quit = new Button();
         quit.Text = "退出";
-        quit.SetBounds(LX + 260, 300, 100, 34);
+        quit.SetBounds(LX + 370, 300, 100, 34);
         quit.Click += delegate { if (!running) win.Close(); else cancelFlag = true; };
         win.Controls.Add(quit);
+        repairBtn = new Button();
+        repairBtn.Text = "修复模型";
+        repairBtn.SetBounds(LX + 260, 300, 100, 34);
+        repairBtn.Click += delegate
+        {
+            if (running) return;
+            string d = dirBox.Text.Trim();
+            if (d.Length == 0) { MessageBox.Show(win, "请填写安装目录", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (!Directory.Exists(d)) { MessageBox.Show(win, "目录不存在: " + d, "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (AppRunning()) { MessageBox.Show(win, "木偶工作室正在运行，请先关闭再修复", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            running = true; installBtn.Enabled = false; repairBtn.Enabled = false;
+            browseBtn.Enabled = false; diagBtn.Enabled = false; quit.Enabled = false;
+            cancelFlag = false;
+            Thread rt = new Thread(new ThreadStart(delegate
+            {
+                string rep;
+                try
+                {
+                    var sb = new StringBuilder();
+                    // 步骤 1：程序文件更新到最新（本安装器内置的版本即最新版）
+                    // 复用 ExtractOverwrite：它就是"覆盖程序文件、绝不动 models/ 与产物"
+                    SetStatus("正在更新程序文件到最新版…");
+                    List<string> uerr = new List<string>();
+                    long written = ExtractOverwrite(appZip, d, uerr);
+                    sb.AppendLine("程序文件已更新到最新版（覆盖 " + written + " 个文件）。");
+                    if (uerr.Count > 0) sb.AppendLine("其中有 " + uerr.Count + " 个文件未能写入。");
+                    WriteRegistry(d);
+                    try { MakeShortcuts(d); } catch { }
+                    // 步骤 2：整理模型目录（平铺文件归位 + 清 .part）
+                    SetStatus("正在扫描并整理模型目录…");
+                    int moved = 0;
+                    List<string> bad = RepairModels(d, out moved);
+                    sb.AppendLine("模型目录整理：归位 " + moved + " 个文件。");
+                    // 步骤 3：只补缺失/损坏的文件
+                    if (bad.Count == 0)
+                    {
+                        sb.AppendLine("模型已完整，无需下载。");
+                    }
+                    else
+                    {
+                        sb.AppendLine("缺失/损坏 " + bad.Count + " 个文件，开始补下…");
+                        string linkErr = CheckLinkAvailable();
+                        if (linkErr != null)
+                        {
+                            sb.AppendLine("无法连接下载源，未下载。\n" + linkErr);
+                        }
+                        else
+                        {
+                            SetStatus("正在补下缺失的 " + bad.Count + " 个文件…");
+                            DownloadOnlyMissing(d, bad);
+                            List<string> still = FindBadModels(d);
+                            sb.AppendLine(still.Count == 0
+                                ? "缺失文件已全部补齐，修复完成。"
+                                : ("仍有 " + still.Count + " 个文件未完成，可再次点修复续传。"));
+                        }
+                    }
+                    rep = sb.ToString();
+                }
+                catch (Exception ex) { rep = "修复失败: " + ex.Message; }
+                running = false;
+                InvokeOnUI(delegate
+                {
+                    installBtn.Enabled = true; repairBtn.Enabled = true;
+                    browseBtn.Enabled = !radioUpdate.Checked;
+                    diagBtn.Enabled = true; quit.Enabled = true;
+                    SetStatus("就绪");
+                    MessageBox.Show(win, rep, "修复完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                });
+            }));
+            rt.IsBackground = true;
+            rt.Start();
+        };
+        win.Controls.Add(repairBtn);
+
 
         radioUpdate.CheckedChanged += delegate { SyncModeUI(); };
         radioFresh.CheckedChanged += delegate { SyncModeUI(); };
