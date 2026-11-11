@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
 功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做/拆分图片）。

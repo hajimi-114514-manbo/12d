@@ -1,4 +1,4 @@
-﻿# 木偶工作室（Muppet Studio）
+# 木偶工作室（Muppet Studio）
 
 > **伪L2D 骨架工作室 v2.4.0** —— 把动漫立绘自动拆成分层骨架并做动画的 PySide6 桌面应用。
 >
