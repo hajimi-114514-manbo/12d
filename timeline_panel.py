@@ -36,23 +36,33 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 import anim as A
 
 # 配色（跟随应用暗色主题）
+# 字色整体调亮：原来 #9aa4b2 在深底上偏灰暗，刻度几乎看不清
 C_BG = QColor("#1b1f27")
 C_ROW_A = QColor("#20252e")
 C_ROW_B = QColor("#1d222a")
-C_GRID = QColor("#2c3340")
-C_TEXT = QColor("#9aa4b2")
-C_TEXT_HI = QColor("#e6edf3")
+C_GRID = QColor("#3a4356")          # 网格线提亮，原来 #2c3340 几乎与底色同色
+C_TEXT = QColor("#c8d1dc")          # 刻度/次要文字：明显提亮
+C_TEXT_HI = QColor("#f2f6fa")       # 行名/主文字：接近纯白
 C_HEAD = QColor("#252b35")
 C_PLAYHEAD = QColor("#4d88ff")
 C_KF = QColor("#ffd166")
 C_KF_SEL = QColor("#ff6b6b")
 C_LANE = QColor("#171b21")
+C_TICK_MAJOR = QColor("#8fa3bd")    # 整秒刻度文字（比秒内小刻度更亮）
 
-ROW_H = 22          # 每行高度
-HEAD_H = 34         # 头部工具栏高度
-TIME_H = 18         # 时间刻度高度
-NAME_W = 132        # 左侧轨道名列宽
+# 尺寸（v2.11.2：全部可在运行时缩放，见 TimelinePanel.ui_scale）
+ROW_H = 24          # 每行高度（基准值）
+HEAD_H = 38         # 头部工具栏高度（基准值）
+TIME_H = 22         # 时间刻度高度（基准值）
+NAME_W = 150        # 左侧轨道名列宽（基准值）
 LEFT_PAD = 8        # 时间轴左内边距
+
+# 高度可调范围（整个面板的像素高）
+PANEL_MIN_H = HEAD_H + TIME_H + ROW_H  # 最小：头部 + 刻度 + 1 行
+PANEL_MAX_H = 720
+
+# 界面缩放档位（0.8 = 紧凑，1.0 = 标准，1.25 = 大，1.5 = 特大）
+SCALE_LEVELS = (0.85, 1.0, 1.25, 1.5)
 
 
 class TimelinePanel(QWidget):
@@ -69,65 +79,237 @@ class TimelinePanel(QWidget):
         self._sel = None               # (node, param, t) 选中的关键帧
         self._drag = None              # 拖拽关键帧状态
         self._scrub = False
+        # v2.11.2 界面缩放：所有尺寸 = 基准值 × ui_scale
+        self.ui_scale = 1.0
+        self._manual_h = None          # 用户拖拽设定的面板高度（None=按行数自适应）
+        self._h_drag = None            # 高度拖拽状态
         self.setMouseTracking(True)
-        self.setMinimumHeight(HEAD_H + TIME_H + ROW_H * 3)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setMinimumHeight(PANEL_MIN_H)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
+        self._lay = lay
 
         # ---- 头部工具条 ----
         head = QWidget(self)
-        head.setFixedHeight(HEAD_H)
-        head.setStyleSheet("background:%s;" % C_HEAD.name())
+        head.setObjectName("tlHead")
+        head.setStyleSheet("QWidget#tlHead{background:%s;}" % C_HEAD.name())
+        self._head = head
         hl = QHBoxLayout(head)
         hl.setContentsMargins(8, 0, 8, 0)
         hl.setSpacing(8)
+        self._hl = hl
 
-        from qfluentwidgets import PushButton, CaptionLabel, BodyLabel
+        from qfluentwidgets import PushButton, CaptionLabel
         self.btn_add = PushButton("+ 关键帧", head)
-        self.btn_add.setFixedHeight(24)
         self.btn_add.setToolTip("在当前播放头位置，给选中的骨架节点打一个关键帧")
         self.btn_add.clicked.connect(self._add_kf_clicked)
         hl.addWidget(self.btn_add)
 
         self.btn_clear = PushButton("清空动画", head)
-        self.btn_clear.setFixedHeight(24)
         self.btn_clear.clicked.connect(self._clear_all)
         hl.addWidget(self.btn_clear)
 
         hl.addSpacing(10)
-        hl.addWidget(CaptionLabel("时长", head))
+        self.lbl_dur = CaptionLabel("时长", head)
+        hl.addWidget(self.lbl_dur)
         self.spin_dur = QDoubleSpinBox(head)
         self.spin_dur.setRange(0.2, 600.0)
         self.spin_dur.setSingleStep(0.5)
         self.spin_dur.setDecimals(1)
         self.spin_dur.setSuffix(" s")
-        self.spin_dur.setFixedWidth(84)
-        self.spin_dur.setFixedHeight(24)
         self.spin_dur.valueChanged.connect(self._dur_changed)
         hl.addWidget(self.spin_dur)
 
-        hl.addWidget(CaptionLabel("帧率", head))
+        self.lbl_fps = CaptionLabel("帧率", head)
+        hl.addWidget(self.lbl_fps)
         self.spin_fps = QSpinBox(head)
         self.spin_fps.setRange(1, 120)
-        self.spin_fps.setFixedWidth(64)
-        self.spin_fps.setFixedHeight(24)
         self.spin_fps.valueChanged.connect(self._fps_changed)
         hl.addWidget(self.spin_fps)
 
+        hl.addSpacing(10)
+        # 字号档位：紧凑 / 标准 / 大 / 特大
+        self.lbl_scale = CaptionLabel("字号", head)
+        hl.addWidget(self.lbl_scale)
+        from PySide6.QtWidgets import QComboBox
+        self.cmb_scale = QComboBox(head)
+        for s in SCALE_LEVELS:
+            self.cmb_scale.addItem("%d%%" % int(round(s * 100)), s)
+        self.cmb_scale.setCurrentIndex(SCALE_LEVELS.index(1.0))
+        self.cmb_scale.currentIndexChanged.connect(self._scale_changed)
+        hl.addWidget(self.cmb_scale)
+
         hl.addStretch(1)
-        self.hint = CaptionLabel("拖播放头 scrub ｜ 点关键帧选中 ｜ 拖它改时间 ｜ 双击删除 ｜ 右键改缓动", head)
-        self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
+        self.hint = CaptionLabel("拖播放头 scrub ｜ 点菱形选中 ｜ 拖它改时间 ｜ 双击删除 ｜ 右键改缓动 ｜ 拖上边缘调高度", head)
         hl.addWidget(self.hint)
+
         lay.addWidget(head)
 
         # ---- 轨道绘制区（自绘）----
         self.area = _TrackArea(self)
         lay.addWidget(self.area, 1)
 
+        self._apply_scale()
         self.refresh()
+
+    # ---------------- 缩放/尺寸 ----------------
+    def _apply_scale(self):
+        """按 ui_scale 统一设置所有控件尺寸与字体。"""
+        s = float(self.ui_scale)
+        fpx = max(9, int(round(12 * s)))          # 基础字号
+        # 头部控件高度
+        ctl_h = max(20, int(round(26 * s)))
+        self._head.setFixedHeight(max(28, int(round(HEAD_H * s))))
+        for w in (self.btn_add, self.btn_clear):
+            w.setFixedHeight(ctl_h)
+        for w in (self.spin_dur,):
+            w.setFixedWidth(max(70, int(round(88 * s))))
+            w.setFixedHeight(ctl_h)
+        self.spin_fps.setFixedWidth(max(52, int(round(66 * s))))
+        self.spin_fps.setFixedHeight(ctl_h)
+        self.cmb_scale.setFixedWidth(max(66, int(round(84 * s))))
+        self.cmb_scale.setFixedHeight(ctl_h)
+        # 字体：所有头部控件 + 提示文字
+        f = QFont()
+        f.setPixelSize(fpx)
+        for w in (self.btn_add, self.btn_clear, self.spin_dur, self.spin_fps,
+                  self.cmb_scale, self.lbl_dur, self.lbl_fps, self.lbl_scale,
+                  self.hint):
+            try:
+                w.setFont(f)
+            except Exception:
+                pass
+        # 提示文字提亮（原来用 C_TEXT.name() 太暗）
+        try:
+            self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
+        except Exception:
+            pass
+        # 大字号时提示文字可能撑宽布局 -> 空间不够就隐藏，避免把窗口撑出屏幕
+        try:
+            need = sum(w.sizeHint().width() for w in
+                       (self.btn_add, self.btn_clear, self.lbl_dur,
+                        self.spin_dur, self.lbl_fps, self.spin_fps,
+                        self.lbl_scale, self.cmb_scale))
+            self.hint.setVisible(need < max(600, self.width() - 240))
+        except Exception:
+            pass
+        self.setMinimumWidth(0)       # 面板本身不参与撑宽
+        # 面板高度重算
+        self._resize_panel()
+        try:
+            self.area.update()
+        except Exception:
+            pass
+
+    def _scale_changed(self, idx):
+        try:
+            s = self.cmb_scale.itemData(idx) or 1.0
+        except Exception:
+            s = 1.0
+        self.set_ui_scale(float(s))
+
+    def set_ui_scale(self, s):
+        """外部/持久化用：设置界面缩放并重排。"""
+        s = max(SCALE_LEVELS[0], min(SCALE_LEVELS[-1], float(s)))
+        self.ui_scale = s
+        # 同步下拉框（不回环）
+        try:
+            self.cmb_scale.blockSignals(True)
+            idx = min(range(len(SCALE_LEVELS)),
+                      key=lambda i: abs(SCALE_LEVELS[i] - s))
+            self.cmb_scale.setCurrentIndex(idx)
+            self.cmb_scale.blockSignals(False)
+        except Exception:
+            pass
+        self._apply_scale()
+
+    def scaled_row_h(self):
+        """行高：正常按缩放算；用户把面板拖高时，行高跟着放大填满可用空间。
+
+        这样"拖高面板"是真的把轨道撑开（更容易点关键帧），
+        而不是行高不变、下面留一片空白。
+        """
+        base = max(16, int(round(ROW_H * self.ui_scale)))
+        if self._manual_h is None:
+            return base
+        n = max(1, len(self._rows()))
+        avail = (int(self._manual_h) - self._head.height()
+                 - self.scaled_time_h() - 6)
+        if avail <= 0:
+            return base
+        per = avail // n
+        # 最多放大到基准的 2.5 倍，避免一两条轨道被拉得夸张
+        return max(base, min(int(round(base * 2.5)), int(per)))
+
+    def scaled_time_h(self):
+        return max(16, int(round(TIME_H * self.ui_scale)))
+
+    def scaled_name_w(self):
+        return max(90, int(round(NAME_W * self.ui_scale)))
+
+    def _content_height(self):
+        """按当前行数 + 缩放算出的自然高度。"""
+        n = max(1, len(self._rows()))
+        return (self._head.height() + self.scaled_time_h()
+                + self.scaled_row_h() * n + 6)
+
+    def _resize_panel(self):
+        """面板高度：用户拖过就用手动值，否则按行数自适应。"""
+        if self._manual_h is not None:
+            h = int(self._manual_h)
+        else:
+            h = self._content_height()
+        h = max(PANEL_MIN_H, min(PANEL_MAX_H, h))
+        self.setFixedHeight(h)
+
+    # ---- 高度拖拽（面板上边缘 5px 热区）----
+    def _hit_h_edge(self, pos):
+        return pos.y() <= 5
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton and self._hit_h_edge(ev.position()):
+            self._h_drag = {"y0": int(ev.globalPosition().y()),
+                            "h0": int(self.height())}
+            self.setCursor(Qt.SizeVerCursor)
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        if self._h_drag is not None:
+            dy = int(ev.globalPosition().y()) - self._h_drag["y0"]
+            # 面板在底部：向上拖（dy<0）变高
+            new_h = self._h_drag["h0"] - dy
+            new_h = max(PANEL_MIN_H, min(PANEL_MAX_H, new_h))
+            self._manual_h = new_h
+            self._resize_panel()
+            ev.accept()
+            return
+        # 悬停到上边缘时显示调整光标
+        if self._hit_h_edge(ev.position()):
+            self.setCursor(Qt.SizeVerCursor)
+        else:
+            self.unsetCursor()
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if self._h_drag is not None:
+            self._h_drag = None
+            self.unsetCursor()
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        try:
+            self.area.update()
+        except Exception:
+            pass
+
 
     # ---------------- 数据访问 ----------------
     def _tracks(self):
@@ -159,8 +341,7 @@ class TimelinePanel(QWidget):
             self.spin_fps.blockSignals(False)
         except Exception:
             pass
-        n = max(1, len(self._rows()))
-        self.setFixedHeight(HEAD_H + TIME_H + ROW_H * n + 6)
+        self._resize_panel()          # 行数/缩放变了都要重算高度
         self.area.update()
 
     # ---------------- 头部动作 ----------------
@@ -234,12 +415,18 @@ class TimelinePanel(QWidget):
 
     # ---------------- 坐标换算 ----------------
     def lane_rect(self):
-        """时间轴绘制区（去掉左侧列名与时间刻度）。"""
-        rows = self._rows()
-        h = HEAD_H + TIME_H + ROW_H * max(1, len(rows))
-        return QRectF(NAME_W, HEAD_H + TIME_H,
-                      max(1.0, self.width() - NAME_W - LEFT_PAD),
-                      max(1.0, h - HEAD_H - TIME_H))
+        """时间轴绘制区（去掉左侧列名与时间刻度）。
+
+        高度取**实际可用高度**（面板可能被用户拖高/拖矮），
+        这样轨道行会按可用空间铺开，不会出现下方大块空白。
+        """
+        head_h = self._head.height()
+        time_h = self.scaled_time_h()
+        name_w = self.scaled_name_w()
+        avail = max(1.0, float(self.height() - head_h - time_h))
+        return QRectF(name_w, head_h + time_h,
+                      max(1.0, self.width() - name_w - LEFT_PAD),
+                      avail)
 
     def t_to_x(self, t):
         r = self.lane_rect()
@@ -264,16 +451,24 @@ class _TrackArea(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
     # ---- 命中测试 ----
+    def _geom(self):
+        """当前几何参数（全部按 panel.ui_scale 缩放）。"""
+        p = self.panel
+        return (p._head.height(), p.scaled_time_h(),
+                p.scaled_row_h(), p.scaled_name_w())
+
     def _row_at(self, y):
+        head_h, time_h, row_h, _ = self._geom()
         rows = self.panel._rows()
-        top = HEAD_H + TIME_H
-        i = int((y - top) // ROW_H)
+        i = int((y - (head_h + time_h)) // row_h)
         if 0 <= i < len(rows):
             return i
         return None
 
-    def _kf_at(self, x, y, px=7.0):
+    def _kf_at(self, x, y, px=None):
         """返回 (node, param, t) 或 None。"""
+        if px is None:
+            px = 7.0 * float(self.panel.ui_scale)
         i = self._row_at(y)
         if i is None:
             return None
@@ -291,77 +486,94 @@ class _TrackArea(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
         p.fillRect(self.rect(), C_BG)
 
-        rows = self.panel._rows()
-        dur = self.panel._dur()
-        lane = self.panel.lane_rect()
-        now = self.panel._now()
+        panel = self.panel
+        rows = panel._rows()
+        dur = panel._dur()
+        now = panel._now()
+        head_h, time_h, row_h, name_w = self._geom()
+        s = float(panel.ui_scale)
+        lane = panel.lane_rect()
 
         # 左侧列名区背景
-        p.fillRect(QRectF(0, HEAD_H, NAME_W, self.height() - HEAD_H), C_LANE)
+        p.fillRect(QRectF(0, head_h, name_w, self.height() - head_h), C_LANE)
         # 时间刻度区
-        p.fillRect(QRectF(0, HEAD_H, self.width(), TIME_H), C_HEAD)
+        p.fillRect(QRectF(0, head_h, self.width(), time_h), C_HEAD)
+
+        # ---- 字体（随缩放自适应，且最小 9px 保证可读）----
+        f_tick = QFont()
+        f_tick.setPixelSize(max(9, int(round(11 * s))))
+        f_row = QFont()
+        f_row.setPixelSize(max(10, int(round(12 * s))))
 
         # ---- 时间刻度 ----
-        font = QFont()
-        font.setPointSize(7)
-        p.setFont(font)
-        p.setPen(QPen(C_TEXT))
-        fm = QFontMetrics(font)
-        # 选一个"好看"的刻度间隔：保证最多 ~10 条主刻度
-        step = _nice_step(dur / 10.0)
+        p.setFont(f_tick)
+        fm = QFontMetrics(f_tick)
+        step = _nice_step(dur / max(4.0, 10.0 * s))
         t = 0.0
         while t <= dur + 1e-9:
-            x = self.panel.t_to_x(t)
+            x = panel.t_to_x(t)
+            # 格子线：从刻度区底部通到底
             p.setPen(QPen(C_GRID, 1))
-            p.drawLine(QPointF(x, HEAD_H + TIME_H - 4),
+            p.drawLine(QPointF(x, head_h + time_h - 4),
                        QPointF(x, self.height()))
-            p.setPen(QPen(C_TEXT))
-            s = ("%.2f" % t).rstrip("0").rstrip(".") + "s"
-            p.drawText(QPointF(x + 2, HEAD_H + TIME_H - 5), s)
+            # 整秒刻度用更亮的颜色，秒内的次刻度用稍暗的
+            is_major = abs(t - round(t)) < 1e-6
+            p.setPen(QPen(C_TICK_MAJOR if is_major else C_TEXT))
+            txt = ("%.2f" % t).rstrip("0").rstrip(".") + "s"
+            tw = fm.horizontalAdvance(txt)
+            p.drawText(QPointF(min(x + 3, self.width() - tw - 2),
+                               head_h + time_h - 6), txt)
             t += step
 
         # ---- 行 ----
+        p.setFont(f_row)
+        fm_row = QFontMetrics(f_row)
+        kf_r = max(4.0, 5.0 * s)
         for i, (node, param, track) in enumerate(rows):
-            y0 = HEAD_H + TIME_H + i * ROW_H
+            y0 = head_h + time_h + i * row_h
+            if y0 > self.height():
+                break
             bg = C_ROW_A if i % 2 == 0 else C_ROW_B
-            p.fillRect(QRectF(0, y0, self.width(), ROW_H), bg)
-            # 行名
+            p.fillRect(QRectF(0, y0, self.width(), row_h), bg)
+            # 行名（提亮 + 按缩放取字宽）
             p.setPen(QPen(C_TEXT_HI))
             label = "%s / %s" % (node, A.PARAM_LABELS.get(param, param))
-            p.drawText(QRectF(6, y0, NAME_W - 10, ROW_H),
+            p.drawText(QRectF(8, y0, name_w - 14, row_h),
                        Qt.AlignVCenter | Qt.AlignLeft,
-                       fm.elidedText(label, Qt.ElideRight, NAME_W - 12))
-            # 分隔线
+                       fm_row.elidedText(label, Qt.ElideRight, name_w - 16))
+            # 行分隔线
             p.setPen(QPen(C_GRID, 1))
-            p.drawLine(QPointF(0, y0 + ROW_H - 0.5),
-                       QPointF(self.width(), y0 + ROW_H - 0.5))
-            # 关键帧之间的连线（直观看出插值）
+            p.drawLine(QPointF(0, y0 + row_h - 0.5),
+                       QPointF(self.width(), y0 + row_h - 0.5))
+            # 关键帧之间的连线
             if len(track) >= 2:
-                p.setPen(QPen(QColor("#4a5568"), 1.5))
+                p.setPen(QPen(QColor("#5b6b82"), max(1.0, 1.5 * s)))
                 for a, b in zip(track, track[1:]):
-                    p.drawLine(QPointF(self.panel.t_to_x(a["t"]), y0 + ROW_H / 2),
-                               QPointF(self.panel.t_to_x(b["t"]), y0 + ROW_H / 2))
+                    p.drawLine(QPointF(panel.t_to_x(a["t"]), y0 + row_h / 2.0),
+                               QPointF(panel.t_to_x(b["t"]), y0 + row_h / 2.0))
             # 关键帧菱形
-            cy = y0 + ROW_H / 2
+            cy = y0 + row_h / 2.0
             for kf in track:
-                kx = self.panel.t_to_x(kf["t"])
-                sel = (self.panel._sel == (node, param, round(kf["t"], 6)))
-                _draw_diamond(p, kx, cy, 5.0,
+                kx = panel.t_to_x(kf["t"])
+                sel = (panel._sel == (node, param, round(kf["t"], 6)))
+                _draw_diamond(p, kx, cy, kf_r,
                               C_KF_SEL if sel else C_KF,
                               C_TEXT_HI if sel else QColor("#3a2f10"))
             # 名字列右侧分隔
             p.setPen(QPen(C_GRID, 1))
-            p.drawLine(QPointF(NAME_W - 0.5, y0), QPointF(NAME_W - 0.5, y0 + ROW_H))
+            p.drawLine(QPointF(name_w - 0.5, y0),
+                       QPointF(name_w - 0.5, y0 + row_h))
 
         # ---- 播放头 ----
-        px = self.panel.t_to_x(now)
-        p.setPen(QPen(C_PLAYHEAD, 1.5))
-        p.drawLine(QPointF(px, HEAD_H), QPointF(px, self.height()))
+        px = panel.t_to_x(now)
+        p.setPen(QPen(C_PLAYHEAD, max(1.5, 1.8 * s)))
+        p.drawLine(QPointF(px, head_h), QPointF(px, self.height()))
         # 顶部小三角
+        tri = max(5.0, 5.5 * s)
         path = QPainterPath()
-        path.moveTo(px - 5, HEAD_H)
-        path.lineTo(px + 5, HEAD_H)
-        path.lineTo(px, HEAD_H + 7)
+        path.moveTo(px - tri, head_h)
+        path.lineTo(px + tri, head_h)
+        path.lineTo(px, head_h + tri * 1.4)
         path.closeSubpath()
         p.setBrush(QBrush(C_PLAYHEAD))
         p.setPen(Qt.NoPen)
@@ -385,7 +597,7 @@ class _TrackArea(QWidget):
                                 "t0": hit[2], "moved": False}
             self.update()
             return
-        if y >= HEAD_H:
+        if y >= self._geom()[0]:
             # 点空白 = 跳播放头
             self.panel._scrub = True
             self.panel.seeked.emit(self.panel.x_to_t(x))
@@ -412,7 +624,7 @@ class _TrackArea(QWidget):
         # 悬停光标
         if self._kf_at(x, y):
             self.setCursor(Qt.SizeHorCursor)
-        elif y >= HEAD_H:
+        elif y >= self._geom()[0]:
             self.setCursor(Qt.PointingHandCursor)
         else:
             self.unsetCursor()

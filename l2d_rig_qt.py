@@ -108,7 +108,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.11.1"
+VERSION = "2.11.2"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -2021,12 +2021,14 @@ class Workbench(QWidget):
 
     # ---------- v2.11.0 关键帧动画：载入/初始状态 ----------
     def _load_anim_settings(self, d):
-        """从 rig_project.json 读回 keyframes / duration / fps。
+        """从 rig_project.json 读回 keyframes / duration / fps / 时间轴界面偏好。
 
         老工程没有这些字段时：keyframes={}（走原来的 sin 动画），
-        duration=4.0、fps=30（新默认）。全程容错，不让脏文件挡住工程打开。
+        duration=4.0、fps=30、ui_scale=1.0、panel_h=None（自适应）。
+        全程容错，不让脏文件挡住工程打开。
         """
         kf, dur, f = {}, 4.0, 30
+        ui_scale, panel_h = 1.0, None
         try:
             p = json.load(open(os.path.join(d, "rig_project.json"), encoding="utf8"))
             if isinstance(p.get("keyframes"), dict):
@@ -2039,14 +2041,26 @@ class Workbench(QWidget):
                 f2 = an.get("fps")
                 if isinstance(f2, int) and 1 <= f2 <= 120:
                     f = f2
+                # v2.11.2 界面偏好
+                s2 = an.get("ui_scale")
+                if isinstance(s2, (int, float)) and 0.5 <= float(s2) <= 2.0:
+                    ui_scale = float(s2)
+                h2 = an.get("panel_h")
+                if isinstance(h2, (int, float)) and 80 <= float(h2) <= 720:
+                    panel_h = int(h2)
         except Exception:
             pass
         self.rig["keyframes"] = kf
         self.duration = dur
         self.fps = f
-        if getattr(self, "anim_panel", None) is not None:
+        panel = getattr(self, "anim_panel", None)
+        if panel is not None:
             try:
-                self.anim_panel.refresh()
+                # 先恢复界面偏好，再 refresh（refresh 里会按 ui_scale 重算高度）
+                panel.set_ui_scale(ui_scale)
+                panel._manual_h = panel_h
+                panel._resize_panel()
+                panel.refresh()
             except Exception:
                 pass
 
@@ -3634,7 +3648,12 @@ class Workbench(QWidget):
                 # v2.11.0：关键帧动画 + 时间轴设置
                 "keyframes": getattr(self.rig, "get", lambda *a: None)("keyframes") or {},
                 "anim": {"duration": float(getattr(self, "duration", 4.0)),
-                          "fps": int(getattr(self, "fps", 30))},
+                          "fps": int(getattr(self, "fps", 30)),
+                          # v2.11.2：时间轴界面偏好（字号缩放 / 面板高度）
+                          "ui_scale": float(getattr(
+                              getattr(self, "anim_panel", None), "ui_scale", 1.0)),
+                          "panel_h": getattr(
+                              getattr(self, "anim_panel", None), "_manual_h", None)},
                 "nodes": [{"node": n["node"], "parent": n["parent"],
                            "pivot": n["pivot"], "layers": n["layers"]}
                           for n in self.rig["nodes"]]}
