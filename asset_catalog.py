@@ -74,7 +74,7 @@ ASSETS = [
         "size": 620000000,
         # 运行时是我们自己打包的，走 GitHub Release 资产
         "url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                "download/v2.11.1/runtime.zip"),
+                "download/v2.11.2/runtime.zip"),
         "dest": "runtime",
         "check": {"type": "exe", "path": "runtime/python.exe"},
     },
