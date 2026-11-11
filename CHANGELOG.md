@@ -5,6 +5,19 @@
 
 ---
 
+## v2.9.0（2026-11-11 17:20）资产管理中心 + 安装包不再下模型
+
+- **「资产管理」菜单**（顶栏 `文件 / 编辑 / 资产管理`，编辑右侧）：下拉列出全部可下载资产，**已下载的显示 ✔ 和实际占用**，未下载的显示 ⬇ 和体积，点一下即下载。分两组：运行环境 / 模型。菜单每次打开都实时重建（本地可能刚下完或用户手删了目录），底部有「刷新状态」。
+  - 实测渲染：`— 运行环境 —` / `⬇ 内置 Python 运行时（591 MB）` / `— 模型 —` / `⬇ 分层模型 LayerDiff3D (nf4)（3242 MB）` / `⬇ 深度模型 Marigold (nf4)（1812 MB）` / `✔ MobileSAM（精细拆分）（已下载 39 MB）` / `刷新状态`
+- **架构调整（用户要求）**：**取消"安装包下载模型"这条路径**。安装包今后只装程序本体，装完即可打开；Python 运行时 + 全部模型都移到资产管理里按需下载。这样用户装完不会被 5.3GB 下载卡住，体验更好。
+- **新增三个模块**：
+  - `asset_catalog.py`（队友交付，22/22 自测通过）：纯数据层。定义 ASSETS（runtime 620MB / LayerDiff3D 3.4GB / Marigold 1.9GB / MobileSAM 40MB），提供 `is_installed` / `installed_size` / `missing_assets` / `installed_path` / `asset_by_id`，全部容错不抛异常。
+  - `asset_downloader.py`：后台线程下载（5GB 直接在主线程会卡死 UI），支持 **HTTP Range 断点续传**、多镜像依次尝试（hf-mirror 优先）、`.part` 残留复用、zip 自动解压（智能剥掉单层顶层目录）、防 zip slip、可取消。配套 `AssetDownloadDialog`（进度条 + 已下/总量 + 百分比 + 取消）。
+  - 两个方法 `_rebuild_asset_menu` / `_add_asset_action` / `_start_asset_download` 挂在 Workbench 上。
+- **修**：`FluentIcon.SYSTEM` 不存在（改用 `DEVELOPER_TOOLS`）；三个资产方法缩进错误被嵌成局部函数（`_add_asset_action` / `_start_asset_download` 现为正常类方法）；资产按钮最初插错容器（Workbench 内部的 `tb_lay` 不是顶栏，真正顶栏在 `MainWindow` 的 `tbar.insertWidget`），已修正到 `insertWidget(3, ...)`。
+- **实测**：资产 UI 专项 13 项全 PASS（按钮存在/文字/菜单分组完整/四类资产齐全/已装显示✔未装显示⬇/未配 url 点击不崩）；asset_catalog 22/22；七套回归全绿（layer_menu / finisher / proj_nav / transform_test / mesh_test 96 项 / asset_catalog / asset_ui）。
+- **版本号**：体系性架构调整 -> minor+1 -> **v2.9.0**。
+
 ## v2.8.0（2026-11-11 16:10）启动器 Python 环境自适应 + 修模型"假就位"误报
 
 - **启动器 Python 环境自适应**（解决真实用户反馈：装到 `F:\木偶工作室` 启动报"找不到 Python: D:\Python312\python.exe"）：原启动器把 `D:\Python312\python.exe` 写死为回退值，换台机器就崩。现在按顺序探测：

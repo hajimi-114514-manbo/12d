@@ -38,7 +38,6 @@ from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             MessageBox, InfoBar, InfoBarPosition,
                             MessageBoxBase, SubtitleLabel, LineEdit)
 
-
 class ToggleDropDownButton(TransparentDropDownPushButton):
     """下拉按钮自管理开合状态，不依赖 isVisible() 时机：
     - Popup 抓取失效（frameless 常见）：第二次点击的 release 会到达按钮 -> 按 _open 标志 close
@@ -87,7 +86,6 @@ import l2d_rig_core as C
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
 
-
 def zh_err(e):
     """把常见英文异常翻成人话中文，其余保留原始信息"""
     s = str(e)
@@ -106,7 +104,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.8.0"
+VERSION = "2.9.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -118,7 +116,6 @@ FFMPEG_CANDIDATES = [os.path.join(V2, "ffmpeg.exe"),
                      r"D:\BaiduNetdiskDownload\Vocal2Midi\ffmpeg.exe"]
 
 PROJ_BASE = os.path.join(V2, "projects")   # 新建工程默认根目录
-
 
 def find_enclosed_holes(alpha):
     """在 alpha 通道里找"被不透明像素包围的洞"（图层补洞用）。
@@ -151,7 +148,6 @@ def find_enclosed_holes(alpha):
         return None
     return keep, int((keep > 0).sum()), cnt
 
-
 def make_mesh_icon(color="#dcdcdc", px=64):
     """选项栏「网格变形」开关图标：3×3 网格 + 中心点偏移（示意弯曲）。"""
     pm = QPixmap(px, px)
@@ -183,7 +179,6 @@ def make_mesh_icon(color="#dcdcdc", px=64):
     p.end()
     return QIcon(pm)
 
-
 def make_curve_icon(color="#dcdcdc", px=64):
     """选项栏「曲线套索」开关图标：一条 S 形贝塞尔曲线 + 两端控制点。"""
     pm = QPixmap(px, px)
@@ -207,7 +202,6 @@ def make_curve_icon(color="#dcdcdc", px=64):
         p.drawEllipse(QPointF(cx * s, cy * s), d / 2, d / 2)
     p.end()
     return QIcon(pm)
-
 
 def make_lasso_icon(color="#dcdcdc", px=64):
     """PS 风格「多边形套索」图标（自绘）。
@@ -247,14 +241,12 @@ def make_lasso_icon(color="#dcdcdc", px=64):
     p.end()
     return QIcon(pm)
 
-
 def sanitize_proj_name(name, maxlen=60):
     """清洗工程名：去掉路径/文件名非法字符与首尾空白，截断 maxlen。"""
     name = (name or "").strip()
     for ch in r'\/:*?"<>|':
         name = name.replace(ch, "")
     return name.strip()[:maxlen]
-
 
 def unique_proj_name(base, base_dir=None):
     """返回不重名的工程名：重名自动加 _2/_3…"""
@@ -265,8 +257,6 @@ def unique_proj_name(base, base_dir=None):
         cand = "%s_%d" % (base, n)
         n += 1
     return cand
-
-
 
 # ---------------- 历史栈（撤销/重做） ----------------
 class History:
@@ -378,7 +368,6 @@ class History:
         self.undo_stack.append(snap)
         self.apply(studio, snap)
         return True
-
 
 # ---------------- 预览画布 ----------------
 class RigCanvas(QWidget):
@@ -1033,11 +1022,9 @@ class RigCanvas(QWidget):
                 self.image_dropped.emit(p)
                 break
 
-
 # ---------------- 最近工程（持久化，最多 5 条） ----------------
 RECENT_FILE = os.path.join(V2, "recent_projects.json")
 RECENT_MAX = 5
-
 
 def load_recent():
     try:
@@ -1053,14 +1040,12 @@ def load_recent():
             break
     return out
 
-
 def save_recent(items):
     try:
         json.dump(items[:RECENT_MAX], open(RECENT_FILE, "w", encoding="utf8"),
                   ensure_ascii=False, indent=2)
     except Exception:
         pass      # 持久化失败不影响使用
-
 
 # ---------------- 拆分进度锚点（日志文本 -> 百分比，单调不回退） ----------------
 # 本地引擎 verbose 消息对照表；未命中的消息保持上次值。
@@ -1085,7 +1070,6 @@ PROGRESS_ANCHORS = [
     ("收集 ", 95),
 ]
 
-
 def progress_for_msg(msg):
     """返回该日志消息对应的百分比锚点，未知消息返回 None"""
     for key, pct in PROGRESS_ANCHORS:
@@ -1093,9 +1077,7 @@ def progress_for_msg(msg):
             return pct
     return None
 
-
 _CUDA_CACHE = [None]
-
 
 def _cuda_available():
     """惰性检测 CUDA 可用性（结果缓存；torch 只在首次调用时 import）"""
@@ -1106,7 +1088,6 @@ def _cuda_available():
         except Exception:
             _CUDA_CACHE[0] = False
     return _CUDA_CACHE[0]
-
 
 def find_meta(d):
     """工程元数据路径：优先 layers_meta.json；
@@ -1121,7 +1102,6 @@ def find_meta(d):
         return None
     return max(cands, key=os.path.getmtime) if cands else None
 
-
 # ---------------- 后台拆分线程（照 fluent_worker 模式） ----------------
 def _engine_mode():
     """选拆分引擎：
@@ -1132,7 +1112,6 @@ def _engine_mode():
     if force in ("local", "comfy"):
         return force
     return "local" if _cuda_available() else "comfy"
-
 
 class DecomposeWorker(QThread):
     log_signal = Signal(str)
@@ -1170,7 +1149,6 @@ class DecomposeWorker(QThread):
         except Exception as e:
             self.log_signal.emit("异常: %s: %s" % (type(e).__name__, e))
             self.done_signal.emit(None, self.out_dir)
-
 
 # ---------------- 新建画布尺寸对话框 ----------------
 class NumSpinBox(QWidget):
@@ -1272,7 +1250,6 @@ class NumSpinBox(QWidget):
         elif str(v) != self.editor.text():
             self.setValue(v)
 
-
 class NewCanvasDialog(MessageBoxBase):
     """「文件 → 新建」弹窗：输入工程名 + 画布宽高（像素）。默认 1024×1024，1..8192。"""
 
@@ -1331,7 +1308,6 @@ class NewCanvasDialog(MessageBoxBase):
         # 基类 MaskDialogBase.__init__ 内部调 self.size() 时控件还没建好（实测崩）
         return self.w_spin.value(), self.h_spin.value()
 
-
 # ---------------- 工程名输入弹窗（另存为用） ----------------
 class ProjectNameDialog(MessageBoxBase):
     """单行输入弹窗：默认填当前工程名，用户可改。"""
@@ -1362,7 +1338,6 @@ class ProjectNameDialog(MessageBoxBase):
 
     def project_name(self):
         return sanitize_proj_name(self.name_edit.text())
-
 
 # ---------------- PS 风格图层列表委托 ----------------
 class LayerItemDelegate(ListItemDelegate):
@@ -1519,7 +1494,6 @@ class LayerItemDelegate(ListItemDelegate):
         if old and new:
             self.wb.rename_layer(old, new)
 
-
 # ---------------- 工作台页 ----------------
 class Workbench(QWidget):
     def __init__(self, win):
@@ -1642,6 +1616,17 @@ class Workbench(QWidget):
         edit.menu_opened.connect(self._sync_edit_menu_state)
         self.edit_btn = edit
         self.edit_ref = em
+
+        # ===== 资产管理（编辑右侧）：运行时 / 模型 的下载与状态 =====
+        # 安装包不再下载模型，装完即可打开；缺什么在这里按需下载。
+        am = ToggleDropDownButton("资产管理", self)
+        self.asset_menu = RoundMenu(parent=self)
+        # 内容在菜单打开时懒构建（要查本地是否已下载，可能扫目录）
+        self.asset_menu_ref = self.asset_menu
+        am.setMenu(self.asset_menu)
+        am.menu_opened.connect(lambda _m: self._rebuild_asset_menu())
+        self.asset_btn = am
+        self.asset_menu_btn = am
         menu.setFixedHeight(30)
         edit.setFixedHeight(30)
         tb_lay.addWidget(menu)
@@ -1649,7 +1634,7 @@ class Workbench(QWidget):
 
         # 兜底：下拉菜单打开期间轮询光标，移出菜单矩形 250ms 即收起。
         # 状态全部由按钮自己记账（menu_opened / aboutToHide），不依赖 isVisible 时机。
-        self._dropdowns = [(menu, m), (edit, em)]     # 看门狗管理所有下拉按钮
+        self._dropdowns = [(menu, m), (edit, em), (am, self.asset_menu)]     # 看门狗管理所有下拉按钮
         self._menu_open = False
         menu.menu_opened.connect(self._menu_about_to_show)
         edit.menu_opened.connect(self._menu_about_to_show)
@@ -2087,7 +2072,6 @@ class Workbench(QWidget):
         layer["bbox"] = snap["bbox"]
         self.rig.pop("_lite", None)
 
-
     # ---------- 交互 ----------
     def _on_pivot_drag(self, node, x, y):
         n = next((m for m in self.rig["nodes"] if m["node"] == node), None)
@@ -2175,7 +2159,6 @@ class Workbench(QWidget):
         self.canvas.update()
         self.redraw()          # 输入数值也要实时预览（与拖动控制点一致）
 
-
     # ---------- 选区：复制 / 剪切 / 粘贴（PS 风格）----------
     def _selection_layer(self):
         """当前选区所属的图层。
@@ -2217,6 +2200,88 @@ class Workbench(QWidget):
         self.canvas.lasso_cancel_selection()
         self._sync_edit_menu_state()
 
+    def _rebuild_asset_menu(self):
+        """构建「资产管理」菜单：列出全部可下载资产 + 已下载状态 + 下载入口。
+    
+        每次打开菜单都重建（本地可能刚下载完、或用户手动删了目录），
+        所以状态判定走 asset_catalog 的实时检查而不是缓存。
+        """
+        try:
+            import asset_catalog as AC
+        except Exception as e:
+            self.asset_menu.clear()
+            self.asset_menu.addAction(Action(
+                FluentIcon.INFO, "资产清单模块缺失: %s" % e))
+            return
+        self.asset_menu.clear()
+        base = V2
+        try:
+            miss = {a["id"] for a in AC.missing_assets(base)}
+        except Exception:
+            miss = set()
+        # 运行时单独一组（最影响"装完能不能打开"）
+        self.asset_menu.addAction(Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
+        for a in AC.ASSETS:
+            try:
+                if a.get("kind") != "runtime":
+                    continue
+            except Exception:
+                continue
+            self._add_asset_action(a, a["id"] not in miss)
+        self.asset_menu.addSeparator()
+        self.asset_menu.addAction(Action(FluentIcon.FOLDER, "— 模型 —"))
+        for a in AC.ASSETS:
+            try:
+                if a.get("kind") == "runtime":
+                    continue
+            except Exception:
+                continue
+            self._add_asset_action(a, a["id"] not in miss)
+        self.asset_menu.addSeparator()
+        self.asset_menu.addAction(Action(
+            FluentIcon.SYNC, "刷新状态",
+            triggered=self._rebuild_asset_menu))
+    
+    def _add_asset_action(self, a, done):
+        import asset_catalog as AC
+        mb = a.get("size", 0) / (1024.0 * 1024.0)
+        if done:
+            try:
+                got = AC.installed_size(a, V2) / (1024.0 * 1024.0)
+            except Exception:
+                got = mb
+            text = "✔ %s（已下载 %.0f MB）" % (a.get("name", a["id"]), got)
+            self.asset_menu.addAction(Action(FluentIcon.ACCEPT, text))
+        else:
+            text = "⬇ %s（%.0f MB）" % (a.get("name", a["id"]), mb)
+            act = Action(FluentIcon.DOWNLOAD, text,
+                          triggered=lambda _=False, x=a: self._start_asset_download(x))
+            self.asset_menu.addAction(act)
+    
+    def _start_asset_download(self, a):
+        """启动资产下载（后台线程）。下载器在 asset_downloader.py，
+        不在主线程做网络：5GB 会卡死 UI。"""
+        try:
+            import asset_downloader as AD
+        except Exception as e:
+            InfoBar.warning("资产下载", "下载模块缺失: %s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return
+        url = a.get("url") or ""
+        if not url:
+            InfoBar.warning("资产下载",
+                            "%s 还没有配置下载地址" % a.get("name", a["id"]),
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=4000)
+            return
+        dlg = AD.AssetDownloadDialog(a, V2, self)
+        try:
+            dlg.start()
+            dlg.exec()
+        except Exception as e:
+            InfoBar.warning("资产下载", "启动失败: %s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+    
     def _sync_edit_menu_state(self):
         """刷新「编辑」菜单里选区相关项的可用性（PS：没选区时复制/剪切/反选是灰的）。"""
         try:
@@ -2777,7 +2842,6 @@ class Workbench(QWidget):
                 break
         self.redraw()
 
-
     def _sync_lite_bbox(self, layer):
         """_lite 缓存里存的是各层裁剪图+bbox，源层 bbox 变了必须同步，
         否则预览仍画旧位置（曾踩：移动后画面不动，看起来像"只改了层级"）。
@@ -2795,7 +2859,6 @@ class Workbench(QWidget):
                     ll["bbox"] = (nx0, ny0, nx1, ny1)
                     ll["img"] = cv2.resize(layer["img"], (nx1 - nx0, ny1 - ny0),
                                            interpolation=cv2.INTER_AREA)
-
 
     def _select_in_list(self, name):
         """程序化选中列表项（会经 currentItemChanged 同步到画布）。"""
@@ -3578,7 +3641,6 @@ class Workbench(QWidget):
             InfoBar.error("拆分失败", "SeeThrough 未返回结果", parent=self,
                           position=InfoBarPosition.TOP, duration=4000)
 
-
 def _gif_frames(rgba_list):
     """RGBA 帧序列 -> GIF P 帧：255 色量化 + 索引 255 专属透明。
     返回 (frames, trans_index)。alpha<128 的像素一律映射到透明索引。"""
@@ -3598,7 +3660,6 @@ def _gif_frames(rgba_list):
         im.paste(Image.fromarray(idx, mode="P"))
         frames.append(im)
     return frames, TRANS
-
 
 # ---------------- 后台导出线程（MP4/GIF 渲染要几十秒，绝不阻塞 UI） ----------------
 class ExportWorker(QThread):
@@ -3665,7 +3726,6 @@ class ExportWorker(QThread):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
-
 class SidebarIcon(QIcon):
     """DSH 同款「侧栏面板」图标：圆角矩形 + 左侧分隔竖线，白色线条。
     用 QIcon 的 pixmap 回调按需生成，选中态（折叠时）自动高亮。"""
@@ -3690,12 +3750,10 @@ class SidebarIcon(QIcon):
         p.end()
         return pm
 
-
 # ---------------- 主窗 ----------------
 # 1px 深色细线分隔条（默认 6px 白条太抢眼）
 SPLIT_QSS = ("QSplitter::handle { background: #3a3f4a; }"
              "QSplitter::handle:hover { background: #4d88ff; }")
-
 
 class MainWindow(FluentWindow):
     def __init__(self):
@@ -3754,6 +3812,7 @@ class MainWindow(FluentWindow):
         tbar.insertWidget(0, self.btn_collapse, 0, Qt.AlignLeft | Qt.AlignVCenter)
         tbar.insertWidget(1, self.wb.menu_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
         tbar.insertWidget(2, self.wb.edit_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+        tbar.insertWidget(3, self.wb.asset_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
         # 快捷键
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.wb.act_undo)
         QShortcut(QKeySequence("Ctrl+Y"), self, activated=self.wb.act_redo)
@@ -3834,7 +3893,6 @@ class MainWindow(FluentWindow):
             if os.path.isdir(d):
                 self.add_project_entry(fn, d)
 
-
 def run_app():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -3848,7 +3906,6 @@ def run_app():
     w = MainWindow()
     w.show()
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     run_app()
