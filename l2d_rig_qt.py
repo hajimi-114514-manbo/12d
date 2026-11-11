@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
 功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做/拆分图片）。
@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (QApplication, QWidget, QHBoxLayout, QVBoxLayout,
                                QStackedWidget, QListWidgetItem, QTreeWidgetItem,
                                QSplitter, QStyledItemDelegate, QAbstractItemView,
                                QStyle, QButtonGroup)
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QSize, QEvent, QRect
-from PySide6.QtGui import (QImage, QPixmap, QPainter, QColor, QKeySequence,
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QPoint, QPointF, QSize, QEvent, QRect
+from PySide6.QtGui import (QImage, QPixmap, QPainter, QPainterPath, QColor, QKeySequence,
                            QShortcut, QIcon, QCursor, QPen, QBrush,
                            QIntValidator, QPolygon)
 
@@ -105,7 +105,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -117,6 +117,63 @@ FFMPEG_CANDIDATES = [os.path.join(V2, "ffmpeg.exe"),
                      r"D:\BaiduNetdiskDownload\Vocal2Midi\ffmpeg.exe"]
 
 PROJ_BASE = os.path.join(V2, "projects")   # 新建工程默认根目录
+
+
+def find_enclosed_holes(alpha):
+    """在 alpha 通道里找"被不透明像素包围的洞"（图层补洞用）。
+
+    算法：对透明区做连通域分解；**触到图像边界**的分量是"外部"（bbox 外的
+    空角，不该填），不触边界的分量才是"洞"。单次连通域分解，O(像素) 一遍。
+    返回 (mask uint8 洞=255, 洞面积, 洞数量) 或 None（无洞）。
+    面积 <16px 的分量忽略（抗锯齿噪点）。
+    """
+    import cv2
+    trans = (alpha == 0).astype(np.uint8)
+    if not trans.any():
+        return None
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(trans, 8)
+    if n <= 1:
+        return None
+    h, w = alpha.shape
+    # 哪些分量触边 = 外部
+    border = np.concatenate([lab[0, :], lab[-1, :], lab[:, 0], lab[:, -1]])
+    outside = set(int(v) for v in border if v != 0)
+    keep = np.zeros((h, w), np.uint8)
+    cnt = 0
+    for i in range(1, n):
+        if i in outside:
+            continue
+        if stats[i, cv2.CC_STAT_AREA] >= 16:
+            keep[lab == i] = 255
+            cnt += 1
+    if not keep.any():
+        return None
+    return keep, int((keep > 0).sum()), cnt
+
+
+def make_curve_icon(color="#dcdcdc", px=64):
+    """选项栏「曲线套索」开关图标：一条 S 形贝塞尔曲线 + 两端控制点。"""
+    pm = QPixmap(px, px)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    s = float(px)
+    pen = QPen(QColor(color))
+    pen.setWidthF(max(2.0, s * 0.10))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    path = QPainterPath()
+    path.moveTo(0.16 * s, 0.80 * s)
+    path.cubicTo(0.62 * s, 0.72 * s, 0.38 * s, 0.28 * s, 0.84 * s, 0.20 * s)
+    p.drawPath(path)
+    d = max(4.0, s * 0.16)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    for cx, cy in ((0.16, 0.80), (0.84, 0.20)):
+        p.drawEllipse(QPointF(cx * s, cy * s), d / 2, d / 2)
+    p.end()
+    return QIcon(pm)
 
 
 def make_lasso_icon(color="#dcdcdc", px=64):
@@ -332,6 +389,7 @@ class RigCanvas(QWidget):
         self._lasso_op = "add"          # 当前圈的选区操作：add / sub
         self._selection_active = False  # 选区已激活（闭合后等用户复制/剪切/应用）
         self._selection_invert = False  # 反选显示（选区=多边形之外）
+        self._lasso_curve = False       # 曲线套索模式（选项栏开关）
 
     def set_tool(self, t):
         if t != self.tool:
@@ -472,9 +530,16 @@ class RigCanvas(QWidget):
             def _w(px, py):
                 return QPoint(int(ox + px * sc * s), int(oy + py * sc * s))
             # 已闭合选区：加选=蓝色实线，减选=红色虚线（PS 的加/减选配色）
+            # curve 选区：用样条加密后的点绘制，预览与掩码边界一致
             inv = bool(getattr(self, "_selection_invert", False))
             for sel in self._lasso_done:
-                pts = [_w(px, py) for px, py in sel.get("points", [])]
+                raw = sel.get("points", [])
+                if sel.get("curve"):
+                    import lasso_tool
+                    dense = lasso_tool.expand_curve_points(raw)
+                    pts = [_w(px, py) for px, py in dense]
+                else:
+                    pts = [_w(px, py) for px, py in raw]
                 if len(pts) < 2:
                     continue
                 sub = sel.get("op") == "sub"
@@ -484,6 +549,12 @@ class RigCanvas(QWidget):
                 poly = QPolygon(pts)
                 poly.append(pts[0])
                 p.drawPolyline(poly)
+                # 曲线模式：控制点画空心圈（PS 贝塞尔编辑点的样子）
+                if sel.get("curve"):
+                    p.setPen(QPen(QColor("#4d88ff"), 1))
+                    p.setBrush(Qt.NoBrush)
+                    for cp in (_w(px, py) for px, py in raw):
+                        p.drawEllipse(cp, 3, 3)
             # 反选态：额外描出画布边框（橙黄虚线），表示"框外全部被选中"
             if inv and self._lasso_done:
                 p.setPen(QPen(QColor("#f0a020"), 1, Qt.DashLine))
@@ -633,7 +704,9 @@ class RigCanvas(QWidget):
             return
         if op is None:
             op = getattr(self, "_lasso_op", "add")
-        self._lasso_done.append({"points": pts, "op": op})
+        # curve 模式：控制点少而稀，实际选区边界由 Catmull-Rom 样条加密（PS 曲线套索）
+        self._lasso_done.append({"points": pts, "op": op,
+                                 "curve": bool(getattr(self, "_lasso_curve", False))})
         self._selection_active = True       # 进入选区状态（不立即裁剪）
         self.selection_changed.emit(list(self._lasso_done))
 
@@ -1344,10 +1417,19 @@ class Workbench(QWidget):
                                 triggered=self.act_paste_selection)
         self.act_invert = Action(FluentIcon.SYNC, "反选  Ctrl+Shift+I",
                                  triggered=self.act_invert_selection)
-        for _a in (self.act_copy, self.act_cut, self.act_invert):
+        self.act_deselect = Action(FluentIcon.CANCEL, "取消选择  Ctrl+D",
+                                   triggered=self.act_deselect_selection)
+        for _a in (self.act_copy, self.act_cut, self.act_invert, self.act_deselect):
             _a.setEnabled(False)          # 默认禁用，菜单打开时按选区状态刷新
-        for _a in (self.act_copy, self.act_cut, self.act_paste, self.act_invert):
+        for _a in (self.act_copy, self.act_cut, self.act_paste, self.act_invert,
+                   self.act_deselect):
             em.addAction(_a)
+        em.addSeparator()
+        # 图层补洞（Mocha Remove 简化版）：填充当前层的透明洞
+        self.act_inpaint = Action(FluentIcon.BROOM, "图层补洞",
+                                  triggered=self.act_inpaint_layer)
+        self.act_inpaint.setEnabled(False)   # 需要选中图层
+        em.addAction(self.act_inpaint)
         em.addSeparator()
         # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
         em.addAction(Action(FluentIcon.ZOOM, "拆分图片（SeeThrough）",
@@ -1432,6 +1514,13 @@ class Workbench(QWidget):
             lambda v: setattr(self, "lasso_feather", int(v)))
         _opl.addWidget(self.spin_feather)
         _opl.addWidget(CaptionLabel("px", self.canvas_options))
+        # 曲线模式（PS 曲线套索）：控制点之间用 Catmull-Rom 样条平滑
+        self.btn_curve = TransparentToggleToolButton(make_curve_icon(), self.canvas_options)
+        self.btn_curve.setToolTip("曲线套索：闭合后控制点间用样条曲线平滑（少点圈大形）")
+        self.btn_curve.setFixedSize(28, 28)
+        self.btn_curve.toggled.connect(
+            lambda on: setattr(self.canvas, "_lasso_curve", bool(on)))
+        _opl.addWidget(self.btn_curve)
         _opl.addStretch(1)
         # 顶点拖动后重新应用选区
         self.btn_lasso_apply = TransparentToolButton(FluentIcon.ACCEPT,
@@ -1771,7 +1860,8 @@ class Workbench(QWidget):
                        and bool(getattr(self, "_selection_data", None)))
             for a in (getattr(self, "act_copy", None),
                       getattr(self, "act_cut", None),
-                      getattr(self, "act_invert", None)):
+                      getattr(self, "act_invert", None),
+                      getattr(self, "act_deselect", None)):
                 if a is not None:
                     a.setEnabled(has_sel)
             p = getattr(self, "act_paste", None)
@@ -1779,8 +1869,76 @@ class Workbench(QWidget):
                 md = QApplication.clipboard().mimeData()
                 ok = bool(md and md.hasImage())
                 p.setEnabled(ok)
+            # 图层补洞：需要选中图层且该层有透明洞（bbox 范围内）
+            ip = getattr(self, "act_inpaint", None)
+            if ip is not None:
+                layer = self.layer_by_name(self._selected) if self._selected else None
+                ok2 = False
+                if layer is not None and not self.locked.get(layer["name"]):
+                    a = layer["img"][:, :, 3]
+                    ok2 = int((a == 0).sum()) >= 16   # 至少 16 个透明像素才算有洞
+                ip.setEnabled(ok2)
         except Exception:
             pass
+
+    def act_deselect_selection(self):
+        """取消选择（Ctrl+D，PS 的选择 > 取消选择）"""
+        if not getattr(self, "_selection_active", False):
+            return
+        self._clear_selection()
+        InfoBar.info("取消选择", "选区已清除", parent=self,
+                     position=InfoBarPosition.TOP, duration=1500)
+
+    def act_inpaint_layer(self):
+        """图层补洞：填充当前选中图层的透明洞（Mocha Remove 简化版）。
+
+        洞 = 图层 bbox 内 alpha==0 但被不透明像素包围的区域。
+        实现：cv2.morphologyEx 闭运算找到"被包围的洞" -> cv2.inpaint 填 RGB
+        -> 洞内 alpha 置 255。bbox 外的大片透明不算洞（不填）。
+        """
+        if self.rig is None:
+            return
+        name = self._selected
+        if not name:
+            InfoBar.info("图层补洞", "请先选中一个图层", parent=self,
+                         position=InfoBarPosition.TOP, duration=2000)
+            return
+        layer = self.layer_by_name(name)
+        if layer is None:
+            return
+        if self.locked.get(name):
+            InfoBar.warning("图层已锁定", "「%s」已锁定，无法补洞" % name, parent=self,
+                            position=InfoBarPosition.TOP, duration=2500)
+            return
+        import lasso_tool
+        img = layer.get("img")
+        if img is None or getattr(img, "ndim", 0) != 3:
+            return
+        holes = find_enclosed_holes(img[:, :, 3])
+        if holes is None:
+            InfoBar.info("图层补洞", "该图层没有被包围的透明洞", parent=self,
+                         position=InfoBarPosition.TOP, duration=2000)
+            return
+        hole_mask, hole_area, hole_cnt = holes
+        new_rgba = lasso_tool.inpaint_holes(img, radius=3, holes=hole_mask)
+        newL = dict(layer)
+        newL["img"] = new_rgba
+        # 替换 layers / rig['_layers']（新 dict，历史快照才能正确撤销）
+        for arr in (self.layers, self.rig.get("_layers", [])):
+            for i, x in enumerate(arr):
+                if x["name"] == name:
+                    arr[i] = newL
+        if self.rig.get("_layers") is not self.layers:
+            self.rig["_layers"] = [newL if x is layer else x
+                                    for x in self.rig.get("_layers", [])]
+        self.rig.pop("_lite", None)
+        self._sync_layer_index()
+        self.history.push(self)
+        self.reload_widgets()
+        self._select_in_list(name)
+        InfoBar.success("图层补洞", "%s：填充了 %d 个洞（%d 像素）" % (
+            name, hole_cnt, hole_area), parent=self,
+            position=InfoBarPosition.TOP, duration=2500)
 
     def act_invert_selection(self):
         """反选（Ctrl+Shift+I，PS 的"选择 > 反向"）。
@@ -1881,7 +2039,7 @@ class Workbench(QWidget):
         h, w = layer["img"].shape[:2]
         add_masks, sub_masks = [], []
         for sel in self._selection_data or []:
-            pts = sel.get("points") or []
+            pts = lasso_tool.selection_points(sel)
             op = sel.get("op", "add")
             local = [(px - x0, py - y0) for px, py in pts]
             m = lasso_tool.polygon_mask(local, w, h)
@@ -1994,7 +2152,7 @@ class Workbench(QWidget):
         # 各选区掩码画在图层自身坐标系
         add_masks, sub_masks = [], []
         for sel in selections:
-            pts = sel.get("points") or []
+            pts = lasso_tool.selection_points(sel)
             op = sel.get("op", "add")
             local = [(px - x0, py - y0) for px, py in pts]
             m = lasso_tool.polygon_mask(local, w, h)
@@ -3133,6 +3291,9 @@ class MainWindow(FluentWindow):
         # 反选（PS 的选择反向）
         QShortcut(QKeySequence("Ctrl+Shift+I"), self,
                   activated=self.wb.act_invert_selection)
+        # 取消选择（PS Ctrl+D）
+        QShortcut(QKeySequence("Ctrl+D"), self,
+                  activated=self.wb.act_deselect_selection)
         # Delete / Enter：把选区真正裁剪到图层；Esc：取消选区
         QShortcut(QKeySequence("Del"), self,
                   activated=lambda: self.wb.canvas.lasso_apply_selection())
