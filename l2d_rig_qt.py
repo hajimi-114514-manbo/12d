@@ -106,7 +106,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.6.0"
+VERSION = "2.6.1"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -1593,7 +1593,8 @@ class Workbench(QWidget):
         self.canvas.lasso_committed.connect(self._on_lasso_committed)
         self.canvas.selection_changed.connect(self._on_selection_changed)
         self.canvas.ft_committed.connect(self._on_ft_committed)
-        self.canvas.ft_changed.connect(lambda st: self._update_ft_spins())
+        # 拖动中：既回填选项栏数字，也重渲染画面（实时预览 warp 后的图层）
+        self.canvas.ft_changed.connect(self._on_ft_changed)
         self.canvas.ft_cancelled.connect(self._on_ft_cancelled)
         # 工具互斥：移动 / 多边形套索。
         # **不用 QButtonGroup 的 exclusive 模式**——它不允许取消已选中的按钮
@@ -1943,13 +1944,56 @@ class Workbench(QWidget):
                                  (self.visible.get(l["name"], True),
                                   self.locked.get(l["name"], False)))
                                 for l in self.layers])
+        # 自由变换实时预览：临时把变换层换成 warp 结果渲染，渲染后恢复。
+        # 复用 render_frame_rgba 的合成逻辑（depth/叠放顺序全部一致），
+        # 拖动中每帧 warp 一次 -> 画面跟着框走，而不是只更新选项栏数字。
+        _ft_restore = None
+        if self.canvas.ft_active():
+            try:
+                _ft_restore = self._apply_ft_preview()
+            except Exception:
+                _ft_restore = None
         # 播放走半分辨率 LOD + 预乘直出（省出口除法，~30ms/帧），透明区画布显示棋盘格
-        img = C.render_frame_rgba(self.rig, self.t, hidden=hidden,
-                                  scale=PREVIEW_SCALE, premul=True)
+        try:
+            img = C.render_frame_rgba(self.rig, self.t, hidden=hidden,
+                                      scale=PREVIEW_SCALE, premul=True)
+        finally:
+            # 无论渲染是否异常都必须恢复：预览只借道渲染，绝不污染图层数据
+            if _ft_restore is not None:
+                self._restore_ft_preview(_ft_restore)
         sc = PREVIEW_SCALE
         piv = {n["node"]: (n["pivot"][0] * sc, n["pivot"][1] * sc)
                for n in self.rig["nodes"] if n["node"] != "root"}
         self.canvas.set_frame(img, piv)
+
+    def _apply_ft_preview(self):
+        """把正在变换的层临时替换成 warp 预览结果。返回恢复用的快照，失败返回 None。"""
+        import transform_tool as TT
+        name = getattr(self, "_ft_layer", None)
+        orig = getattr(self, "_ft_orig", None)
+        st = getattr(self.canvas, "_ft", None)
+        if not name or orig is None or st is None:
+            return None
+        layer = self.layer_by_name(name)
+        if layer is None:
+            return None
+        res = TT.warp_state(orig["img"], orig["bbox"], st)
+        if res is None:
+            return None
+        new_img, new_bbox = res
+        snap = {"layer": layer, "img": layer["img"], "bbox": layer["bbox"]}
+        layer["img"] = new_img
+        layer["bbox"] = new_bbox
+        self.rig.pop("_lite", None)          # 预览期每帧作废 LOD（否则用旧尺寸）
+        return snap
+
+    def _restore_ft_preview(self, snap):
+        """恢复 _apply_ft_preview 临时改动的层（渲染后立刻调用，图层数据不被污染）"""
+        layer = snap["layer"]
+        layer["img"] = snap["img"]
+        layer["bbox"] = snap["bbox"]
+        self.rig.pop("_lite", None)
+
 
     # ---------- 交互 ----------
     def _on_pivot_drag(self, node, x, y):
@@ -2011,6 +2055,11 @@ class Workbench(QWidget):
         finally:
             self._ft_spin_syncing = False
 
+    def _on_ft_changed(self, st):
+        """拖动控制点/移动/旋转：回填选项栏数字 + 重渲染画面（实时预览）。"""
+        self._update_ft_spins()
+        self.redraw()
+
     def _on_ft_spin_edited(self, *args):
         """宽/高/角度输入框改变 -> 反算变换状态（PS 在选项栏输入数值）。
         以图层原始 bbox 为基准（未变换时的宽高），避免多次输入累积漂移。"""
@@ -2031,6 +2080,7 @@ class Workbench(QWidget):
         self.canvas._ft = {"cx": st["cx"], "cy": st["cy"],
                            "hw": hw, "hh": hh, "ang": ang}
         self.canvas.update()
+        self.redraw()          # 输入数值也要实时预览（与拖动控制点一致）
 
 
     # ---------- 选区：复制 / 剪切 / 粘贴（PS 风格）----------
@@ -2212,6 +2262,7 @@ class Workbench(QWidget):
         self._ft_layer = name
         self._ft_orig = {"img": layer["img"], "bbox": tuple(layer["bbox"])}
         self.canvas.ft_begin(layer["bbox"])
+        self.redraw()                      # 进入变换：渲染一次（此后拖动实时预览）
         self._sync_canvas_options()
         self._sync_edit_menu_state()
         InfoBar.info("自由变换", "%s：拖控制点缩放(Shift 等比)/框内移动/角外旋转，"
@@ -2255,9 +2306,10 @@ class Workbench(QWidget):
                         parent=self, position=InfoBarPosition.TOP, duration=2200)
 
     def _on_ft_cancelled(self):
-        """变换取消：图层未动，只清状态"""
+        """变换取消：图层未动，只清状态 + 重渲染（画面从预览帧切回原图）"""
         self._ft_layer = None
         self._ft_orig = None
+        self.redraw()                      # ft_active 已 False -> 渲染未改动的原图层
         self._sync_canvas_options()
         self._sync_edit_menu_state()
 

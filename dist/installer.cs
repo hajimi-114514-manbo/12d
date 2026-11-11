@@ -112,6 +112,14 @@ class Installer
             Environment.Exit(code);
             return;
         }
+        if (a.Count >= 2 && a[0] == "--check-models")
+        {
+            List<string> bad = inst.FindBadModels(a[1]);
+            Console.WriteLine(bad.Count == 0 ? "COMPLETE" : ("BAD=" + bad.Count));
+            foreach (string b in bad) Console.WriteLine("  " + b);
+            Environment.Exit(bad.Count == 0 ? 0 : 1);
+            return;
+        }
         inst.ShowGui(relaunched);
     }
 
@@ -285,14 +293,48 @@ class Installer
         string msg = "更新完成：覆盖 " + written + " 个程序文件。\n" +
                      "models\\（模型）与 seethrough_out\\（你的产物）未改动。";
 
-        // 更新时检查模型是否装过：没装且用户勾选 -> 先探测链路再下载
-        if (withModels && !HasModels(dir))
+        // 更新时模型处理（三分支）：
+        //   1) 完整 -> 走老路，绝不动 models 目录
+        //   2) 不完整（缺失/截断）-> 只重下坏文件（DownloadModels 跳过大小正确的）
+        //   3) 完全没有 -> 勾选了就下，没勾选只提示
+        if (HasModels(dir))
         {
-            string linkErr = CheckLinkAvailable();
-            if (linkErr != null)
+            List<string> bad = FindBadModels(dir);
+            if (bad.Count == 0)
             {
-                msg += "\n\n模型下载失败：无法连接模型下载源。\n" + linkErr +
-                       "\n可稍后联网时重新运行安装器补装。";
+                msg += "\n模型完整性检查通过，未改动。";
+            }
+            else
+            {
+                string linkErr2 = CheckLinkAvailable();
+                if (linkErr2 != null)
+                {
+                    msg += "\n\n检测到模型不完整（" + bad.Count + " 个文件损坏/缺失），"
+                           + "但当前无法连接下载源，本次未修复。可稍后联网重跑安装器自动修复。";
+                }
+                else
+                {
+                    SetStatus("检测到模型不完整，正在修复（重下 " + bad.Count + " 个文件）…");
+                    try
+                    {
+                        DownloadModels(dir);
+                        List<string> stillBad = FindBadModels(dir);
+                        if (stillBad.Count == 0)
+                            msg += "\n模型已修复（重下 " + bad.Count + " 个文件）。";
+                        else
+                            errors.Add("模型修复后仍有 " + stillBad.Count + " 个文件不完整");
+                    }
+                    catch (Exception ex) { errors.Add("模型修复: " + ex.Message); }
+                }
+            }
+        }
+        else if (withModels)
+        {
+            string linkErr2 = CheckLinkAvailable();
+            if (linkErr2 != null)
+            {
+                msg += "\n\n模型下载失败：无法连接模型下载源。\n" + linkErr2
+                       + "\n可稍后联网时重新运行安装器补装。";
             }
             else
             {
@@ -300,10 +342,10 @@ class Installer
                 catch (Exception ex) { errors.Add("模型: " + ex.Message); }
             }
         }
-        else if (!HasModels(dir))
+        else
         {
-            msg += "\n\n提示：未检测到模型（5.3GB），拆分功能不可用；" +
-                   "可重新运行安装器勾选下载模型。";
+            msg += "\n\n提示：未检测到模型（5.3GB），拆分功能不可用；"
+                   + "可重新运行安装器勾选下载模型。";
         }
         if (withAmd)
         {
@@ -327,6 +369,41 @@ class Installer
                 && File.Exists(Path.Combine(dir, "models", "24yearsold", "seethroughv0.0.2_layerdiff3d_nf4", "unet", "diffusion_pytorch_model.safetensors"));
         }
         catch { return false; }
+    }
+
+    static char SEP = Path.DirectorySeparatorChar;
+
+    // 模型落盘路径：dir/models/<repo>/<file>
+    // repo 形如 24yearsold/seethroughv0.0.1_marigold_nf4 -> 完整路径
+    //   dir/models/24yearsold/seethroughv0.0.1_marigold_nf4/<file>
+    // 必须与 HasModels 和应用加载路径（seethrough_local: MODELS_DIR + NF4_*）一致。
+    // 旧 DownloadModels 把 file 直接拼到 models/24yearsold/ 顶层（漏 repo 子目录），
+    // 会让下载落点与应用加载点不符 —— 统一走这里。
+    static string ModelDest(string dir, Dict f)
+    {
+        return Path.Combine(dir, "models",
+            f["repo"].Replace('/', SEP), f["file"].Replace('/', SEP));
+    }
+
+    // 模型完整性检查（size 级）。
+    // manifest 只有 repo/file/size 三字段（打包时从本地模型扫描生成，无哈希），
+    // 所以只能校验大小 —— 足以抓"下载中断导致的截断"（用户核心场景），
+    // 抓不了"大小恰好相同的字节损坏"。
+    // DownloadModels 会跳过大小正确的、覆盖重下大小不符的，坏列表非空时调它即修复。
+    List<string> FindBadModels(string dir)
+    {
+        var bad = new List<string>();
+        foreach (Dict f in ParseManifest())
+        {
+            string dest = ModelDest(dir, f);
+            long size;
+            if (!long.TryParse(f["size"], out size)) size = -1;
+            string tag = f["repo"] + "/" + f["file"];
+            if (!File.Exists(dest)) { bad.Add(tag); continue; }
+            try { if (new FileInfo(dest).Length != size) bad.Add(tag); }
+            catch { bad.Add(tag); }
+        }
+        return bad;
     }
 
     // ---------------- 显卡检测：安装前自动选路线 ----------------
@@ -743,7 +820,7 @@ class Installer
         {
             if (cancelFlag) throw new Exception("已取消");
             long size = long.Parse(f["size"]);
-            string dest = Path.Combine(modelRoot, f["file"].Replace('/', Path.DirectorySeparatorChar));
+            string dest = ModelDest(dir, f);   // 含 repo 子目录，与应用加载路径一致
             string part = dest + ".part";
             Directory.CreateDirectory(Path.GetDirectoryName(dest));
             if (File.Exists(dest) && new FileInfo(dest).Length == size) { doneBytes += size; continue; }
@@ -900,7 +977,7 @@ class Installer
         win.Text = "木偶工作室 安装向导";
         win.ClientSize = new System.Drawing.Size(760, 400);
         win.FormBorderStyle = FormBorderStyle.FixedDialog;
-        win.MaximizeBox = false; win.MinimizeBox = false;
+        win.MaximizeBox = false; win.MinimizeBox = true;   // 允许最小化，下载时可缩到任务栏后台跑
         win.StartPosition = FormStartPosition.CenterScreen;
 
         // ===== 左侧竖版配图（ArcGIS 安装器风格）=====
@@ -1051,12 +1128,22 @@ class Installer
         browseBtn.Enabled = !upd;
         if (upd) dirBox.Text = detected;
         string target = dirBox.Text.Trim();
-        bool hasModels = HasModels(target);   // 与 DoUpdate 同一判据（目录+unet权重文件）
+        bool hasModels = HasModels(target);
         if (hasModels)
         {
-            modelChk.Checked = false;
-            modelChk.Enabled = false;
-            modelChk.Text = "模型已存在（5.3 GB），无需重复下载";
+            List<string> badM = FindBadModels(target);
+            if (badM.Count == 0)
+            {
+                modelChk.Checked = false;
+                modelChk.Enabled = false;
+                modelChk.Text = "模型完整（5.3 GB），无需下载";
+            }
+            else
+            {
+                modelChk.Checked = true;
+                modelChk.Enabled = false;
+                modelChk.Text = "检测到 " + badM.Count + " 个模型文件不完整，本次更新将自动修复（重下坏文件，需联网）";
+            }
         }
         else
         {
