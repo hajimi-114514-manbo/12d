@@ -71,13 +71,13 @@ ASSETS = [
     {
         "id": "runtime",
         "name": "内置 Python 运行时",
-        "desc": "无需自己装 Python，装完即可启动；含 CPU 推理栈（约 1.2GB）",
+        "desc": "无需自己装 Python，装完即可启动（含程序运行所需 CPU 版推理库，约 420MB）",
         "kind": "runtime",
         "size": 416261511,
         # 运行时是我们自己打包的，走 GitHub Release 资产
         # v3.1.0 起含 CPU 推理栈（torch 2.11.0+cpu + diffusers 全家桶）
         "url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                "download/v3.1.0/runtime.zip"),
+                "download/v3.1.1/runtime.zip"),
         "dest": "runtime",
         # v3.1.0：判定升级——旧运行时（无 torch）必须可被识别为"未装"，
         # 否则老用户永远拿不到内置 CPU 推理栈
@@ -130,8 +130,8 @@ ASSETS = [
     {
         "id": "cuda_pack",
         "name": "CUDA 加速包（N 卡提速）",
-        "desc": "把内置 CPU 推理替换为 CUDA 版 torch + bitsandbytes，"
-                "约 2.6GB 分卷；N 卡用户必装，装完重启应用生效",
+        "desc": "N 卡拆图必备：装完重启后本地引擎走 CUDA nf4 快通道（约 14 分钟/张）。"
+                "约 1.9GB 分 3 卷；A 卡不适用（拆图请走本机 ComfyUI+ROCm）",
         "kind": "accel",
         "mode": "parts",
         "size": 2007028506,
@@ -139,13 +139,13 @@ ASSETS = [
         # 按 669009502 B 切 3 段纯字节卷；构建脚本 D:\scripts\temp\build_cuda_pack.py
         "parts": [
             {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                     "download/v3.1.0/cuda_pack.zip.part01"),
+                     "download/v3.1.1/cuda_pack.zip.part01"),
              "size": 669009502},
             {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                     "download/v3.1.0/cuda_pack.zip.part02"),
+                     "download/v3.1.1/cuda_pack.zip.part02"),
              "size": 669009502},
             {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                     "download/v3.1.0/cuda_pack.zip.part03"),
+                     "download/v3.1.1/cuda_pack.zip.part03"),
              "size": 669009502},
         ],
         "zip_sha256": ("7bf280ac8775d2836019993487e5acc1e6e40a3134f06f6f0f95"

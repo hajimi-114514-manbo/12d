@@ -5,6 +5,30 @@
 
 ---
 
+## v3.1.1（2026-11-12 17:50）CPU 定位修正：只为打开软件，不是拆图通道
+
+### 用户拍板
+内置 CPU 版 torch 是**程序运行环境**（GUI/视频模块顶层依赖，装完即开），
+**不作为拆图通道**——2-3 小时/张的 CPU 拆图不该"自动发生"。
+
+### 行为修正
+- `seethrough_local.decompose`：无 CUDA 时**默认拒绝**本地引擎拆图，
+  报错文案给三条出路（CUDA 加速包 / ComfyUI+ROCm / 显式逃生阀
+  `MUPPET_ALLOW_CPU_ENGINE=1`）。引擎路由本就"无 CUDA→comfy"，
+  这次把 CPU 硬跑的口子也收进显式开关
+- 反量化 CPU 路径**保留不删**（真实验证过：分层 24 层/91 分钟跑通，
+  身体+头部组数值正常）——高级用户开逃生阀可用
+- installer AmdGuide 重写：明确"拆图不走 CPU"，N 卡装 CUDA 包、
+  A 卡走 ComfyUI+ROCm 两条路
+- catalog 文案同步：runtime desc 不再宣传"CPU 推理栈"；cuda_pack desc
+  标注"A 卡不适用此包"
+- 资产 URL 对齐 tag v3.1.1
+
+### 验证
+- `cpu_engine_quick` 23 项（5b 改为断言逃生阀存在）
+- `asset_catalog_test` / `asset_ui_test` 文案断言全过
+- 安装包重打 411.1MB，v3.1.1 注入确认
+
 ## v3.1.0（2026-11-12 16:40）推理运行时两层化：CPU 内置开箱即跑 + CUDA 加速包应用内下载
 
 ### 架构决策（用户拍板）

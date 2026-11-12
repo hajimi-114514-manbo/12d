@@ -250,7 +250,7 @@ def _load_pipeline_cpu(verbose):
     K = _import_core()
     pl_dir = _resolve(NF4_LAYERDIFF)
     dp_dir = _resolve(NF4_DEPTH)
-    verbose("未检测到 CUDA：CPU 推理模式（fp32 反量化加载，约 2-3 小时/张）…")
+    verbose("CPU 慢速模式（显式启用）：fp32 反量化加载，实测约 2-3 小时/张…")
     t0 = _time.time()
     from transformers import AutoTokenizer
     trans_vae = _load_component_cpu(os.path.join(pl_dir, "trans_vae"), verbose)
@@ -268,10 +268,21 @@ def _load_pipeline_cpu(verbose):
     d_unet = _load_component_cpu(os.path.join(dp_dir, "unet"), verbose)
     d_vae = _load_component_cpu(os.path.join(dp_dir, "vae"), verbose)
     d_te = _load_component_cpu(os.path.join(dp_dir, "text_encoder"), verbose)
+    # Marigold 依赖 scheduler（DDIM，_check_inference_step 会拒绝 None）；
+    # CUDA 分支由 from_pretrained 自动加载，手搭分支自己从 config 反射类名
+    scfg = json.load(open(os.path.join(dp_dir, "scheduler",
+                                       "scheduler_config.json"),
+                          encoding="utf8"))
+    scls_name = scfg.get("_class_name", "DDIMScheduler")
+    import diffusers as _D
+    SchedCls = getattr(_D, scls_name, None)
+    if SchedCls is None:
+        raise RuntimeError("CPU 分支不识别调度器: %s" % scls_name)
+    d_sched = SchedCls.from_config(scfg)
     marigold = K["MarigoldDepthPipeline"](
         unet=d_unet, vae=d_vae, text_encoder=d_te,
         tokenizer=AutoTokenizer.from_pretrained(dp_dir, subfolder="tokenizer"),
-        scheduler=None)
+        scheduler=d_sched)
     marigold._st_group_offload = False
     verbose("CPU 模型加载完成（%.0f 秒）" % (_time.time() - t0))
     return pipeline, marigold, K
@@ -737,11 +748,21 @@ def save_parts(parts, out_dir, K, verbose):
 
 def decompose(img_path, out_dir, resolution=1024, depth_resolution=768, steps=30,
               seed=42, use_lama=False, verbose=print):
-    """完整本地流程。返回 layers_meta.json 路径或 None。"""
+    """完整本地流程。返回 layers_meta.json 路径或 None。
+
+    本地引擎只服务 CUDA：内置 CPU 版 torch 是**程序运行环境**（GUI/视频
+    模块依赖），不是拆图通道——无 CUDA 时拆图应走 ComfyUI 或先装 CUDA 加速包。
+    高级用户确想用 CPU 硬跑（实测 2-3 小时/张）：设 MUPPET_ALLOW_CPU_ENGINE=1。"""
     if pick_device() == "cpu":
-        verbose("[!] CPU 推理模式：无 CUDA 环境，全流程实测约 2-3 小时/张"
-                "（内存需求 ~10GB；N 卡用户可在「资产管理」下载 CUDA 加速包"
-                "提速到约 14 分钟）。")
+        if os.environ.get("MUPPET_ALLOW_CPU_ENGINE", "").strip() != "1":
+            raise RuntimeError(
+                "未检测到 NVIDIA CUDA，本地引擎不执行拆图（CPU 硬跑约 2-3 小时/张，"
+                "不作为默认通道）。请任选其一：\n"
+                "1) 应用内「资产管理 → 推理加速」下载 CUDA 加速包（推荐，约 14 分钟/张）\n"
+                "2) 安装本机 ComfyUI（AMD ROCm 路线，见安装目录 AmdGuide）\n"
+                "3) 高级选项：环境变量 MUPPET_ALLOW_CPU_ENGINE=1 后重试（慢）")
+        verbose("[!] 显式 CPU 慢速模式（MUPPET_ALLOW_CPU_ENGINE=1）："
+                "实测约 2-3 小时/张，内存需求 ~10GB。")
     if not os.path.exists(img_path):
         raise FileNotFoundError(img_path)
     img = np.asarray(Image.open(img_path).convert("RGB"))
