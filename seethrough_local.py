@@ -15,6 +15,7 @@ LayerDiff 分层 + Marigold 深度 + 后处理 + 落盘。
     import seethrough_local
     meta = seethrough_local.decompose(img_path, out_dir, verbose=print)
 """
+import json
 import os
 import sys
 import random
@@ -33,6 +34,21 @@ ST_COMMON = os.path.join(ST_CORE, "common")
 
 NF4_LAYERDIFF = "24yearsold/seethroughv0.0.2_layerdiff3d_nf4"
 NF4_DEPTH = "24yearsold/seethroughv0.0.1_marigold_nf4"
+
+
+# ---------------- 设备选择（v3.1.0 CPU 回退链） ----------------
+def pick_device():
+    """MUPPET_FORCE_DEVICE=cuda|cpu 强制优先；否则自动探测。
+    CPU 分支用纯 torch fp32 + nf4 反量化，A 卡/无卡机器可跑（慢，见 decompose 预警）。"""
+    force = os.environ.get("MUPPET_FORCE_DEVICE", "").strip().lower()
+    if force in ("cuda", "cpu"):
+        return force
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _empty_cache():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 VALID_BODY_PARTS_V2 = [
     "hair", "headwear", "face", "eyes", "eyewear", "ears", "earwear",
@@ -111,7 +127,154 @@ def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+# ---------------- CPU 分支：nf4 反量化加载器 ----------------
+# 与 CUDA 上 bnb 原生 dequantize 金标准比对过（D:\scripts\temp\nf4_dequant_probe.py，
+# 最大相对误差 0.12% = bf16 舍入级）。序列化格式：
+#   xxx.weight        uint8 packed，**高位 nibble 先**
+#   xxx.weight.absmax fp32，block=64
+#   xxx.weight.quant_map      16 值 nf4 表（在模型文件里，零 bnb 依赖）
+#   xxx.weight.quant_state.bitsandbytes__nf4   JSON（真实 shape/blocksize）
+
+def _dequant_nf4(packed_u8, absmax, qmap, block=64):
+    flat = packed_u8.reshape(-1)
+    hi = (flat >> 4).to(torch.int64)
+    lo = (flat & 0x0F).to(torch.int64)
+    nib = torch.stack((hi, lo), dim=1).reshape(-1)
+    vals = qmap.to(torch.float32)[nib]
+    am = absmax.to(torch.float32).reshape(-1, 1)
+    return (vals.reshape(-1, block) * am).reshape(-1)
+
+
+def _load_state_dir(d):
+    from safetensors.torch import load_file
+    index = os.path.join(d, "model.safetensors.index.json")
+    sd = {}
+    if os.path.isfile(index):
+        with open(index, encoding="utf8") as f:
+            shards = sorted(set(json.load(f)["weight_map"].values()))
+    else:
+        shards = sorted(fn for fn in os.listdir(d) if fn.endswith(".safetensors"))
+    for sh in shards:
+        sd.update(load_file(os.path.join(d, sh)))
+    return sd
+
+
+def _dequant_state_dict(sd):
+    """量化层替换为 fp32 反量化值；剔除 absmax/quant_map/quant_state 辅助键。"""
+    out = {}
+    skip_suffix = (".absmax", ".quant_map", ".original_shape", ".original_dtype")
+    for k, v in sd.items():
+        if k.endswith(skip_suffix) or ".quant_state." in k:
+            continue
+        if k + ".absmax" in sd and k + ".quant_map" in sd:
+            qs_key = k + ".quant_state.bitsandbytes__nf4"
+            shape = None
+            if qs_key in sd:
+                try:
+                    shape = tuple(json.loads(bytes(sd[qs_key].tolist()))["shape"])
+                except Exception:
+                    shape = None
+            flat = _dequant_nf4(v, sd[k + ".absmax"], sd[k + ".quant_map"])
+            out[k] = flat.reshape(shape).float() if shape else flat.float()
+        else:
+            out[k] = v.float() if v.is_floating_point() else v
+    return out
+
+
+def _load_component_cpu(dirpath, verbose):
+    """组件目录 → fp32 模型（config + safetensors，不经过 bitsandbytes）。"""
+    cfg = json.load(open(os.path.join(dirpath, "config.json"), encoding="utf8"))
+    cfg.pop("quantization_config", None)
+    cls_name = cfg.get("_class_name") or (cfg.get("architectures") or [None])[0]
+    model = None
+    if cls_name in ("CLIPTextModel", "CLIPTextModelWithProjection"):
+        import transformers
+        from transformers import CLIPTextConfig
+        Cls = getattr(transformers, cls_name)
+        model = Cls(CLIPTextConfig(**{k: v for k, v in cfg.items()
+                                      if not k.startswith("_")}))
+    elif cls_name == "UNetFrameConditionModel":
+        from modules.layerdiffuse.layerdiff3d import UNetFrameConditionModel as Cls
+    elif cls_name == "TransparentVAE":
+        from modules.layerdiffuse.vae import TransparentVAE as Cls
+    elif cls_name == "AutoencoderKL":
+        from diffusers import AutoencoderKL as Cls
+    else:
+        raise RuntimeError("CPU 分支不识别组件类: %s (%s)" % (cls_name, dirpath))
+    sd = _dequant_state_dict(_load_state_dir(dirpath))
+    if model is None:
+        model = Cls.from_config(cfg)
+    _fit_state_dict(model, sd, dirpath)
+    return model.to(torch.float32)
+
+
+def _fit_state_dict(model, sd, dirpath):
+    """手动 load 需匹配模型期望的 key 前缀（transformers from_pretrained 会自动转换，
+    我们没有那层转换）：依次尝试 原样 / 去 text_model. 前缀 / 加 text_model. 前缀。"""
+    def allowed(u):
+        return u.startswith("visual_projection.") or u in ("logit_scale", "logit_bias")
+    variants = [sd]
+    if any(k.startswith("text_model.") for k in sd):
+        variants.append({(k[len("text_model."):] if k.startswith("text_model.") else k): v
+                         for k, v in sd.items()})
+    if not any(k.startswith("text_model.") for k in sd):
+        _top = ("text_projection", "visual_projection", "logit_scale", "logit_bias")
+        variants.append({("text_model." + k if k.split(".")[0] not in _top else k): v
+                         for k, v in sd.items()})
+    last = None
+    for i, var in enumerate(variants):
+        try:
+            missing, unexpected = model.load_state_dict(var, strict=False)
+        except Exception:
+            continue
+        unexpected = [u for u in unexpected if not allowed(u)]
+        if not missing and not unexpected:
+            if i > 0:
+                print("  [CPU] %s 已自动适配 key 前缀变体 %d"
+                      % (os.path.basename(dirpath), i), flush=True)
+            return
+        if last is None or len(missing) + len(unexpected) < len(last[0]) + len(last[1]):
+            last = (missing, unexpected)
+    raise RuntimeError("CPU 反量化加载键不匹配 %s missing=%d%s unexpected=%d%s" % (
+        os.path.basename(dirpath), len(last[0]), list(last[0])[:5],
+        len(last[1]), list(last[1])[:5]))
+
+
+def _load_pipeline_cpu(verbose):
+    """CPU 分支组装 pipeline。内存需求 ~20GB（fp32 全模型常驻）。"""
+    import time as _time
+    K = _import_core()
+    pl_dir = _resolve(NF4_LAYERDIFF)
+    dp_dir = _resolve(NF4_DEPTH)
+    verbose("未检测到 CUDA：CPU 推理模式（fp32 反量化加载，约 2-3 小时/张）…")
+    t0 = _time.time()
+    from transformers import AutoTokenizer
+    trans_vae = _load_component_cpu(os.path.join(pl_dir, "trans_vae"), verbose)
+    unet = _load_component_cpu(os.path.join(pl_dir, "unet"), verbose)
+    vae = _load_component_cpu(os.path.join(pl_dir, "vae"), verbose)
+    text_encoder = _load_component_cpu(os.path.join(pl_dir, "text_encoder"), verbose)
+    text_encoder_2 = _load_component_cpu(os.path.join(pl_dir, "text_encoder_2"), verbose)
+    pipeline = K["KDiffusionStableDiffusionXLPipeline"](
+        unet=unet, vae=vae, trans_vae=trans_vae,
+        text_encoder=text_encoder, text_encoder_2=text_encoder_2,
+        tokenizer=AutoTokenizer.from_pretrained(pl_dir, subfolder="tokenizer"),
+        tokenizer_2=AutoTokenizer.from_pretrained(pl_dir, subfolder="tokenizer_2"),
+        scheduler=None)
+    pipeline._st_group_offload = False
+    d_unet = _load_component_cpu(os.path.join(dp_dir, "unet"), verbose)
+    d_vae = _load_component_cpu(os.path.join(dp_dir, "vae"), verbose)
+    d_te = _load_component_cpu(os.path.join(dp_dir, "text_encoder"), verbose)
+    marigold = K["MarigoldDepthPipeline"](
+        unet=d_unet, vae=d_vae, text_encoder=d_te,
+        tokenizer=AutoTokenizer.from_pretrained(dp_dir, subfolder="tokenizer"),
+        scheduler=None)
+    marigold._st_group_offload = False
+    verbose("CPU 模型加载完成（%.0f 秒）" % (_time.time() - t0))
+    return pipeline, marigold, K
 
 
 def _resolve(model_name):
@@ -123,6 +286,8 @@ def _resolve(model_name):
 
 # ---------------- 模型加载 ----------------
 def load_models(verbose=print):
+    if pick_device() == "cpu":
+        return _load_pipeline_cpu(verbose)
     K = _import_core()
     dev = torch.device("cuda")
     dtype = torch.bfloat16
@@ -157,7 +322,7 @@ def load_models(verbose=print):
                  pipeline.text_encoder, pipeline.text_encoder_2,
                  marigold.unet, marigold.vae, marigold.text_encoder):
         comp.to("cpu")
-    torch.cuda.empty_cache()
+    _empty_cache()
     _log_vram("All components offloaded to CPU after load")
     return pipeline, marigold, K
 
@@ -192,7 +357,7 @@ def _crop_head(img, xywh):
 
 
 def generate_layers(pipeline, K, img_np, seed, resolution, steps, verbose):
-    dev = torch.device("cuda")
+    dev = torch.device(pick_device())
     offload = torch.device("cpu")
     seed_everything(seed)
     if img_np.shape[-1] == 3:
@@ -228,7 +393,7 @@ def generate_layers(pipeline, K, img_np, seed, resolution, steps, verbose):
     pipeline.unet.to(dev)
     pipeline.vae.to(dev)
     pipeline.trans_vae.to(dev)
-    torch.cuda.empty_cache()
+    _empty_cache()
     _log_vram("LayerDiff on GPU, diffusion begin")
     rng = torch.Generator(device=dev).manual_seed(seed)
     layer_dict = {}
@@ -278,14 +443,14 @@ def generate_layers(pipeline, K, img_np, seed, resolution, steps, verbose):
     pipeline.unet.to(offload)
     pipeline.vae.to(offload)
     pipeline.trans_vae.to(offload)
-    torch.cuda.empty_cache()
+    _empty_cache()
     verbose("分层完成 %d 层" % len(layer_dict))
     return LayersData(layer_dict, fullpage, input_img, resolution, pad_size, pad_pos)
 
 
 # ---------------- 深度 ----------------
 def generate_depth(marigold, K, layers, seed, resolution_depth, verbose):
-    dev = torch.device("cuda")
+    dev = torch.device(pick_device())
     offload = torch.device("cpu")
     layer_dict, fullpage, resolution = layers.layer_dict, layers.fullpage, layers.resolution
     verbose("深度推理开始…")
@@ -330,7 +495,7 @@ def generate_depth(marigold, K, layers, seed, resolution_depth, verbose):
 
     marigold.unet.to(dev)
     marigold.vae.to(dev)
-    torch.cuda.empty_cache()
+    _empty_cache()
     seed_everything(seed)
     pipe_out = marigold(color_map=None, show_progress_bar=False, img_list=inputs)
     depth_pred = pipe_out.depth_tensor.to(device="cpu", dtype=torch.float32).numpy()
@@ -338,7 +503,7 @@ def generate_depth(marigold, K, layers, seed, resolution_depth, verbose):
         depth_pred = np.stack([K["smart_resize"](d, (resolution, resolution)) for d in depth_pred])
     marigold.unet.to(offload)
     marigold.vae.to(offload)
-    torch.cuda.empty_cache()
+    _empty_cache()
 
     depth_dict = {}
     for ii, tag in enumerate(VALID_BODY_PARTS_V2):
@@ -573,6 +738,10 @@ def save_parts(parts, out_dir, K, verbose):
 def decompose(img_path, out_dir, resolution=1024, depth_resolution=768, steps=30,
               seed=42, use_lama=False, verbose=print):
     """完整本地流程。返回 layers_meta.json 路径或 None。"""
+    if pick_device() == "cpu":
+        verbose("[!] CPU 推理模式：无 CUDA 环境，全流程实测约 2-3 小时/张"
+                "（内存需求 ~10GB；N 卡用户可在「资产管理」下载 CUDA 加速包"
+                "提速到约 14 分钟）。")
     if not os.path.exists(img_path):
         raise FileNotFoundError(img_path)
     img = np.asarray(Image.open(img_path).convert("RGB"))
@@ -591,7 +760,7 @@ def decompose(img_path, out_dir, resolution=1024, depth_resolution=768, steps=30
         return None
     finally:
         del pipeline, marigold
-        torch.cuda.empty_cache()
+        _empty_cache()
 
 
 if __name__ == "__main__":

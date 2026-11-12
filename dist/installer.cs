@@ -180,8 +180,11 @@ class Installer
         string pyExe = Path.Combine(rtDir, "python.exe");
         try
         {
-            if (File.Exists(pyExe) && new FileInfo(pyExe).Length > 50000)
-                return true;                       // 已有完整运行时
+            if (File.Exists(pyExe) && new FileInfo(pyExe).Length > 50000
+                && File.Exists(Path.Combine(rtDir, "Lib", "site-packages",
+                                            "torch", "__init__.py")))
+                return true;   // v3.1.0+ 完整运行时（含 CPU 推理栈）才跳过；
+                               // 旧运行时缺 torch 会继续解压（覆盖式，用户自装包保留）
         }
         catch { }
         if (string.IsNullOrEmpty(runtimeZip) || !File.Exists(runtimeZip))
@@ -734,12 +737,14 @@ class Installer
         return
 "木偶工作室 — AMD 显卡拆图指引\r\n" +
 "========================================\r\n\r\n" +
-"为什么 A 卡要借 ComfyUI？\r\n" +
-"  应用内置的 SeeThrough 引擎用 4bit 量化（bitsandbytes），只支持 NVIDIA CUDA。\r\n" +
-"  同一套 SeeThrough 模型在 AMD 显卡上可以靠 ComfyUI + ROCm 以 bf16 跑，因此\r\n" +
-"  本应用在检测不到 CUDA 时会自动改走「本机 ComfyUI」通道提交拆图任务。\r\n" +
+"v3.1.0 起 A 卡开箱即用：\r\n" +
+"  内置运行时自带 CPU 版推理引擎。检测不到 NVIDIA CUDA 时，拆图自动改走\r\n" +
+"  CPU 通道（fp32 反量化加载），无需任何额外安装 —— 代价是慢：\r\n" +
+"  全流程实测约 2-3 小时/张（N 卡 CUDA 约 14 分钟），建议内存 16GB 以上。\r\n" +
 "  除拆图外，本应用全部功能（编辑/骨架/支点/眨眼/导出 PSD·AE·JSON·MP4·GIF、\r\n" +
-"  右键基础拆分与 SAM 智能拆分）A 卡都可直接使用，无需 ComfyUI。\r\n\r\n" +
+"  右键基础拆分与 SAM 智能拆分）A 卡都可直接使用。\r\n\r\n" +
+"可选提速路线 A：本机 ComfyUI + ROCm（bf16，速度快于 CPU）\r\n" +
+"  应用检测不到 CUDA 时也会把拆图任务提交给本机已运行的 ComfyUI。\r\n" +
 "需要你自己下载的两样东西（本安装器不代下，避免版本漂移与限速失败）\r\n" +
 "----------------------------------------\r\n" +
 "1) ComfyUI（含 AMD ROCm 支持的官方 Windows 安装器，约 172MB）\r\n" +

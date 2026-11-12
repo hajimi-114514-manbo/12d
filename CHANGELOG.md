@@ -5,6 +5,243 @@
 
 ---
 
+## v3.1.0（2026-11-12 16:40）推理运行时两层化：CPU 内置开箱即跑 + CUDA 加速包应用内下载
+
+### 架构决策（用户拍板）
+- 安装包内置 **CPU 版 ML 栈**（torch 2.11.0+cpu + diffusers/transformers/
+  accelerate/peft/sklearn）→ 任何人装完即可拆图，**不再要求自备 Python 环境**
+- **CUDA 加速包**（torch cu130 + bitsandbytes，zip 1.87GB 分 3 卷）放 GitHub
+  Release，「资产管理 → 推理加速」一键下载安装（N 卡提速回 14 分钟/张）
+- A 卡适配 = 设备回退链的副产品（CUDA 不可用自动走 CPU）
+
+### seethrough_local.py：设备回退链
+- `pick_device()`：env `MUPPET_FORCE_DEVICE=cuda|cpu` 优先，否则自动探测
+- CUDA 分支：**现有 nf4 路径逐行不变**（回归零风险）
+- CPU 分支：`_load_pipeline_cpu` 纯 Python **nf4 反量化**加载
+  - 格式实测：packed uint8 **高位 nibble 先**、qmap 16 值表在模型文件里
+    （零 bitsandbytes 依赖）、block=64 absmax、shape 藏在 quant_state JSON
+  - 金标准验证：与 CUDA bnb `dequantize_4bit` 比对，最大相对误差 0.12%
+    （=bf16 舍入级）；`_fit_state_dict` 自动适配 text encoder 的
+    `text_model.` 前缀变体（去/加两种 checkpoint 形态都遇到）
+- 所有 `torch.cuda.*` 收进 `is_available`/cuda 分支守卫（静态断言覆盖）
+- CPU 模式 decompose 开头打慢速预警（40-90 分钟/张 + 引导下载 CUDA 包）
+- 实测：CPU 模型加载 285s、RSS 9.4GB（16GB 内存机器可行）
+
+### asset_catalog / asset_downloader：分卷下载
+- 新资产 `cuda_pack`（kind=accel, mode=parts）：3 卷 ×669MB、整包 sha256、
+  done_marker=`torch/lib/cudnn64_*.dll` 纯文件探测（绝不 import torch）
+- `runtime_root()`：env → <install>\runtime → sys.executable 回退（开发机）
+- `_run_parts` 六道安全闸：torch 已 import 拒绝（防 DLL 锁）/磁盘预检/
+  卷级断点续传/流式拼接/sha 失败**删全部卷**（防坏卷永久污染）/
+  pre_delete 失败中止不解压
+- `_download_file` 新增 **416 自愈**：残留 .part 超出服务器文件时
+  丢弃重下（否则包更新后老用户永远拼不出正确文件）
+- 资产管理菜单新增「— 推理加速 —」分组
+
+### runtime.zip v2（build_runtime_v2.py）
+- GUI 栈（本机）+ ML 栈（干净 venv 全量+排除法复制，重叠包本机优先）
+- 排除法而非白名单：曾漏 `typing_extensions`（单文件包）导致自检失败，
+  全量复制天然覆盖依赖闭包（functorch/pydantic/psutil 等）
+- 自检扩展：ML import + `'cpu' in torch.__version__` 防 CUDA 泄漏 +
+  fp32 matmul + safetensors 读写往返
+
+### 验证
+- `cpu_engine_quick` 23 项：设备链 5 组合、反量化数学（nibble 高低位/
+  块缩放/shape）、state_dict 键处理、前缀变体、静态守卫、cuda_pack 目录
+- `parts_dl_test` 24 项：本地 http.server 假分卷 E2E（下载/续传/拼接/
+  sha 拒绝+删卷/在用保护/磁盘预检/镜像回退/asset_urls 形态）
+- `asset_ui` 16+2 项：推理加速分组 + CUDA 包条目
+- CUDA 包真实构建：zip 1.87GB（deflate1）sha256 已回填 catalog
+- CPU 真实分解 + runtime v2 自检 + 全套回归（见下）
+
+### 待办（本版内）
+- runtime.zip v2 上传 + catalog URL/size 回填
+- cuda_pack 3 卷上传 v3.1.0 Release（用户已批准放 git）
+
+## v3.0.3（2026-11-12 13:04）欢迎页去掉「🏠 主页」装饰项
+
+- 左侧栏「主页」标签是仿 AE 的**纯静态装饰**（本就在主页，点击无动作），
+  连同其上方分隔线一并移除；侧栏只剩 新建项目 / 打开项目 + 底部条数提示
+- `welcome_test` 41 项全过（布局无破坏）
+
+## v3.0.2（2026-11-12 12:53）欢迎页视频编辑卡标注「测试功能」
+
+- 类型对话框卡片标题：「视频编辑」→「**视频编辑（测试功能）**」
+  （第一阶段刚落地，预览无声/无 ripple 等边界用户应知情）
+- `welcome_test` 41 项（新增 4e2 标题断言）
+
+## v3.0.1（2026-11-12 11:19）应用图标换 V3 版 + 启动器源码重建
+
+### 图标
+- 源图 `C:\Users\80715\Pictures\版本图标\v3_labeled.png`（1024×1024，
+  绿发缝纫少女+V3 角标，转 RGB 规整）
+- 覆盖 `anon_sewing_icon.png`（808KB）与 `anon_sewing_icon.ico`
+  （141KB，16/24/32/48/64/128/256 七档，LANCZOS）——文件名不变，
+  代码 ICON_PNG/ICON_ICO 常量零改动
+- `/win32icon` 是编译期资源：三个 exe 全部重编（安装器经 bat、
+  Uninstaller.exe 经 Uninstaller.cs、启动器见下）
+
+### 启动器源码重建（重要）
+- 发现历史问题：**木偶工作室.exe 的源码 launcher.cs 从未入库**
+  （git 全历史只有 Uninstaller.cs/installer.cs），本次想重编换图标时找不到源
+- 按 CHANGELOG v2.8.0 行为规格重写 `launcher.cs`（已入库）：
+  ini→runtime→常见路径→PATH(排除 WindowsApps)→py -3 五级探测、
+  探测成功写回 ini、6 库依赖体检（Retry/Cancel）、CreateNoWindow 启动
+- 实测：双击语义启动成功拉起 `python.exe l2d_rig_qt.py`、ini 未被误写
+- 注意：重写版行为对齐规格但未经用户机器长期验证，装机后留意启动问题反馈
+
+### 验证
+- verify_icons：三个 exe 各 7/7 ICO 帧命中且指纹一致
+- 安装包 246.8MB @ 11:19，APP_VERSION=3.0.1 注入确认
+
+## v3.0.0（2026-11-12 10:59）视频编辑模块第一阶段：剪映式工作台
+
+### 需求
+打开软件选「视频编辑」项目类型 → 进剪映式布局的视频工作台：
+多轨时间轴（clip 块）、素材库、预览、导出。**木偶工程可作为动画片段直接上轨**。
+
+### 新增模块（5 个文件）
+- **video_model.py**（纯 Python 数据模型，无 Qt）：proj/tracks/clips 三层 JSON 结构；
+  add/move/trim/split/remove/delete_range 全部**先校验后原地改**（同轨禁重叠、
+  素材长度约束、锁定轨拒绝、MIN_DUR=0.05s）；吸附 snap_points/snap_time；
+  sanitize_project 脏文件容错（nan/负值/坏 kind/坏 id 逐个剔除，坏轨重排不丢）
+- **video_source.py**（队友 B）：FrameSource 统一接口 `frame(t)->RGB ndarray`；
+  ImageSource（imdecode 中文路径兜底）/ VideoSource（≤16 帧顺序读、远跳 seek、
+  LRU 64 帧缓存，重复取帧 0 解码，stats 可断言）/ PuppetSource（复用
+  l2d_rig_core.render_frame，keyframes 塞 rig 走 sin 基线+覆盖路径，逐帧确定性）；
+  probe_source 自动探测 kind/尺寸/时长；AudioLoader/waveform（ffmpeg 转 wav，
+  找不到静默降级）；close 后取帧统一抛 SourceClosed
+- **clip_timeline.py**（队友 A）：ClipTimelinePanel 多轨 clip 时间轴自绘面板：
+  轨头列（👁/🔒 直切标志）、刻度尺 scrub、clip 色块按 kind 配色、拖移动/两端 trim
+  （吸附命中画 #ffd166 辅助线、失败静默回弹）、✂切分/🗑删除/▶跟随工具条、
+  Ctrl+滚轮 0.5~400px/s 缩放以鼠标为锚；编辑全走 video_model，成功恰发一次
+  edit_committed（外层据此 push history）
+- **video_export.py**：compose_frame 逐帧合成（**预览导出同一条代码路径**；
+  fit 等比黑边、上层轨优先、隐藏轨跳过、坏帧不中断）；SourceManager 缓存池；
+  mix_audio 全工程混音（wav 直读/ffmpeg 提取、44.1k 重采样、int16 饱和）；
+  VideoExportWorker：cv2 写无声 mp4 → ffmpeg 合流 aac（无 ffmpeg 降级无声）
+- **video_workbench.py**：剪映式布局壳——顶部 Pivot（媒体/音频/文本*/贴纸*/特效*/
+  转场*，*=空页占位）+ 保存/导出按钮；左素材库（FlowLayout 卡片+真解码缩略图，
+  双击上轨到末尾）；中预览（QTimer 逐帧、720p 上限缩放、播放条）；右属性
+  （分辨率/帧率 + 选中 clip 起/入/时长 spin，拒绝回弹）；底部时间轴。
+  撤销重做=工程快照栈（Ctrl+Z/Y，60 步上限，JSON 对比去重）；Ctrl+S 保存；
+  工程存 `projects/<名>/video_project.json`
+
+### 集成
+- 欢迎页「视频编辑」卡**解禁**（type_id=video_edit）；历史表类型列显示「视频工程」
+- 门控 `_welcome_gate`：新建视频 → FluentShellWindow（单页 FluentWindow 壳，
+  同款标题栏）；打开目录按 `video_project.json` 分流视频/木偶窗口；
+  **坏目录留在欢迎页不建窗**（木偶路径 find_meta 预校验、视频路径 load 失败回退）
+- `load_recent` 兼容双类型工程目录；视频工作台写 recent 带 `type:"video"`
+- 预览第一阶段**无声**（画面所见即所得），声音在导出里体现——已知边界，写入文档
+
+### 验证（新增 6 套测试）
+- `video_model_test` 53：构造/添加/移动/trim/split/delete_range/吸附/
+  sanitize 脏数据 9 连/JSON 往返
+- `video_source_test` 87（队友 B）：自造 mp4/png/wav/木偶目录，乱序 seek、
+  缓存命中、中文路径、cv2 5.0 grab() 返回 bool 适配
+- `clip_timeline_test` 93（队友 A）：hit test/拖拽/吸附/回弹/锁定/隐藏/缩放/
+  scrub/QWheelEvent 8 参构造
+- `video_export_test` 35：fit_paste 黑边/上层轨/缓存/混音饱和截断/Worker 端到端
+- `video_integration_test` 22：**真实素材全链路** probe→帧源→合成→导出成片→
+  回读抽帧验证颜色与帧数
+- `v3_ui_test` 43：工作台构建/4 素材导入/Pivot 过滤/双击上轨/撤销重做/
+  预览播放/spin 编辑与重叠回弹/保存打开往返/**门控四路由**（新建视频、
+  视频目录、木偶目录、坏目录）/欢迎页类型列/recent 兼容
+- 全套回归 **19 套 0 FAIL**（13 套 puppet 老件 + 6 套 v3 新件）
+- offscreen 渲染 v3shot.png：布局六区全就位（Pivot/素材卡缩略图/预览帧/
+  双色 clip 块/播放头/属性面板）
+
+### 踩坑记录
+- qfluentwidgets Pivot：`switched` 信号不存在→`currentItemChanged(str)`；
+  `currentItem()` 返回 PivotItem 对象且**无 routeKey()**→用信号参数自行记录 tab
+- FlowLayout.takeAt(0) 返回 widget 本体而非 QLayoutItem（`.widget()` 直接 AttributeError）
+- NTFS 上 `f.truncate(3GB)` **不是稀疏文件**，真占磁盘把 C 盘写满 ENOSPC——
+  测试大占位文件一律放 D 盘并测后 rmtree
+- Qt 槽内异常默认被吞（stderr 丢弃时完全看不见），排查用最小复现脚本直调
+
+## v2.12.1（2026-11-12 10:10）流程 bug 修复：「打开项目」不再跳过欢迎页
+
+### 问题
+欢迎页点「打开项目」直接进了工作台，目录选择框是在工作台里弹的。
+正确流程：**在欢迎页选好工程**（且校验通过）才进工作台。
+
+### 根因与修法
+- 旧链路：`btn_open → browse_requested → _welcome_gate._enter(先建主窗) → act_open_project 弹框`
+- 新链路：`btn_open → WelcomeWindow._on_browse 在本页弹 QFileDialog →
+  is_project_dir 校验（layers_meta.json 或 *_layers.json，同 find_meta 规则）→
+  通过才发 open_requested(dir)`，走历史项目同一条门控进工作台
+- 取消 / 非工程目录都**留在欢迎页**（非法目录 InfoBar 报错，不建主窗）
+- `browse_requested` 信号与门控接线整体删除（防回潮，测试断言信号不存在）
+
+### 验证
+- `welcome_test` 40 项（新增 5）：取消不发信号 / 非工程目录不发信号 /
+  合法目录发 open_requested / 欢迎窗无 browse_requested / 门控不再调
+  act_open_project（QFileDialog.getExistingDirectory 打桩注入返回值）
+- 全套回归 **13 套 505 断言 0 FAIL**
+
+## v2.12.0（2026-11-12 09:55）启动欢迎页：先选项目类型 / 打开历史项目
+
+### 需求
+打开软件后不再直接进工作台，先进**欢迎页**（仿 After Effects 主页）：
+选「新建项目类型」（目前只有图片编辑）或双击历史项目，然后才进工作台。
+
+### 新增 `welcome_window.py`
+- **左侧栏**：新建项目（主按钮）/ 打开项目 / 🏠主页高亮 / 「最多 5 条」提示
+- **右侧**：居中大标题「欢迎使用 木偶工作室」+ 最近使用项表格
+  （名称 / 最近使用 / 大小 / 类型 四列）+ 右上筛选框（按名称子串过滤，
+  全滤掉显示「没有匹配…」，空列表显示「暂无历史项目…」）
+- 名称优先读 `rig_project.json` 的 name，否则目录名（与 Workbench 同规则）；
+  最近使用取工程目录最新 mtime → 相对时间（刚刚/X分钟前/X小时前/X天前/日期）；
+  大小 = 目录递归总字节 → KB/MB/GB
+- 打开方式：双击行 或 选中按回车（`_RecentTable.keyPressEvent` 子类实现，
+  不用实例属性覆写——PySide6 虚拟调用不认实例属性）
+- **类型对话框** `_TypeDialog`（MessageBoxBase）：图片编辑卡（默选，蓝框）
+  + 视频工程卡（置灰不可点，敬请期待），确定按钮「进入工作台」
+- 本模块**不 import l2d_rig_qt**（脚本直跑时 `__main__` 双实例问题），
+  最近列表/版本/图标由参数传入，交互结果用信号（new/open/browse_requested）发出
+
+### `l2d_rig_qt.py` 启动门控
+- 抽 `_welcome_gate()`：建欢迎窗 + 接三路信号到「建主窗→关欢迎→执行动作」
+  （**先建后关**：反序会在两窗间隙触发 quitOnLastWindowClosed 把应用退掉）
+- `run_app()` 改为先进 `_welcome_gate()`，选定才进工作台；
+  测试与「文件→打开工程」内部调用仍可直接 `MainWindow()`，不受门控影响
+- VERSION 2.11.3 → 2.12.0
+
+### 验证
+- `welcome_test` 35 项：基本渲染（标题含版本/行数/名称优先级/相对时间/
+  KB+GB 大小/类型列/空态隐藏）、筛选（匹配显隐/全滤提示/清空恢复）、
+  打开信号（双击+回车发目录）、类型对话框（默选/禁用卡不响应/按钮文案）、
+  新建路由（打桩 exec 发 image_edit + 空列表提示）、
+  **门控接线**（open/new/browse 三路都建主窗且关欢迎窗，打桩 load_dir/
+  act_open_project/act_new 验证调用）、真实 load_dir 冒烟
+- 全套回归 **13 套 500 断言 0 FAIL**
+- offscreen 渲染 welshot.png 像素采样确认布局正确（侧栏 #262932 在左、
+  主区 #1f2126 在右、青主按钮+灰按钮各就位）
+
+## v2.11.3（2026-11-12 09:30）时间轴顶部拖拽条 + 图层标题精简
+
+### 时间轴高度调节：滑块 → 分隔条式拖拽条
+- 头部「高度」滑块**已移除**（占位、丑）
+- 改为面板**顶部 2px 拖拽条**，样式与右侧「骨架节点/图层」分隔条同款
+  （静置 `#3a3f4a`，悬停/拖拽高亮 `#4d88ff`，光标上下箭头）
+- 热区 6px（条 + 头部上留白），按住上下拖即改面板高度（84–720px）
+- 拖高时行高仍同步放大（最多基准 2.5 倍），轨道真正撑开
+- 高度继续走 `anim.panel_h` 持久化，下次打开工程恢复
+
+### 图层标题精简
+- 「图层（顶=最前，拖动重排；PS 式：眼睛显隐 / 缩略图重命名 / 锁定，右键菜单）」
+  → **「图层」**——功能用户已经熟了，长说明占一行没必要
+
+### 验证
+- `v2113b_test` 27 项：滑块彻底移除（属性/控件/标签/方法四层检查）、
+  拖拽条像素色（静置/悬停/恢复/横贯整宽）、拖拽 ±80px 改高、上下限夹紧、
+  行高放大、悬停/leave 状态机、持久化往返（真实 rig_project.json，260 存读 +
+  旧工程缺省回自适应）、头部布局
+- 全套回归 12 套全 PASS（anim 63 + timeline 46 + v2112 28 + persist 18 +
+  render_kf 17 + v2113b 27 + mesh 96 + layer_menu 52 + proj_nav 24 +
+  transform 45 + asset_catalog 23 + asset_ui）
+
 ## v2.11.2（2026-11-12 00:35）时间轴体验三项：高度可拖 / 字号自适应 / 字色提亮
 
 ### 1. 时间轴高度可拖拽

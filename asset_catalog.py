@@ -12,12 +12,14 @@
   - check.type == "files" -> base_dir/dest/check.marker 存在且 >= min_bytes
 """
 import os
+import sys
 
 # 1MB 阈值（exe 完整性判定）
 _EXE_MIN = 1024 * 1024
 
 # 下载镜像（与安装器一致：国内镜像优先，官方兜底）
 HF_MIRRORS = ["https://hf-mirror.com/", "https://huggingface.co/"]
+GH_MIRROR = "https://ghfast.top/"
 
 # 模型仓库 -> 文件清单（相对 repo 根）。
 # 这些文件是 HF 上 24yearsold 的公开模型，**不需要我们自己上传**，
@@ -69,14 +71,19 @@ ASSETS = [
     {
         "id": "runtime",
         "name": "内置 Python 运行时",
-        "desc": "无需自己装 Python，装完即可启动（约 600MB）",
+        "desc": "无需自己装 Python，装完即可启动；含 CPU 推理栈（约 1.2GB）",
         "kind": "runtime",
-        "size": 620000000,
+        "size": 416261511,
         # 运行时是我们自己打包的，走 GitHub Release 资产
+        # v3.1.0 起含 CPU 推理栈（torch 2.11.0+cpu + diffusers 全家桶）
         "url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                "download/v2.11.2/runtime.zip"),
+                "download/v3.1.0/runtime.zip"),
         "dest": "runtime",
-        "check": {"type": "exe", "path": "runtime/python.exe"},
+        # v3.1.0：判定升级——旧运行时（无 torch）必须可被识别为"未装"，
+        # 否则老用户永远拿不到内置 CPU 推理栈
+        "check": {"type": "files",
+                  "marker": "Lib/site-packages/torch/__init__.py",
+                  "min_bytes": 100000},
     },
     {
         "id": "model_layerdiff",
@@ -120,6 +127,36 @@ ASSETS = [
         "check": {"type": "files", "marker": "mobile_sam.pt",
                   "min_bytes": 30000000},
     },
+    {
+        "id": "cuda_pack",
+        "name": "CUDA 加速包（N 卡提速）",
+        "desc": "把内置 CPU 推理替换为 CUDA 版 torch + bitsandbytes，"
+                "约 2.6GB 分卷；N 卡用户必装，装完重启应用生效",
+        "kind": "accel",
+        "mode": "parts",
+        "size": 2007028506,
+        # 分卷：cuda_pack.zip（2007028506 B，deflate1，torch cu130 + bitsandbytes）
+        # 按 669009502 B 切 3 段纯字节卷；构建脚本 D:\scripts\temp\build_cuda_pack.py
+        "parts": [
+            {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
+                     "download/v3.1.0/cuda_pack.zip.part01"),
+             "size": 669009502},
+            {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
+                     "download/v3.1.0/cuda_pack.zip.part02"),
+             "size": 669009502},
+            {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
+                     "download/v3.1.0/cuda_pack.zip.part03"),
+             "size": 669009502},
+        ],
+        "zip_sha256": ("7bf280ac8775d2836019993487e5acc1e6e40a3134f06f6f0f95"
+                       "85e6f3f39a67"),
+        "target": "site-packages",      # 相对 runtime 根；见 parts_target_dir
+        "pre_delete": ["torch", "bitsandbytes"],
+        # 已装判定：site-packages/torch/lib 下存在 cudnn64_*.dll（纯文件探测，
+        # 绝不 import torch——那会加载 DLL 污染本进程）
+        "done_marker": {"dir": "torch/lib", "prefix": "cudnn64_"},
+        "check": {"type": "parts"},
+    },
 ]
 
 
@@ -138,6 +175,55 @@ def _norm(p):
         return p.replace("/", os.sep)
     except Exception:
         return p
+
+
+def runtime_root(base_dir):
+    """CUDA 包要落地的 Python 运行时根（其 Lib\\site-packages 即替换目标）。
+    优先 MUPPET_RUNTIME_ROOT（测试/特殊部署）；
+    其次 <base_dir>\\runtime（装机部署的内置运行时）；
+    再回退 sys.executable 自身所在（开发机直跑场景）。"""
+    try:
+        r = os.environ.get("MUPPET_RUNTIME_ROOT", "").strip()
+        if r and os.path.isdir(r):
+            return r
+        cand = os.path.join(base_dir or "", "runtime")
+        if os.path.isdir(os.path.join(cand, "Lib", "site-packages")):
+            return cand
+        exe = os.path.dirname(sys.executable)
+        if os.path.isdir(os.path.join(exe, "Lib", "site-packages")):
+            return exe
+        return cand
+    except Exception:
+        return ""
+
+
+def parts_target_dir(asset, base_dir):
+    """parts 资产的实际落地目录。target="site-packages" 是语义糖，
+    展开为 runtime_root\\Lib\\site-packages。"""
+    try:
+        t = (asset.get("target") or "site-packages").strip()
+        rr = runtime_root(base_dir)
+        if not rr:
+            return ""
+        if t == "site-packages":
+            return os.path.join(rr, "Lib", "site-packages")
+        return os.path.join(rr, _norm(t))
+    except Exception:
+        return ""
+
+
+def _parts_installed(asset, base_dir):
+    """done_marker 纯文件探测：target/dir 下存在 prefix 开头的文件。"""
+    try:
+        dm = asset.get("done_marker") or {}
+        d = os.path.join(parts_target_dir(asset, base_dir),
+                         _norm(dm.get("dir", "")))
+        if not os.path.isdir(d):
+            return False
+        pref = dm.get("prefix", "")
+        return any(f.startswith(pref) for f in os.listdir(d))
+    except Exception:
+        return False
 
 
 def installed_path(asset, base_dir):
@@ -169,6 +255,8 @@ def is_installed(asset, base_dir):
     try:
         if not isinstance(asset, dict) or not base_dir:
             return False
+        if asset.get("mode") == "parts":
+            return _parts_installed(asset, base_dir)
         chk = asset.get("check") or {}
         ctype = chk.get("type")
         p = _check_path(asset, base_dir)
@@ -189,6 +277,19 @@ def installed_size(asset, base_dir):
     try:
         if not isinstance(asset, dict) or not base_dir:
             return 0
+        if asset.get("mode") == "parts":
+            if not _parts_installed(asset, base_dir):
+                return 0
+            # 只统计 torch 目录（site-packages 全量 walk 太慢）
+            d = os.path.join(parts_target_dir(asset, base_dir), "torch")
+            total = 0
+            for root, _dirs, files in os.walk(d):
+                for f in files:
+                    try:
+                        total += os.path.getsize(os.path.join(root, f))
+                    except Exception:
+                        pass
+            return total
         if not is_installed(asset, base_dir):
             return 0
         chk = asset.get("check") or {}
@@ -247,6 +348,15 @@ def asset_urls(asset):
             for f in files:
                 urls = [m + repo + "/resolve/main/" + f for m in HF_MIRRORS]
                 out.append((f, urls))
+            return out
+        parts = asset.get("parts") or []
+        if parts:
+            # 分卷资产：GitHub 直连 + ghfast 镜像回退
+            out = []
+            for i, p in enumerate(parts):
+                u = (p.get("url") or "").strip()
+                if u:
+                    out.append(("part%02d" % (i + 1), [u, GH_MIRROR + u]))
             return out
         url = (asset.get("url") or "").strip()
         if url:

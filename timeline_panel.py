@@ -49,6 +49,9 @@ C_KF = QColor("#ffd166")
 C_KF_SEL = QColor("#ff6b6b")
 C_LANE = QColor("#171b21")
 C_TICK_MAJOR = QColor("#8fa3bd")    # 整秒刻度文字（比秒内小刻度更亮）
+# 顶部高度拖拽条：与右侧面板 QSplitter::handle 同款配色（SPLIT_QSS）
+C_HANDLE = QColor("#3a3f4a")
+C_HANDLE_HL = QColor("#4d88ff")
 
 # 尺寸（v2.11.2：全部可在运行时缩放，见 TimelinePanel.ui_scale）
 ROW_H = 24          # 每行高度（基准值）
@@ -83,12 +86,13 @@ class TimelinePanel(QWidget):
         self.ui_scale = 1.0
         self._manual_h = None          # 用户拖拽设定的面板高度（None=按行数自适应）
         self._h_drag = None            # 高度拖拽状态
+        self._h_hot = False            # 鼠标悬在顶部拖拽条上（高亮用）
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumHeight(PANEL_MIN_H)
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(0, 2, 0, 0)   # 顶部留 2px 画高度拖拽条（同分隔条样式）
         lay.setSpacing(0)
         self._lay = lay
 
@@ -143,7 +147,7 @@ class TimelinePanel(QWidget):
         hl.addWidget(self.cmb_scale)
 
         hl.addStretch(1)
-        self.hint = CaptionLabel("拖播放头 scrub ｜ 点菱形选中 ｜ 拖它改时间 ｜ 双击删除 ｜ 右键改缓动 ｜ 拖上边缘调高度", head)
+        self.hint = CaptionLabel("拖播放头 scrub ｜ 点菱形选中 ｜ 拖它改时间 ｜ 双击删除 ｜ 右键改缓动", head)
         hl.addWidget(self.hint)
 
         lay.addWidget(head)
@@ -257,23 +261,38 @@ class TimelinePanel(QWidget):
                 + self.scaled_row_h() * n + 6)
 
     def _resize_panel(self):
-        """面板高度：用户拖过就用手动值，否则按行数自适应。"""
+        """面板高度：用户拖过/动过滑块就用手动值，否则按行数自适应。"""
         if self._manual_h is not None:
             h = int(self._manual_h)
         else:
             h = self._content_height()
         h = max(PANEL_MIN_H, min(PANEL_MAX_H, h))
         self.setFixedHeight(h)
+        self.update()               # 顶部拖拽条随宽度重画
 
-    # ---- 高度拖拽（面板上边缘 5px 热区）----
+    # ---- 顶部高度拖拽条（v2.11.3：替代滑块，样式同 QSplitter 分隔条）----
+    def paintEvent(self, ev):
+        super().paintEvent(ev)
+        p = QPainter(self)
+        hot = self._h_hot or (self._h_drag is not None)
+        p.fillRect(0, 0, self.width(), 2, C_HANDLE_HL if hot else C_HANDLE)
+        p.end()
+
+    # ---- 高度拖拽（面板上边缘：2px 可见拖拽条 + 6px 热区）----
     def _hit_h_edge(self, pos):
-        return pos.y() <= 5
+        return pos.y() <= 6
+
+    def _set_hot(self, hot):
+        if self._h_hot != hot:
+            self._h_hot = hot
+            self.update()
 
     def mousePressEvent(self, ev):
         if ev.button() == Qt.LeftButton and self._hit_h_edge(ev.position()):
             self._h_drag = {"y0": int(ev.globalPosition().y()),
                             "h0": int(self.height())}
             self.setCursor(Qt.SizeVerCursor)
+            self._set_hot(True)
             ev.accept()
             return
         super().mousePressEvent(ev)
@@ -288,8 +307,10 @@ class TimelinePanel(QWidget):
             self._resize_panel()
             ev.accept()
             return
-        # 悬停到上边缘时显示调整光标
-        if self._hit_h_edge(ev.position()):
+        # 悬停到顶部拖拽条：高亮 + 调整光标
+        hot = self._hit_h_edge(ev.position())
+        self._set_hot(hot)
+        if hot:
             self.setCursor(Qt.SizeVerCursor)
         else:
             self.unsetCursor()
@@ -299,9 +320,14 @@ class TimelinePanel(QWidget):
         if self._h_drag is not None:
             self._h_drag = None
             self.unsetCursor()
+            self._set_hot(self._hit_h_edge(ev.position()))
             ev.accept()
             return
         super().mouseReleaseEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._set_hot(False)
+        super().leaveEvent(ev)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)

@@ -15,6 +15,7 @@
 import os
 import re
 import shutil
+import sys
 import threading
 import zipfile
 
@@ -168,12 +169,16 @@ class AssetDownloadThread(QThread):
         return True
 
     def run(self):
-        """执行下载。两种形态：
+        """执行下载。三种形态：
            逐文件（模型）：asset 有 "files" -> 按相对路径逐个下（支持逐文件续传）
            zip   （运行时/sam）：asset 有 "url" -> 下整包再解压
+           分卷  （CUDA 包）：asset mode=="parts" -> 多卷下载拼接解压覆盖
         """
         try:
             import asset_catalog as AC
+            if self.asset.get("mode") == "parts":
+                self._run_parts()
+                return
             plan = AC.asset_urls(self.asset)
             if not plan:
                 self.failed.emit("该资产没有配置下载地址")
@@ -258,8 +263,25 @@ class AssetDownloadThread(QThread):
             req.add_header("Range", "bytes=%d-" % have)
         try:
             resp = urllib.request.urlopen(req, timeout=30)
-        except Exception:
-            return None
+        except Exception as e:
+            # 416 = 本地 .part 超出服务器文件（包更新过）：丢弃残留从头再下，
+            # 否则残留永远拼不出正确文件 -> 无限失败
+            code = getattr(e, "code", None)
+            if code == 416 and have > 0:
+                self.status.emit("残留分卷与服务器不符，重新下载")
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0"})
+                try:
+                    resp = urllib.request.urlopen(req, timeout=30)
+                except Exception:
+                    return None
+                have = 0
+            else:
+                return None
         code = getattr(resp, "status", 200)
         mode = "ab" if code == 206 else "wb"
         if code != 206:
@@ -392,6 +414,148 @@ class AssetDownloadThread(QThread):
             self.failed.emit("校验失败：%s" % e)
             return
         self.finished_ok.emit(dest_dir)
+
+    # ---------- 分卷模式（CUDA 加速包）----------
+    def _run_parts(self):
+        """多卷下载 -> 字节拼接成 zip -> sha256 校验 -> pre_delete -> 解压覆盖。
+
+        安全闸（全部 fail-fast，宁可不装不可装坏）：
+          1. 本进程已 import torch -> 拒绝（DLL 被占用，替换必半途中断）
+          2. 磁盘预检不足 -> 拒绝
+          3. 任一卷下不全 -> 保留 .part 可续传，不进入解压
+          4. sha256 不符 -> 删坏包（防下次拼接用坏卷）报错
+          5. pre_delete 失败（文件锁）-> 报错，不解压
+          6. 解压后 done_marker 探测失败 -> 报错（沿用"验证不过就 failed"的
+             防无限重下载闸门）
+        """
+        import hashlib
+        import asset_catalog as AC
+        asset = self.asset
+        parts = asset.get("parts") or []
+        if not parts:
+            self.failed.emit("分卷清单为空")
+            return
+        if "torch" in sys.modules:
+            self.failed.emit("推理引擎已在当前会话加载。请重启应用后再安装 "
+                             "CUDA 包（torch DLL 被占用会导致替换失败）")
+            return
+        target = AC.parts_target_dir(asset, self.base_dir)
+        if not target:
+            self.failed.emit("找不到运行时目录（runtime\\Lib\\site-packages）")
+            return
+        # 磁盘预检：卷大小已知按 1.2x 估，未知按 4GB 兜底
+        need = sum(int(p.get("size") or 0) for p in parts) or 4 * 2 ** 30
+        try:
+            drive = os.path.splitdrive(os.path.abspath(target))[0] + os.sep
+            free = shutil.disk_usage(drive).free
+            if free < need * 1.2:
+                self.failed.emit("磁盘空间不足：约需 %s，%s 仅剩 %s"
+                                 % (human_mb(need * 1.2), drive, human_mb(free)))
+                return
+        except Exception:
+            pass
+        work = os.path.join(os.environ.get("TEMP") or target, "muppet_cuda_dl")
+        try:
+            os.makedirs(work, exist_ok=True)
+        except Exception as e:
+            self.failed.emit("无法创建下载目录：%s" % e)
+            return
+        total_bytes = sum(int(p.get("size") or 0) for p in parts)
+        done = 0
+        for i, p in enumerate(parts):
+            if self._cancel:
+                self.failed.emit("已取消")
+                return
+            url = (p.get("url") or "").strip()
+            fname = os.path.basename(url.split("?")[0]) or ("part%02d" % (i + 1))
+            dest = os.path.join(work, fname)
+            urls = [url, AC.GH_MIRROR + url]
+            sz = None
+            for u in urls:
+                self.status.emit("下载卷 %d/%d（%s）" % (i + 1, len(parts), fname))
+                try:
+                    sz = self._download_file(u, dest, done, total_bytes)
+                except Exception as e:
+                    self.status.emit("镜像失败：%s" % str(e)[:60])
+                    sz = None
+                if sz is not None:
+                    break
+            if sz is None:
+                self.failed.emit("卷 %d/%d 下载失败；已下部分保留，可重试续传"
+                                 % (i + 1, len(parts)))
+                return
+            done += sz
+            self.progressed.emit(done, total_bytes or done)
+        # 拼接（流式，不把 2.6GB 读进内存）
+        zip_path = os.path.join(work, "cuda_pack.zip")
+        self.status.emit("合并分卷…")
+        try:
+            with open(zip_path, "wb") as out:
+                for p in parts:
+                    fname = os.path.basename(
+                        (p.get("url") or "").split("?")[0]) or "part"
+                    with open(os.path.join(work, fname), "rb") as f:
+                        shutil.copyfileobj(f, out, 1024 * 1024)
+        except Exception as e:
+            self.failed.emit("分卷合并失败：%r" % e)
+            return
+        # 整包校验
+        want = (asset.get("zip_sha256") or "").strip()
+        note = ""
+        if want:
+            self.status.emit("校验整包 sha256…")
+            h = hashlib.sha256()
+            with open(zip_path, "rb") as f:
+                while True:
+                    b = f.read(4 * 1024 * 1024)
+                    if not b:
+                        break
+                    h.update(b)
+            if h.hexdigest().lower() != want.lower():
+                try:
+                    os.remove(zip_path)
+                except OSError:
+                    pass
+                # 坏包必须连分卷一起删：只删 zip 留着错卷，下次拼接还是坏的
+                for p in parts:
+                    fn = os.path.basename(
+                        (p.get("url") or "").split("?")[0]) or "part"
+                    for cand in (os.path.join(work, fn),
+                                 os.path.join(work, fn + ".part")):
+                        try:
+                            os.remove(cand)
+                        except OSError:
+                            pass
+                self.failed.emit("校验失败（sha256 不符，坏包与分卷已删除）——"
+                                 "重试将完整重新下载")
+                return
+        else:
+            note = "（未校验 sha256）"
+        if not zipfile.is_zipfile(zip_path):
+            self.failed.emit("合并结果不是有效 zip（某卷可能损坏），请重试")
+            return
+        # 删旧
+        self.status.emit("替换旧 torch（先清理 CPU 版）…")
+        for name in (asset.get("pre_delete") or []):
+            d = os.path.join(target, name.replace("/", os.sep))
+            if os.path.isdir(d):
+                try:
+                    shutil.rmtree(d)
+                except Exception as e:
+                    self.failed.emit("无法删除旧 %s（文件被占用？请完全关闭"
+                                     "应用后重试）：%s" % (name, e))
+                    return
+        # 解压
+        if not self._extract_zip(zip_path, target):
+            self.failed.emit("解压失败（可重试）")
+            return
+        shutil.rmtree(work, ignore_errors=True)
+        # 落地校验：done_marker 必须出现
+        if not AC.is_installed(asset, self.base_dir):
+            self.failed.emit("解压后校验未通过：未找到 CUDA 标志文件（%s）。"
+                             "包内容可能与预期不符" % target)
+            return
+        self.finished_ok.emit(target + note)
 
 class AssetDownloadDialog(QDialog):
     """下载进度对话框：进度条 + 速度 + 取消。"""

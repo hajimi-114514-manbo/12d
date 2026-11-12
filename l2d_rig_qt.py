@@ -108,7 +108,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "2.11.2"
+VERSION = "3.1.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -1040,9 +1040,10 @@ class RigCanvas(QWidget):
                 self.image_dropped.emit(p)
                 break
 
-# ---------------- 最近工程（持久化，最多 5 条） ----------------
+# ---------------- 最近工程（持久化：存储上限 100；菜单只显 5，欢迎页按类型分页展示） ----------------
 RECENT_FILE = os.path.join(V2, "recent_projects.json")
-RECENT_MAX = 5
+RECENT_MAX = 100
+RECENT_MENU_MAX = 5
 
 def load_recent():
     try:
@@ -1052,7 +1053,8 @@ def load_recent():
     out = []
     for it in items:
         d = it.get("dir")
-        if d and os.path.isfile(os.path.join(d, "layers_meta.json")):
+        if d and (os.path.isfile(os.path.join(d, "layers_meta.json"))
+                  or os.path.isfile(os.path.join(d, "video_project.json"))):
             out.append(it)
         if len(out) >= RECENT_MAX:
             break
@@ -1891,8 +1893,7 @@ class Workbench(QWidget):
         botLay = QVBoxLayout()
         botLay.setContentsMargins(4, 4, 0, 0)
         botLay.setSpacing(6)
-        botLay.addWidget(StrongBodyLabel(
-            "图层（顶=最前，拖动重排；PS 式：眼睛显隐 / 缩略图重命名 / 锁定，右键菜单）"))
+        botLay.addWidget(StrongBodyLabel("图层"))
         self.layer_list = ListWidget()
         self.layer_list.setDragDropMode(ListWidget.InternalMove)
         self.layer_list.setDefaultDropAction(Qt.MoveAction)
@@ -2366,7 +2367,15 @@ class Workbench(QWidget):
         # 模型
         self.asset_menu.addAction(Action(FluentIcon.FOLDER, "— 模型 —"))
         for a in AC.ASSETS:
-            if (a.get("kind") or "model") != "runtime":
+            if (a.get("kind") or "model") not in ("runtime", "accel"):
+                self._add_asset_action(a, a.get("id") not in miss)
+        # 推理加速（CUDA 分卷包，N 卡用户提速）
+        accel = [a for a in AC.ASSETS if (a.get("kind") or "") == "accel"]
+        if accel:
+            self.asset_menu.addSeparator()
+            self.asset_menu.addAction(
+                Action(FluentIcon.UP, "— 推理加速 —"))
+            for a in accel:
                 self._add_asset_action(a, a.get("id") not in miss)
         self.asset_menu.addSeparator()
         self.asset_menu.addAction(Action(
@@ -3482,7 +3491,7 @@ class Workbench(QWidget):
             act.setEnabled(False)
             menu.addAction(act)
             return
-        for it in items[:RECENT_MAX]:
+        for it in items[:RECENT_MENU_MAX]:
             label = it.get("name") or it["dir"]
             if it.get("layers"):
                 label = "%s  (%d 层)" % (label, it["layers"])
@@ -4261,6 +4270,110 @@ class MainWindow(FluentWindow):
             if os.path.isdir(d):
                 self.add_project_entry(fn, d)
 
+class FluentShellWindow(FluentWindow):
+    """v3 视频工程用的单页 FluentWindow 壳：同款标题栏/图标，导航隐藏。"""
+
+    def __init__(self):
+        super().__init__()
+        self.resize(1440, 860)
+        from PySide6.QtGui import QIcon
+        if os.path.exists(ICON_ICO):
+            self.setWindowIcon(QIcon(ICON_ICO))
+        elif os.path.exists(ICON_PNG):
+            self.setWindowIcon(QIcon(ICON_PNG))
+        self.navigationInterface.setMenuButtonVisible(False)
+        try:
+            self.navigationInterface.setReturnButtonVisible(False)
+        except Exception:
+            try:
+                self.navigationInterface.panel.returnButton.setVisible(False)
+            except Exception:
+                pass
+        self.navigationInterface.setVisible(False)
+
+    def setCentralInterface(self, w, text="视频工程"):
+        w.setObjectName("centralIface")
+        self.addSubInterface(w, FluentIcon.VIDEO, text)
+        item = self.navigationInterface.widget("centralIface")
+        if item is not None:
+            item.setVisible(False)
+
+
+def _open_video_window(proj_dir=None):
+    """新建/打开视频工程。返回 (win, wb)；打开失败返回 None（留在欢迎页）。"""
+    import video_workbench as VW
+    win = FluentShellWindow()
+    wb = VW.VideoWorkbench(None)
+    win.setCentralInterface(wb)
+    name = os.path.basename(proj_dir) if proj_dir else "未命名视频工程"
+    wb.project_dirty_changed = lambda: win.setWindowTitle(
+        "木偶工作室 v%s - %s*" % (VERSION, name))
+    if proj_dir and not wb.load_dir(proj_dir):
+        win.deleteLater()
+        return None
+    win.setWindowTitle("木偶工作室 v%s - %s" % (VERSION, name))
+    return win, wb
+
+
+def _welcome_gate():
+    """v2.12.0 启动门控：建欢迎页并接好「进工作台」路由。
+    返回 (wel, holder)；holder["main"] = 选定后创建的主窗（测试可查）。"""
+    from welcome_window import WelcomeWindow
+    import video_workbench as VW
+    icon = ICON_ICO if os.path.exists(ICON_ICO) else (
+        ICON_PNG if os.path.exists(ICON_PNG) else "")
+    wel = WelcomeWindow(items=load_recent(), version=VERSION, icon_path=icon)
+    holder = {}
+
+    def _enter(fn):
+        """建主窗 -> 关欢迎页 -> 执行进入动作（顺序勿换：先有后关，
+        否则 quitOnLastWindowClosed 会在两窗间隙里把应用退掉）"""
+        win = MainWindow()
+        holder["main"] = win
+        win.show()
+        wel.close()
+        try:
+            fn(win)
+        except Exception:
+            pass
+
+    def _enter_video(proj_dir=None):
+        r = _open_video_window(proj_dir)
+        if r is None:                 # 打开失败：留在欢迎页，不切窗
+            return False
+        win, _wb = r
+        holder["main"] = win
+        win.show()
+        wel.close()
+        return True
+
+    def _on_new(type_id):
+        if type_id == "video_edit":
+            _enter_video(None)
+        else:
+            _enter(lambda win: win.wb.act_new(ask_size=False))
+
+    def _on_open(d):
+        if VW.VideoWorkbench.is_video_project(d):
+            _enter_video(d)
+            return
+        # 木偶工程：先校验目录有效，无效留在欢迎页（别先建窗再失败）
+        if not (os.path.isdir(d) and find_meta(d)):
+            return
+
+        def _load(win):
+            if win.wb.load_dir(d):
+                InfoBar.success("已打开", os.path.basename(d), parent=win.wb,
+                                position=InfoBarPosition.TOP, duration=2000)
+        _enter(_load)
+
+    wel.new_requested.connect(_on_new)
+    wel.open_requested.connect(_on_open)
+    # v2.12.1：「打开项目」改在欢迎页内选目录（_on_browse 选完发 open_requested），
+    # 不再走 browse_requested -> 先建主窗再弹框 的旧路（流程 bug）
+    return wel, holder
+
+
 def run_app():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -4271,8 +4384,10 @@ def run_app():
     app.setStyleSheet(
         "QToolTip { color:#e6e6e6; background-color:#2b3140;"
         " border:1px solid #3c4354; padding:4px 6px; }")
-    w = MainWindow()
-    w.show()
+    # 启动先进欢迎页（选项目类型 / 打开历史项目），选定后才进工作台。
+    # 测试与内部调用仍可直接 MainWindow()，不受门控影响。
+    wel, _holder = _welcome_gate()
+    wel.show()
     sys.exit(app.exec())
 
 if __name__ == "__main__":
