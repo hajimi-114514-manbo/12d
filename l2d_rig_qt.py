@@ -1670,10 +1670,17 @@ class Workbench(QWidget):
         # 安装包不再下载模型，装完即可打开；缺什么在这里按需下载。
         am = ToggleDropDownButton("资产管理", self)
         self.asset_menu = RoundMenu(parent=self)
-        # 内容在菜单打开时懒构建（要查本地是否已下载，可能扫目录）
+        # 内容在点击时同步重建（要查本地是否已下载，可能扫目录）。
+        # 首击无响应修复：重建时机必须先于弹出。qfw 的弹出链是
+        # mouseReleaseEvent -> PushButton.mouseReleaseEvent（此处同步发
+        # clicked）-> _showMenu（弹菜单）——把重建挂在 clicked 上，
+        # 直接连接的槽同步执行，保证「先填后弹」。原来挂在 menu_opened
+        # 上时重建发生在弹菜单之后，首击弹出的是空菜单（adjustSize 按
+        # 0 项计算，视口高度≈0，用户体感"点了没反应"），第二次点击才
+        # 有内容。也顺带避免菜单可见期间 clear+refill 的闪烁与重复扫盘。
+        am.clicked.connect(lambda _=False: self._rebuild_asset_menu())
         self.asset_menu_ref = self.asset_menu
         am.setMenu(self.asset_menu)
-        am.menu_opened.connect(lambda _m: self._rebuild_asset_menu())
         self.asset_btn = am
         self.asset_menu_btn = am
         menu.setFixedHeight(30)

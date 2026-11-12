@@ -29,6 +29,16 @@
 - `asset_catalog_test` / `asset_ui_test` 文案断言全过
 - 安装包重打 411.1MB，v3.1.1 注入确认
 
+### 3.1.1 内追加：资产管理按钮首击无响应修复（队友 finisher）
+- 根因：qfw 弹出链 `mouseReleaseEvent → clicked(同步) → _showMenu → menu_opened`，
+  重建挂在 menu_opened 上 = **先弹后填**，首击弹出的是空菜单
+  （adjustSize 按 0 项算，视口高度≈0 → 体感"没反应"），第二次点击才可见
+- 修法：重建时机挪到 `am.clicked`（直连槽在 _showMenu 之前同步执行，先填后弹）；
+  `_rebuild_asset_menu` 内部与 v2.9.1 蜈蚣修复零改动
+- `asset_btn_test` 12 项（首击即 9 项就绪/连点不重复/view 无残留/文本抽查）
+  + `asset_ui_test` 14 项回归全过
+- 安装包重打并替换 Release 资产（3.1.1 未分发过旧包，无用户影响）
+
 ## v3.1.0（2026-11-12 16:40）推理运行时两层化：CPU 内置开箱即跑 + CUDA 加速包应用内下载
 
 ### 架构决策（用户拍板）
