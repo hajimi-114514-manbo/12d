@@ -1,0 +1,5 @@
+{
+  "version": "3.1.1",
+  "installer_sha256": "40680b62cfac98f10a6fd4c51a7d1b64e25b06bb2ebfa11dd8596664969e6521",
+  "notes": "v3.1.1：拆图不再默认走 CPU（无 CUDA 给三条出路）；资产管理按钮首击即弹；运行时/CUDA 包应用内可下载"
+}
