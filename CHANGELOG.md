@@ -5,6 +5,48 @@
 
 ---
 
+## v3.2.0（2026-11-12 19:10）自动更新闭环 + 推理引擎四档优先级链
+
+### 检查更新（欢迎页 → 后台下载 → 静默安装，全程零弹窗）
+- 欢迎页左下角新增 32×32 圆形按钮（FluentIcon.UPDATE，悬停提示「检查更新」），
+  点击才发网络请求：`update_checker.py` 按 raw.githubusercontent → ghfast.top →
+  jsdelivr 三镜像回退拉 version.json（30s 总预算）→ 数字化 semver 比对 →
+  有新版则后台下载新 installer（.part 断点续传、416 自愈、sha256 校验、MZ/PK
+  文件头探测），完成后 InfoBar 提示「退出后自动安装」。
+- 退出触发：`run_app` 挂 `aboutToQuit` → 有 pending 包就 DETACHED 拉起
+  `MuppetStudio-Setup.exe --auto --dir <安装目录>`，异常全吞绝不卡退出。
+- 安装器新增 `--auto [--dir]` 静默模式（dist/installer.cs RunAuto）：无 UI，
+  缺 --dir 回退注册表 InstallPath；三层目录校验（存在/l2d_rig_qt.py+launcher.ini
+  标志/黑名单与 DoFresh 同套）；只等待**引用该安装目录**的进程退出（≤60s，
+  每 2s 轮询，不强杀）；复用 DoUpdate；成功自动重启应用。
+  退出码 0=完成 / 2=无目录 / 3=校验失败 / 4=等待超时 / 5=更新失败，
+  日志 %TEMP%\muppet_update.log（UTF8 无 BOM）。
+- 测试：update_checker_test 61 PASS、installer auto 22 PASS、跨组件 E2E
+  （真 spawn 假资源验契约）10 PASS、接线验收 6 PASS。
+- 集成 bug（真包冒烟抓到）：--auto 不打 --no-pause 时失败路径的 Report 会弹
+  无人点击的 MessageBox → 进程假死（日志已写完但不退出）。修复：RunAuto 顶部
+  无条件 noPause=true，静默模式彻底封死任何弹窗路径；黑名单/不存在目录均秒回 rc=3。
+- 发版约定：每次出新 installer 必须同步更新仓库根 version.json
+  （version + installer_sha256 + notes），否则用户端检查不到新版。
+
+### 推理引擎四档优先级链（用户拍板：加速包 → CUDA 运行时 → CPU 兜底）
+- `engine_tier()` 返回 (tier, reason)：**accel_pack**（CUDA 可用且加速包
+  done_marker 已装）→ **system_cuda** → **comfy**（触发条件与 v3.1.1 相同，
+  AMD 路线不动）→ **cpu**。资产管理菜单顶部显示「当前拆图档位」。
+- CPU 从 v3.1.1 的硬拒绝改为**最后兜底档**：前三档全不可用时允许拆图，
+  但先弹确认（警告约 2-3 小时/张@512px），确认后写会话标志本会话不再弹，
+  并按任务快照自动重投；env `MUPPET_ALLOW_CPU_ENGINE=1` 静默逃生保留；
+  CLI 无确认途径仍拒绝（rc=2 + 文字指引）。
+- seethrough_local 新增 `CpuConfirmationRequired(RuntimeError)`（继承旧类型，
+  v3.1.1 捕获代码兼容）；installer.cs AmdGuide 文案同步新定位。
+- 测试：engine_chain_test 44 PASS（档位矩阵/env 逃生/会话记住/CLI 拒绝/UI 接线）。
+
+### 其他
+- 资产管理按钮首击无响应修复（commit 93c9151，v3.1.1 tag 后随包）：菜单填充
+  从 menu_opened 提前到 clicked，qfluentwidgets 首击链路不再弹空菜单。
+
+---
+
 ## v3.1.1（2026-11-12 17:50）CPU 定位修正：只为打开软件，不是拆图通道
 
 ### 用户拍板

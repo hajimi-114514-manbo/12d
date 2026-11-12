@@ -108,7 +108,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.1.1"
+VERSION = "3.2.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -1124,49 +1124,139 @@ def find_meta(d):
 
 # ---------------- 后台拆分线程（照 fluent_worker 模式） ----------------
 def _engine_mode():
-    """选拆分引擎：
-       local = 进程内 SeeThrough（nf4，需 CUDA，N 卡默认，最快）
+    """选拆分引擎通道（触发条件自 v2.4 起保持不变，task-15 只在其后追加 CPU 兜底）：
+       local = 进程内 SeeThrough（有 CUDA：加速包/系统 CUDA 的 nf4 快档；
+               无 CUDA：CPU 兜底档，确认门在 seethrough_local.decompose）
        comfy = 本机 ComfyUI + See-through 插件（bf16，A 卡/ROCm 或无 CUDA 时）
+    完整四档链判定见 engine_tier()。
     环境变量 MUPPET_ENGINE=local|comfy 可强制（N 卡想跑全精度质量更高时用 comfy）。"""
     force = os.environ.get("MUPPET_ENGINE", "").strip().lower()
     if force in ("local", "comfy"):
         return force
     return "local" if _cuda_available() else "comfy"
 
+
+# ---------------- 引擎档位判定（task-15 四档优先级链） ----------------
+TIER_LABELS = {
+    "accel_pack": "CUDA 加速包",
+    "system_cuda": "系统 CUDA",
+    "comfy": "ComfyUI（A 卡/ROCm）",
+    "cpu": "CPU 兜底（需确认）",
+}
+
+def _accel_pack_installed():
+    """加速包是否已落地（asset_catalog done_marker 纯文件探测，
+    绝不 import torch——那会加载 DLL 污染当前进程）。"""
+    try:
+        import asset_catalog as AC
+        a = AC.asset_by_id("cuda_pack")
+        return bool(a) and AC.is_installed(a, V2)
+    except Exception:
+        return False
+
+def _comfy_available(timeout=2.0):
+    """本机是否有在跑的 ComfyUI（复用 comfy_decompose.probe，纯 localhost HTTP，
+    端口无人监听时秒级拒绝返回 False）。"""
+    try:
+        import comfy_decompose as CD
+        return CD.probe(timeout=timeout) is not None
+    except Exception:
+        return False
+
+def engine_tier(probe_comfy=True, comfy_timeout=2.0):
+    """四档优先级链判定，返回 (tier, reason)，tier ∈ TIER_LABELS。
+
+       1. accel_pack   CUDA 加速包已装 且 CUDA 可用 → local nf4 快档
+       2. system_cuda  当前 Python 的 torch 检出 CUDA → local nf4 快档
+       3. comfy        无 CUDA 但 ComfyUI 在跑（A 卡路线，触发条件不动）
+       4. cpu          前三档全不可用 → CPU 最后兜底（需确认，门槛在
+                       seethrough_local.decompose：UI 弹框确认或 env 逃生阀）
+
+    说明：档 1/2 在实现上收敛为同一个"local CUDA"，按"加速包已装"标记区分
+    来源展示；MUPPET_FORCE_DEVICE=cpu 视为用户手动落到 CPU 档。
+    probe_comfy=True 时会做 localhost 探测（一般毫秒级；被挂起的端口最多
+    comfy_timeout×3，不要在每帧路径里调）。"""
+    if os.environ.get("MUPPET_FORCE_DEVICE", "").strip().lower() == "cpu":
+        return "cpu", "MUPPET_FORCE_DEVICE 已把设备钉为 CPU（需确认）"
+    if _cuda_available():
+        if _accel_pack_installed():
+            return "accel_pack", "CUDA 加速包已装，本地引擎走 nf4 快档（约 14 分钟/张）"
+        return "system_cuda", "系统 CUDA 可用，本地引擎走 nf4 快档"
+    if probe_comfy and _comfy_available(comfy_timeout):
+        return "comfy", "无 CUDA，检测到在跑的 ComfyUI（A 卡/ROCm 路线）"
+    return "cpu", "无 CUDA 且无在跑的 ComfyUI，只剩 CPU 兜底档"
+
+def _is_cpu_confirm_error(e):
+    """识别 CPU 兜底确认门异常。不用 except 具体类：ComfyUI 分支不 import
+    seethrough_local，异常处理路径里类型可能尚未加载；类名匹配兜底。"""
+    if type(e).__name__ == "CpuConfirmationRequired":
+        return True
+    try:
+        import seethrough_local as SL
+        return isinstance(e, SL.CpuConfirmationRequired)
+    except Exception:
+        return False
+
 class DecomposeWorker(QThread):
     log_signal = Signal(str)
     done_signal = Signal(object, str)     # meta or None, out_dir
+    need_cpu_confirm = Signal()           # CPU 兜底档待用户确认（task-15）
 
     def __init__(self, img_path, out_dir):
         super().__init__()
         self.img_path = img_path
         self.out_dir = out_dir
 
+    def _tier_label(self):
+        # 已确定走 local 通道，无需再探 ComfyUI（probe_comfy=False 不打扰 GUI 线程）
+        try:
+            tier, _ = engine_tier(probe_comfy=False)
+            return TIER_LABELS.get(tier, tier)
+        except Exception:
+            return "本地 nf4"
+
+    def _run_local(self):
+        import seethrough_local as SL
+        self.log_signal.emit("引擎：本地进程内 SeeThrough（%s）…" % self._tier_label())
+        return SL.decompose(self.img_path, self.out_dir,
+                            verbose=self.log_signal.emit)
+
+    def _run_comfy(self):
+        import comfy_decompose as CD
+        self.log_signal.emit(
+            "引擎：ComfyUI + See-through 插件（bf16，A 卡/ROCm 路线）…")
+
+        def prog(sec):
+            # 无中间进度可查，按耗时线性估：700s 视作正常完成点
+            pct = int(15 + min(sec, 700) / 700.0 * 65)
+            self.log_signal.emit(
+                "#pct=%d ComfyUI 推理中 %ds（A 卡首跑含模型下载会更久）" % (pct, sec))
+
+        return CD.decompose(self.img_path, self.out_dir, quant="none",
+                            auto_download=True, prefix="muppet",
+                            verbose=self.log_signal.emit,
+                            on_progress=prog, timeout=3600)
+
     def run(self):
+        # 四档链（task-15）：有 CUDA → local（加速包/系统档）；无 CUDA 仍默认
+        # comfy（触发条件不动）；仅当 ComfyUI 也不可用（没在跑）才落到
+        # CPU 兜底——确认门由 seethrough_local 抛出，这里转成 UI 信号。
         mode = _engine_mode()
         try:
             if mode == "local":
-                import seethrough_local as SL
-                self.log_signal.emit("引擎：本地进程内 SeeThrough（nf4）…")
-                meta = SL.decompose(self.img_path, self.out_dir,
-                                    verbose=self.log_signal.emit)
+                meta = self._run_local()
+            elif _comfy_available(timeout=4.0):
+                meta = self._run_comfy()
             else:
-                import comfy_decompose as CD
                 self.log_signal.emit(
-                    "引擎：ComfyUI + See-through 插件（bf16，A 卡/ROCm 路线）…")
-
-                def prog(sec):
-                    # 无中间进度可查，按耗时线性估：700s 视作正常完成点
-                    pct = int(15 + min(sec, 700) / 700.0 * 65)
-                    self.log_signal.emit(
-                        "#pct=%d ComfyUI 推理中 %ds（A 卡首跑含模型下载会更久）" % (pct, sec))
-
-                meta = CD.decompose(self.img_path, self.out_dir, quant="none",
-                                    auto_download=True, prefix="muppet",
-                                    verbose=self.log_signal.emit,
-                                    on_progress=prog, timeout=3600)
+                    "未发现在跑的 ComfyUI：尝试 CPU 最后兜底档…")
+                meta = self._run_local()
             self.done_signal.emit(meta, self.out_dir)
         except Exception as e:
+            if _is_cpu_confirm_error(e):
+                self.log_signal.emit("CPU 兜底档需要你的确认（约 2-3 小时/张）")
+                self.need_cpu_confirm.emit()
+                return
             self.log_signal.emit("异常: %s: %s" % (type(e).__name__, e))
             self.done_signal.emit(None, self.out_dir)
 
@@ -2364,6 +2454,17 @@ class Workbench(QWidget):
             miss = {a["id"] for a in AC.missing_assets(base)}
         except Exception:
             miss = set()
+
+        # task-15：先亮当前命中的引擎档位（加速包/系统 CUDA/ComfyUI/CPU 兜底）。
+        # 成本说明：首次会惰性 import torch（几秒，与点拆图按钮同成本，之后走
+        # 缓存）+ ComfyUI localhost 探测（无服务毫秒级）。
+        try:
+            tier, _why = engine_tier()
+            self.asset_menu.addAction(Action(
+                FluentIcon.UPDATE, "当前拆图档位：%s" % TIER_LABELS.get(tier, tier)))
+            self.asset_menu.addSeparator()
+        except Exception:
+            pass
 
         # 运行环境（最影响"装完能不能打开"）
         self.asset_menu.addAction(Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
@@ -3803,22 +3904,98 @@ class Workbench(QWidget):
             InfoBar.error("文件不存在", img_path, parent=self,
                           position=InfoBarPosition.TOP, duration=3000)
             return
-        # 无 CUDA 不再阻断：改走 ComfyUI 路线，只把前提条件讲清楚
-        if _engine_mode() == "comfy":
-            InfoBar.info("本机无 NVIDIA CUDA，走 ComfyUI 路线拆分",
+        # task-15 四档链：先告知当前命中的档位。无 CUDA 默认仍走 ComfyUI
+        # （触发条件不动）；ComfyUI 也不可用才是 CPU 兜底——确认框由 worker
+        # 捕获 CpuConfirmationRequired 后经 need_cpu_confirm 信号在这条主线程上弹。
+        # 注意 engine_tier 首次会惰性 import torch（几秒，与旧版 _engine_mode
+        # 相同成本）+ localhost 探测（无服务时毫秒级）。
+        try:
+            tier, _why = engine_tier()
+        except Exception:
+            tier = "comfy" if _engine_mode() == "comfy" else "system_cuda"
+        if tier == "comfy":
+            InfoBar.info("引擎档位：%s" % TIER_LABELS["comfy"],
                          "前提：本机 ComfyUI 已启动且装了 See-through 插件"
                          "（安装器勾选「A 卡拆图支持」可代下 ComfyUI 安装器与插件（也可自行下载））。"
                          "推理用 bf16，首次运行插件会自动下载约 12.5GB 模型，耗时较长且可重跑续传。",
                          parent=self, position=InfoBarPosition.TOP, duration=9000)
+        elif tier == "cpu":
+            InfoBar.warning("引擎档位：%s" % TIER_LABELS["cpu"],
+                            "未检测到可用 CUDA，也没发现在跑的 ComfyUI。"
+                            "即将弹出 CPU 兜底确认框：约 2-3 小时/张（CUDA 约 14 分钟/张），"
+                            "装 CUDA 加速包或启动 ComfyUI 都快得多。",
+                            parent=self, position=InfoBarPosition.TOP, duration=9000)
         self.busy = True
         self.prog.setText("准备中…")
         self._nav_pct = 0
         self.set_nav_progress(0)
         out = os.path.join(OUT_BASE, os.path.splitext(os.path.basename(img_path))[0])
+        self._decompose_job = (img_path, out)   # CPU 确认通过后重试用
+        self._start_worker(img_path, out)
+
+    def _start_worker(self, img_path, out):
+        old = getattr(self, "worker", None)
+        if old is not None:
+            # CPU 确认后重启时旧线程刚发完信号还没退出：持引用防 QThread 析构崩溃
+            self._retired_workers = getattr(self, "_retired_workers", [])
+            self._retired_workers = [w for w in self._retired_workers if w.isRunning()] + [old]
         self.worker = DecomposeWorker(img_path, out)
         self.worker.log_signal.connect(self._on_decompose_log)
         self.worker.done_signal.connect(self._decompose_done)
+        self.worker.need_cpu_confirm.connect(self._ask_cpu_confirm)
         self.worker.start()
+
+    def _ask_cpu_confirm(self):
+        """CPU 兜底确认框（worker 捕获 CpuConfirmationRequired 后触发，主线程）。
+        「仍要用 CPU」→ 置 seethrough_local 会话标志（本次会话不再弹）并重投
+        同一任务；取消/关闭 → 释放 busy，提示更快的档位。"""
+        if getattr(self, "_cpu_box_open", False):
+            return
+        self._cpu_box_open = True
+        try:
+            import seethrough_local as SL
+            if SL.cpu_engine_confirmed():
+                # 已确认过（会话或 env）：静默放行，直接重投
+                self._restart_decompose()
+                return
+            box = MessageBox(
+                "CPU 兜底拆图确认",
+                "四档引擎链（加速包 → 系统 CUDA → ComfyUI → CPU）只剩最后的 CPU 档。\n"
+                "CPU 实测约 2-3 小时/张 @512px、24 层（CUDA 本地引擎约 14 分钟/张），"
+                "内存需求 ~10GB，期间请避免高负载。\n\n"
+                "仍要用 CPU 兜底拆这张图吗？\n"
+                "（确认后本次会话内不再重复询问。更快：「资产管理 → 推理加速」装 CUDA 加速包；"
+                "A 卡启动带 See-through 插件的 ComfyUI 后重新拆图。）",
+                self)
+            chosen = [False]
+            box.yesSignal.connect(lambda: chosen.__setitem__(0, True))
+            box.exec()
+            if chosen[0]:
+                SL.confirm_cpu_engine()
+                self._restart_decompose()
+            else:
+                self.busy = False
+                self.set_nav_progress(None)
+                self.prog.setText("已取消 CPU 兜底拆图")
+                InfoBar.warning("已取消", "可安装 CUDA 加速包或启动 ComfyUI 后重试",
+                                parent=self, position=InfoBarPosition.TOP,
+                                duration=5000)
+        except Exception as e:
+            self.busy = False
+            self.prog.setText("CPU 确认流程异常: %s" % e)
+        finally:
+            self._cpu_box_open = False
+
+    def _restart_decompose(self):
+        """CPU 确认通过后重投原始拆图任务（busy 保持 True，进度不清）。"""
+        job = getattr(self, "_decompose_job", None)
+        if not job:
+            self.busy = False
+            self.prog.setText("没有可重试的拆图任务")
+            return
+        img_path, out = job
+        self.prog.setText("CPU 兜底档启动中…")
+        self._start_worker(img_path, out)
 
     def _on_decompose_log(self, msg):
         msg = str(msg)
@@ -4381,6 +4558,23 @@ def _welcome_gate():
     return wel, holder
 
 
+def _run_pending_update():
+    """退出时静默应用已下载的新版（task-13/14 契约：Setup --auto --dir <安装目录>）。
+
+    pending_installer() 只在欢迎页「检查更新」下载完成时才有值；没有则零开销返回。
+    launch_update 是 DETACHED 拉起，本进程随即正常退出，安装器会等待我们结束。
+    任何异常一律吞掉：更新失败绝不能卡住或拖慢用户退出。
+    """
+    try:
+        import update_checker as U
+        if not U.pending_installer():
+            return
+        # 安装根目录 = 本文件所在目录（installer 的 MARKERS 也认这一点）
+        U.launch_update(os.path.dirname(os.path.abspath(__file__)))
+    except Exception:
+        pass
+
+
 def run_app():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -4395,6 +4589,8 @@ def run_app():
     # 测试与内部调用仍可直接 MainWindow()，不受门控影响。
     wel, _holder = _welcome_gate()
     wel.show()
+    # 欢迎页「检查更新」下好的新包，在进程真正退出前拉起静默安装
+    app.aboutToQuit.connect(_run_pending_update)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

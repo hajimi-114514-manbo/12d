@@ -3,6 +3,7 @@
 //       /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll
 //       /resource:muppet_app.zip /resource:model_manifest.json installer.cs
 // CLI（自动化测试用）: --detect | --update <dir> [--no-pause] | --fresh <dir> [--models] [--no-pause]
+//       | --auto [--dir <path>]（静默无人值守更新，见 RunAuto）
 // 行为: 更新=校验旧安装目录(标志文件)后仅覆盖程序文件，models/ 与 seethrough_out/ 绝不动；
 //       全新=选目录解压，可选下载 nf4 模型(5.3GB 断点续传+校验+双镜像)。
 //       两种模式都把安装路径写入 HKCU\Software\MuppetStudio 供下次检测。
@@ -113,6 +114,35 @@ class Installer
             bool withModels = a.Contains("--models");
             int code = inst.DoFresh(a[1], withModels, noPause, a.Contains("--amd"));
             Environment.Exit(code);
+            return;
+        }
+        if (a.Count >= 1 && a[0] == "--auto")
+        {
+            // 静默无人值守更新：应用内「检查更新」下载完新版安装器后，
+            // 退出时拉起 `MuppetStudio-Setup.exe --auto --dir <安装目录>`。
+            // 全程无 UI，日志是唯一诊断渠道：%TEMP%\muppet_update.log。
+            string dir = null;
+            int di = a.IndexOf("--dir");
+            if (di >= 0 && di + 1 < a.Count) dir = a[di + 1];
+            if (string.IsNullOrEmpty(dir))
+            {
+                // 缺 --dir：回退注册表 InstallLocation（写入时经过 HasMarkers 校验，
+                // 这里只信任它，不再二次探测常见位置——静默模式宁可退出也别乱装）
+                try
+                {
+                    using (RegistryKey k = Registry.CurrentUser.OpenSubKey(REG_KEY))
+                    {
+                        if (k != null)
+                        {
+                            string p = k.GetValue("InstallPath") as string;
+                            if (!string.IsNullOrEmpty(p) && Directory.Exists(p)) dir = p;
+                        }
+                    }
+                }
+                catch { }
+            }
+            int acode = inst.RunAuto(dir, noPause);
+            Environment.Exit(acode);
             return;
         }
         if (a.Count >= 2 && a[0] == "--check-models")
@@ -445,6 +475,197 @@ class Installer
         return errors.Count == 0 ? 0 : 1;
     }
 
+    // ---------------- --auto 静默更新模式 ----------------
+    // 退出码语义：
+    //   0 = 更新完成（或更新完成后拉起应用失败——拉起失败不影响 0）
+    //   2 = 缺 --dir 且注册表无 InstallLocation
+    //   3 = 目录校验失败（不存在 / 无标志文件 / 危险路径）
+    //   4 = 等待应用退出超时（60s，不强杀）
+    //   5 = DoUpdate 返回非 0（含 DoUpdate 自己的 2=目标校验失败 / 3=运行中 / 1=有失败项）
+    const string AUTO_LOG = "muppet_update.log";
+
+    static void AutoLog(string msg)
+    {
+        // 静默模式无 UI，日志是唯一诊断渠道；任何异常都不能让它炸出去
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(Path.GetTempPath(), AUTO_LOG),
+                "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + msg + "\r\n",
+                new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    // 等待引用指定安装目录的应用进程退出（每 2s 一次，最多 60s）。
+    // 与 AppRunning() 的区别：只认**命令行/路径引用该目录**的进程，
+    // 避免用户开着另一处安装的应用时误等。超时返回 false（不强杀）。
+    static bool WaitAppExit(string dir, int timeoutSec)
+    {
+        string norm = Path.GetFullPath(dir).TrimEnd('\\', '/').ToLowerInvariant();
+        DateTime deadline = DateTime.UtcNow.AddSeconds(timeoutSec);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (!DirAppRunning(dir)) return true;
+            Thread.Sleep(2000);
+        }
+        return !DirAppRunning(dir);
+    }
+
+    // 该安装目录是否被 python.exe / 木偶工作室.exe 进程引用
+    static bool DirAppRunning(string dir)
+    {
+        try
+        {
+            string norm = Path.GetFullPath(dir).TrimEnd('\\', '/').ToLowerInvariant();
+            using (ManagementObjectSearcher s =
+                new ManagementObjectSearcher("select CommandLine,Name,ExecutablePath from Win32_Process where Name='python.exe' or Name='木偶工作室.exe'"))
+                foreach (ManagementObject o in s.Get())
+                {
+                    string name = o["Name"] as string;
+                    string c = (o["CommandLine"] as string) ?? "";
+                    string ep = (o["ExecutablePath"] as string) ?? "";
+                    // exe 主程序：进程可执行文件路径在该目录下即算
+                    if (name == "木偶工作室.exe")
+                    {
+                        if (!string.IsNullOrEmpty(ep) &&
+                            ep.TrimEnd('\\', '/').ToLowerInvariant().StartsWith(norm + "\\", StringComparison.OrdinalIgnoreCase))
+                            return true;
+                        // ExecutablePath 拿不到时退回命令行判断
+                        if (string.IsNullOrEmpty(ep) && c.ToLowerInvariant().Contains(norm))
+                            return true;
+                        continue;
+                    }
+                    // python.exe：命令行含该目录（脚本/工作目录引用）即算
+                    if (c.ToLowerInvariant().Contains(norm)) return true;
+                }
+        }
+        catch { }
+        return false;
+    }
+
+    int RunAuto(string dir, bool noPause)
+    {
+        // v3.2.0：静默模式无视 --no-pause 参数——无人值守下 MessageBox 等于死锁
+        // （实测 --auto 黑名单路径不打 --no-pause 会卡在隐形对话框上，日志写完后进程不退）。
+        noPause = true;
+        AutoLog("--auto 开始，参数 dir=" + (dir ?? "<null>"));
+        try
+        {
+            // 1) 目录来源：--dir 或注册表回退；都没有 -> 退出码 2
+            if (string.IsNullOrEmpty(dir))
+            {
+                AutoLog("退出码 2：缺 --dir 且注册表 InstallLocation 不可用");
+                Report(noPause, "--auto 缺少 --dir 且未在注册表找到安装位置");
+                return 2;
+            }
+            // 2) 校验链：存在 + 标志文件 + 危险路径（黑名单）——任一失败退出码 3，绝不弹窗
+            string full;
+            try { full = Path.GetFullPath(dir).TrimEnd('\\', '/'); }
+            catch (Exception ex)
+            {
+                AutoLog("退出码 3：路径无效 " + ex.Message);
+                Report(noPause, "--auto 目录无效: " + dir);
+                return 3;
+            }
+            if (!Directory.Exists(full))
+            {
+                AutoLog("退出码 3：目录不存在 " + full);
+                Report(noPause, "--auto 目录不存在: " + full);
+                return 3;
+            }
+            // 危险路径黑名单（与 DoFresh 同一套语义：盘根/Windows/系统/用户目录本身）
+            string root = Path.GetPathRoot(full);
+            if (full == (root ?? "").TrimEnd('\\', '/'))
+            {
+                AutoLog("退出码 3：拒绝更新到盘根目录 " + full);
+                Report(noPause, "--auto 拒绝：盘根目录");
+                return 3;
+            }
+            string winDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows).TrimEnd('\\');
+            if (string.Equals(full, winDir, StringComparison.OrdinalIgnoreCase) ||
+                full.StartsWith(winDir + "\\", StringComparison.OrdinalIgnoreCase))
+            {
+                AutoLog("退出码 3：拒绝更新到 Windows 目录 " + full);
+                Report(noPause, "--auto 拒绝：Windows 目录");
+                return 3;
+            }
+            foreach (string b in new string[] {
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                Environment.GetFolderPath(Environment.SpecialFolder.SystemX86) })
+                if (!string.IsNullOrEmpty(b) && string.Equals(b.TrimEnd('\\', '/'), full, StringComparison.OrdinalIgnoreCase))
+                {
+                    AutoLog("退出码 3：拒绝更新到受保护目录 " + b);
+                    Report(noPause, "--auto 拒绝：受保护目录 " + b);
+                    return 3;
+                }
+            if (!HasMarkers(full))
+            {
+                AutoLog("退出码 3：目录不含木偶工作室标志（l2d_rig_qt.py / launcher.ini） " + full);
+                Report(noPause, "--auto 目录不是木偶工作室安装目录: " + full);
+                return 3;
+            }
+            AutoLog("目录校验通过 " + full);
+            // 3) 等待应用退出：每 2s 一次，最多 60s；超时退出码 4（不强杀）
+            SetStatus("等待木偶工作室退出…");
+            if (!WaitAppExit(full, 60))
+            {
+                AutoLog("退出码 4：等待应用退出超时（60s） " + full);
+                Report(noPause, "--auto 等待应用退出超时，本次更新未执行");
+                return 4;
+            }
+            AutoLog("应用已退出，开始更新");
+            // 4) 复用 DoUpdate：含目标校验 / 覆盖程序文件 / runtime 就位 / launcher.ini / 注册表
+            //    DoUpdate 内部 Report(noPause=true) 走 MUPPET_SETUP_REPORT + Console，无弹窗。
+            int code = DoUpdate(full, false, true);
+            AutoLog("DoUpdate 返回 " + code);
+            if (code != 0)
+            {
+                AutoLog("退出码 5：DoUpdate 失败 code=" + code);
+                return 5;
+            }
+            AutoLog("--auto 更新完成 " + full);
+            // 5) 成功后拉起应用（用户无感回到应用）；拉起失败不影响退出码 0
+            try
+            {
+                string exe = Path.Combine(full, "木偶工作室.exe");
+                string py = Path.Combine(full, "runtime", "python.exe");
+                if (File.Exists(exe))
+                {
+                    Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = full });
+                    AutoLog("已拉起 " + exe);
+                }
+                else if (File.Exists(py))
+                {
+                    // 极老版本无主 exe：用 launcher 语义直接拉 python 脚本
+                    Process.Start(new ProcessStartInfo(py,
+                        "\"" + Path.Combine(full, "l2d_rig_qt.py") + "\"") { WorkingDirectory = full });
+                    AutoLog("已拉起 " + py + " l2d_rig_qt.py");
+                }
+                else
+                {
+                    AutoLog("安装目录无 木偶工作室.exe / runtime\\python.exe，不拉起应用");
+                }
+            }
+            catch (Exception ex)
+            {
+                AutoLog("拉起应用失败（不影响退出码 0）：" + ex.Message);
+            }
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            AutoLog("--auto 未预期异常：" + type_name(ex) + ": " + ex.Message + "\r\n" + ex.StackTrace);
+            Report(noPause, "--auto 异常退出: " + ex.Message);
+            return 5;
+        }
+    }
+
+    static string type_name(Exception e) { return e.GetType().Name; }
+
     // 模型"已装好"判定。
     // 早期版本只检查"某个 unet 权重文件存在"，导致**残缺模型也被判为已装**
     // （实测一个只有 7 个文件 / 0.01GB 的目录被判"模型已下载就位"，实际缺 32 个文件）。
@@ -737,10 +958,11 @@ class Installer
         return
 "木偶工作室 — AMD 显卡拆图指引\r\n" +
 "========================================\r\n\r\n" +
-"CPU 与拆图的关系（v3.1.1 定位）：\r\n" +
-"  内置运行时的 CPU 版 torch 只是**程序运行环境**（打开软件、编辑、\r\n" +
-"  视频模块都靠它，开箱即用）——拆图不走 CPU（2-3 小时/张不作默认通道）。\r\n" +
-"  A 卡拆图请选下面两条路之一；除拆图外全部功能 A 卡开箱即用。\r\n\r\n" +
+"CPU 与拆图的关系（v3.2.0 定位）：\r\n" +
+"  内置运行时的 CPU 版 torch 主要保证**程序运行环境**（打开软件、编辑、\r\n" +
+"  视频模块开箱即用）。拆图优先走加速包/系统 CUDA/ComfyUI；前三档都\r\n" +
+"  不可用时 CPU 作为最后兜底档，会弹确认警告（约 2-3 小时/张）后才跑。\r\n" +
+"  A 卡拆图推荐下面路线 2；除拆图外全部功能 A 卡开箱即用。\r\n\r\n" +
 "路线 1（推荐）：应用内「资产管理 → 推理加速」下载 CUDA 加速包\r\n" +
 "  仅适用 NVIDIA 卡。装完重启应用，本地引擎自动回到 nf4 CUDA 快通道\r\n" +
 "  （约 14 分钟/张）。AMD 卡不适用此包，请走路线 2。\r\n\r\n" +

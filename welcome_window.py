@@ -17,7 +17,7 @@ import json
 import os
 import time
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QSize, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFrame,
                                QAbstractItemView, QHeaderView, QSizePolicy,
@@ -25,7 +25,11 @@ from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFrame,
 from qfluentwidgets import (PrimaryPushButton, PushButton, LineEdit,
                             TableWidget, StrongBodyLabel, BodyLabel,
                             CaptionLabel, MessageBoxBase, InfoBar,
-                            InfoBarPosition, TogglePushButton)
+                            InfoBarPosition, TogglePushButton,
+                            ToolButton, FluentIcon)
+
+# 更新检查（task-13）：只依赖它自己的 QtCore，方向单向，无循环 import
+import update_checker as _UC
 
 # 本文件与 l2d_rig_qt.py 同级（V2 根目录）；不 import 它（__main__ 双实例坑）
 _V2 = os.path.dirname(os.path.abspath(__file__))
@@ -227,6 +231,8 @@ class WelcomeWindow(QWidget):
         self._page = 0
         self._filt = ""
         self._rows = []            # 当前页行 -> 工程目录（_open_row 用）
+        self._version = str(version or "")
+        self._upd_thread = None    # UpdateThread（检查更新，task-13）
         self.resize(1060, 660)
         self.setStyleSheet(
             "#welcomeRoot{background:#1f2126;}"
@@ -255,6 +261,30 @@ class WelcomeWindow(QWidget):
         tip = CaptionLabel("每种工程最多保留 50 个", side)
         tip.setStyleSheet("color:#8a93a2;")
         sl.addWidget(tip)
+        # ---------- 左下角：检查更新（task-13）----------
+        upd_row = QHBoxLayout()
+        upd_row.setSpacing(10)
+        _up_icon = getattr(FluentIcon, "UPDATE", None) or \
+            getattr(FluentIcon, "SYNC", None)
+        self.btn_update = ToolButton(_up_icon, side)
+        self.btn_update.setObjectName("btnUpdate")
+        self.btn_update.setFixedSize(32, 32)
+        self.btn_update.setIconSize(QSize(18, 18))
+        if _up_icon is not None:
+            self.btn_update.setIcon(_up_icon)   # 双保险：旧版构造签名只认 parent
+        self.btn_update.setCursor(Qt.PointingHandCursor)
+        self.btn_update.setToolTip("检查更新")
+        self.btn_update.setStyleSheet(
+            "#btnUpdate{border-radius:16px;background:#2c3038;}"
+            "#btnUpdate:hover{background:#3a4150;}")
+        self.btn_update.clicked.connect(self._on_check_update)
+        upd_row.addWidget(self.btn_update)
+        self.update_lbl = CaptionLabel("", side)
+        self.update_lbl.setStyleSheet("color:#8a93a2;")
+        self.update_lbl.setWordWrap(False)
+        upd_row.addWidget(self.update_lbl, 1)
+        upd_row.addStretch(1)
+        sl.addLayout(upd_row)
         root.addWidget(side)
 
         # ---------- 右侧主区 ----------
@@ -481,3 +511,53 @@ class WelcomeWindow(QWidget):
         self._filt = text or ""
         self._page = 0
         self._refresh_view()
+
+    # ---------------- 检查更新（task-13，点击才发网络请求，不阻塞启动） ----------------
+    def _on_check_update(self):
+        th = self._upd_thread
+        if th is not None and th.isRunning():
+            return                       # 已在检查/下载：忽略重复点击
+        p = _UC.pending_installer()
+        if p:
+            InfoBar.success("新版已下载", "退出后自动安装\n%s" % p,
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=6000)
+            return
+        self.btn_update.setEnabled(False)
+        self.update_lbl.setText("检查中…")
+        th = _UC.UpdateThread(self._version, parent=self)
+        self._upd_thread = th
+        th.status.connect(self._on_upd_status)
+        th.progressed.connect(self._on_upd_progress)
+        th.uptodate.connect(self._on_upd_uptodate)
+        th.ready.connect(self._on_upd_ready)
+        th.failed.connect(self._on_upd_failed)
+        th.finished.connect(lambda: self.btn_update.setEnabled(True))
+        th.start()
+
+    def _on_upd_status(self, text):
+        self.update_lbl.setText(text)
+
+    def _on_upd_progress(self, done, total):
+        pct = int(done * 100 / total) if total else 0
+        self.btn_update.setToolTip("下载中 %d%%" % pct)
+
+    def _on_upd_uptodate(self, ver):
+        self.update_lbl.setText("已是最新版本 v%s" % ver)
+        self.btn_update.setToolTip("检查更新")
+        QTimer.singleShot(6000, lambda: self.update_lbl.setText("")
+                          if self.update_lbl.text().startswith("已是最新版本")
+                          else None)
+
+    def _on_upd_ready(self, path):
+        self.update_lbl.setText("新版已下载，退出后自动安装")
+        self.btn_update.setToolTip("检查更新")
+        InfoBar.success("新版已下载", "退出后自动安装\n%s" % path,
+                        parent=self, position=InfoBarPosition.TOP,
+                        duration=8000)
+
+    def _on_upd_failed(self, msg):
+        self.update_lbl.setText("")
+        self.btn_update.setToolTip("检查更新")
+        InfoBar.warning("检查更新", msg, parent=self,
+                        position=InfoBarPosition.TOP, duration=5000)

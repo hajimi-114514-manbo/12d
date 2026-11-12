@@ -11,6 +11,9 @@ LayerDiff 分层 + Marigold 深度 + 后处理 + 落盘。
 依赖（D:\Python312 全部已装）：torch/diffusers/peft/accelerate/bitsandbytes/sklearn/cv2
 显存峰值 ~3.3GB（nf4），单次全流程 ~14 分钟。
 
+引擎优先级链：CUDA 加速包 → 系统 CUDA → ComfyUI（UI 层路由）→ CPU 最后兜底。
+CPU 档需要用户确认（UI 弹框）或 MUPPET_ALLOW_CPU_ENGINE=1（CLI），见 decompose。
+
 用法：
     import seethrough_local
     meta = seethrough_local.decompose(img_path, out_dir, verbose=print)
@@ -49,6 +52,48 @@ def pick_device():
 def _empty_cache():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+
+# ---------------- CPU 兜底档确认门（四档优先级链，task-15） ----------------
+# 引擎优先级：1 CUDA 加速包 → 2 系统 CUDA → 3 ComfyUI（UI 层路由，本模块不管）
+# → 4 CPU 最后兜底。能走到 CPU 说明前三档全不可用，但必须先拿到明确确认：
+# UI 层捕获 CpuConfirmationRequired 弹确认框，用户点「仍要用 CPU」后调
+# confirm_cpu_engine() 再重试；CLI/自动化设 MUPPET_ALLOW_CPU_ENGINE=1 静默放行。
+# 无 UI 的 CLI 场景没人可确认 → 保持抛异常（= 拒绝 + 文字指引）。
+CPU_ALLOW_ENV = "MUPPET_ALLOW_CPU_ENGINE"
+_cpu_confirmed = [False]      # 会话内记住：用户确认一次后，本进程后续拆图不再弹
+
+
+class CpuConfirmationRequired(RuntimeError):
+    """CPU 兜底档未获确认时抛出。UI 层按类型捕获（CLI 直接让它冒出来即为拒绝）。"""
+    tier = "cpu"
+
+
+def confirm_cpu_engine():
+    """UI 确认框用户点「仍要用 CPU」后调用；会话内后续拆图不再要求确认。"""
+    _cpu_confirmed[0] = True
+
+
+def reset_cpu_engine_confirm():
+    """清除会话确认状态（测试 / 想重新确认的场景）。"""
+    _cpu_confirmed[0] = False
+
+
+def cpu_engine_confirmed():
+    """CPU 兜底档是否放行：会话确认过 或 逃生阀环境变量。"""
+    if _cpu_confirmed[0]:
+        return True
+    return os.environ.get(CPU_ALLOW_ENV, "").strip() == "1"
+
+
+CPU_GATE_MESSAGE = (
+    "CPU 兜底档推理需要确认（加速包 / 系统 CUDA / ComfyUI 三档均不可用）。\n"
+    "CPU 实测约 2-3 小时/张 @512px（CUDA 本地引擎约 14 分钟/张），内存需求 ~10GB。\n"
+    "确认 / 替代方式：\n"
+    "1) 应用内：拆图时弹出的确认框点「仍要用 CPU」（会话内记住，不再重复弹）\n"
+    "2) CLI/自动化：设环境变量 MUPPET_ALLOW_CPU_ENGINE=1 后重试\n"
+    "3) 更快档位：「资产管理 → 推理加速」下载 CUDA 加速包；A 卡请启动本机 "
+    "ComfyUI（装 See-through 插件）后再拆")
 
 VALID_BODY_PARTS_V2 = [
     "hair", "headwear", "face", "eyes", "eyewear", "ears", "earwear",
@@ -250,7 +295,7 @@ def _load_pipeline_cpu(verbose):
     K = _import_core()
     pl_dir = _resolve(NF4_LAYERDIFF)
     dp_dir = _resolve(NF4_DEPTH)
-    verbose("CPU 慢速模式（显式启用）：fp32 反量化加载，实测约 2-3 小时/张…")
+    verbose("CPU 兜底档：fp32 反量化加载，实测约 2-3 小时/张…")
     t0 = _time.time()
     from transformers import AutoTokenizer
     trans_vae = _load_component_cpu(os.path.join(pl_dir, "trans_vae"), verbose)
@@ -750,19 +795,15 @@ def decompose(img_path, out_dir, resolution=1024, depth_resolution=768, steps=30
               seed=42, use_lama=False, verbose=print):
     """完整本地流程。返回 layers_meta.json 路径或 None。
 
-    本地引擎只服务 CUDA：内置 CPU 版 torch 是**程序运行环境**（GUI/视频
-    模块依赖），不是拆图通道——无 CUDA 时拆图应走 ComfyUI 或先装 CUDA 加速包。
-    高级用户确想用 CPU 硬跑（实测 2-3 小时/张）：设 MUPPET_ALLOW_CPU_ENGINE=1。"""
+    四档优先级链（task-15）：1 CUDA 加速包 → 2 系统 CUDA → 3 ComfyUI →
+    4 CPU 最后兜底。档 1/2 在本模块收敛为 pick_device()!="cpu" 的 nf4 快路径；
+    档 3 由 UI 层路由（l2d_rig_qt.engine_tier），不进本模块；档 4 的门槛在
+    这里：未确认则抛 CpuConfirmationRequired（UI 弹框确认或
+    MUPPET_ALLOW_CPU_ENGINE=1 放行，无 UI 的 CLI 保持拒绝）。"""
     if pick_device() == "cpu":
-        if os.environ.get("MUPPET_ALLOW_CPU_ENGINE", "").strip() != "1":
-            raise RuntimeError(
-                "未检测到 NVIDIA CUDA，本地引擎不执行拆图（CPU 硬跑约 2-3 小时/张，"
-                "不作为默认通道）。请任选其一：\n"
-                "1) 应用内「资产管理 → 推理加速」下载 CUDA 加速包（推荐，约 14 分钟/张）\n"
-                "2) 安装本机 ComfyUI（AMD ROCm 路线，见安装目录 AmdGuide）\n"
-                "3) 高级选项：环境变量 MUPPET_ALLOW_CPU_ENGINE=1 后重试（慢）")
-        verbose("[!] 显式 CPU 慢速模式（MUPPET_ALLOW_CPU_ENGINE=1）："
-                "实测约 2-3 小时/张，内存需求 ~10GB。")
+        if not cpu_engine_confirmed():
+            raise CpuConfirmationRequired(CPU_GATE_MESSAGE)
+        verbose("[!] CPU 兜底档（已确认）：fp32 反量化慢速通道，实测约 2-3 小时/张，内存需求 ~10GB。")
     if not os.path.exists(img_path):
         raise FileNotFoundError(img_path)
     img = np.asarray(Image.open(img_path).convert("RGB"))
@@ -787,5 +828,11 @@ def decompose(img_path, out_dir, resolution=1024, depth_resolution=768, steps=30
 if __name__ == "__main__":
     src = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ST_ROOT, "test_input.png")
     dst = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ST_ROOT, "seethrough_out", "cli_test")
-    r = decompose(src, dst)
+    try:
+        r = decompose(src, dst)
+    except CpuConfirmationRequired as e:
+        # CLI 没有 UI 可以弹确认框 → 保持拒绝，只给文字指引（退出码 2）
+        print("[!] CPU 兜底档未确认，CLI 不执行本次拆图。")
+        print(e)
+        sys.exit(2)
     print("RESULT:", r)
