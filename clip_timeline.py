@@ -40,7 +40,7 @@
 """
 import os
 
-from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, Signal
+from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QSize, Signal
 from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QPainterPath,
                            QFont)
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
@@ -183,7 +183,9 @@ class ClipTimelinePanel(QWidget):
 
         head.setFixedHeight(HEAD_H)
         self._update_height()
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # v3.2.1：垂直 Preferred（旧 Fixed 会让 QSplitter 拒绝把空间给时间轴，
+        # 上下把手完全拖不动）；理想高度由 sizeHint 提供。
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._sync_buttons()
 
     # ================= 数据 / 状态 =================
@@ -232,6 +234,18 @@ class ClipTimelinePanel(QWidget):
         return max(16, int(round(RULER_H * self.ui_scale)))
 
     def row_h(self, track):
+        h = self._row_h_default(track)
+        # v3.2.1：面板可用高度不足时按比例压缩行高（下限 14px），
+        # 让 splitter 拖小高度后内容自适应，而不是钉死把手。
+        tracks = self.proj.get("tracks", [])
+        if len(tracks) > 1:
+            avail = self.height() - HEAD_H - self.scaled_ruler_h() - 4
+            total = sum(self._row_h_default(t) for t in tracks)
+            if avail > 0 and total > avail:
+                h = max(14, int(round(h * avail / total)))
+        return h
+
+    def _row_h_default(self, track):
         base = ROW_VIDEO if track.get("kind") == "video" else ROW_AUDIO
         return max(14, int(round(base * self.ui_scale)))
 
@@ -252,11 +266,20 @@ class ClipTimelinePanel(QWidget):
         g = self.row_geometry()
         return g[-1][0] + g[-1][1] if g else self.scaled_ruler_h()
 
+    def ideal_height(self):
+        """全部行按默认（未压缩）行高铺开的理想高度——只作 sizeHint。"""
+        return (HEAD_H + self.scaled_ruler_h()
+                + sum(self._row_h_default(t)
+                      for t in self.proj.get("tracks", [])) + 4)
+
+    def sizeHint(self):
+        return QSize(600, self.ideal_height())
+
     def _update_height(self):
-        need = HEAD_H + self.rows_bottom() + 4
-        self.setMinimumHeight(need)
-        if self.height() < need:
-            self.resize(self.width(), need)
+        # v3.2.1：高度交给 splitter/用户拖。minimumHeight 只保证
+        # 「工具条+刻度尺+一行(14px)」可读；不再强制 resize 回内容高度
+        # （旧逻辑把 splitter 把手钉死，时间轴完全拖不动）。
+        self.setMinimumHeight(HEAD_H + self.scaled_ruler_h() + 14 + 4)
 
     def t_to_x(self, t):
         return NAME_W + (float(t) - self.view_t0) * self.pps

@@ -12,6 +12,7 @@ import json
 import math
 import re
 import time
+import threading
 import shutil
 import tempfile
 import numpy as np
@@ -108,7 +109,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.2.0"
+VERSION = "3.2.1"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -1154,14 +1155,122 @@ def _accel_pack_installed():
     except Exception:
         return False
 
-def _comfy_available(timeout=2.0):
-    """本机是否有在跑的 ComfyUI（复用 comfy_decompose.probe，纯 localhost HTTP，
-    端口无人监听时秒级拒绝返回 False）。"""
+_COMFY_PROBE_TTL = 20.0            # 探测结果缓存有效期（秒）
+_COMFY_PROBE_CACHE = {"ok": False, "ts": 0.0}
+
+
+def _probe_comfy_parallel(timeout=1.0):
+    """并行探测 3 个 localhost 端口，返回首个可用 base 或 None。
+
+    串行探测 3 端口 × 超时是资产管理菜单卡 18s 的主因之一（task-18），
+    这里用线程池并行，总耗时≈单端口超时。COMFY_API 限定时只探它一个。
+    """
     try:
         import comfy_decompose as CD
-        return CD.probe(timeout=timeout) is not None
     except Exception:
-        return False
+        return None
+    env = os.environ.get("COMFY_API")
+    cands = [env.rstrip("/")] if env else [
+        "http://127.0.0.1:%d" % p for p in CD.DEFAULT_API_PORTS]
+    hits = [None] * len(cands)
+
+    def _try(i, base):
+        try:
+            CD.get_json(base, "/system_stats", timeout=timeout)
+            hits[i] = base
+        except Exception:
+            pass
+
+    threads = [threading.Thread(target=_try, args=(i, b), daemon=True)
+               for i, b in enumerate(cands)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return next((h for h in hits if h), None)
+
+
+def _comfy_available(timeout=1.0):
+    """本机是否有在跑的 ComfyUI（三端口并行短超时探测 + TTL 20s 缓存）。
+
+    旧实现串行探 3 端口 × 4s = 6.2s（防火墙下 12s），会让资产管理菜单
+    冻结。改为并行 1s 超时并 TTL 缓存，重复调用不重复探测。"""
+    now = time.time()
+    c = _COMFY_PROBE_CACHE
+    if now - c["ts"] < _COMFY_PROBE_TTL:
+        return c["ok"]
+    ok = _probe_comfy_parallel(timeout) is not None
+    c["ok"] = ok
+    c["ts"] = now
+    return ok
+
+
+# ---------------- 档位后台预热（task-18：资产管理菜单不冻结） ----------------
+# 菜单重建路径只读缓存，绝不在主线程 import torch / socket。
+_TIER_CACHE = {"tier": None, "reason": None, "ts": 0.0, "done": False}
+_TIER_WARM_STARTED = [False]        # 预热去重：预热中不重复 spawn
+_TIER_WARMER = [None]               # 持引用防预热线程被 GC
+# v3.2.1 退出保护：预热线程 import torch 会长时间持有 OS loader lock，
+# 此时进程退出（含 os._exit）可能卡死在终止序列（py-spy 实锤的竞态）。
+# 应用开始退出后不再启动新预热；已在途的无法打断，但窗口被压到最小。
+_APP_EXITING = [False]
+
+
+class _TierWarmWorker:
+    """后台跑一次 engine_tier()（含 import torch / cuda 检测 / comfy 探测），
+    结果写 _TIER_CACHE。启动后绝不阻塞主线程。
+
+    用 daemon 的 threading.Thread 而非 QThread：预热含 ~12s 的 torch import，
+    若用 QThread，进程退出时线程仍在运行，QThread 析构会触发
+    "QThread: Destroyed while thread is still running" 并 abort（实测回归
+    退出码 0xC0000409）。daemon 线程随进程退出自然结束，无此问题。"""
+
+    def __init__(self):
+        self._t = threading.Thread(target=self._run, daemon=True,
+                                   name="tier-warmup")
+
+    def start(self):
+        self._t.start()
+
+    def _run(self):
+        if _APP_EXITING[0]:
+            _TIER_WARM_STARTED[0] = False
+            return
+        try:
+            tier, reason = engine_tier()
+        except Exception:
+            tier, reason = None, "档位检测失败"
+        _TIER_CACHE["tier"] = tier
+        _TIER_CACHE["reason"] = reason
+        _TIER_CACHE["ts"] = time.time()
+        _TIER_CACHE["done"] = True
+        _TIER_WARM_STARTED[0] = False
+
+
+def _tier_display():
+    """返回菜单要显示的档位文案；无缓存返回 None（菜单显示"正在检测档位…"）。
+
+    纯读 _TIER_CACHE，不触发任何 import torch / socket / 探测。"""
+    c = _TIER_CACHE
+    if not c.get("done"):
+        return None
+    tier = c.get("tier")
+    if tier:
+        return TIER_LABELS.get(tier, tier)
+    return "检测失败"
+
+
+def _start_tier_warmup():
+    """启动后台档位预热（去重）：已有缓存或预热中则直接返回。"""
+    if _APP_EXITING[0] or _TIER_CACHE.get("done") or _TIER_WARM_STARTED[0]:
+        return
+    _TIER_WARM_STARTED[0] = True
+    w = _TierWarmWorker()
+    _TIER_WARMER[0] = w
+    try:
+        w.start()
+    except Exception:
+        _TIER_WARM_STARTED[0] = False
 
 def engine_tier(probe_comfy=True, comfy_timeout=2.0):
     """四档优先级链判定，返回 (tier, reason)，tier ∈ TIER_LABELS。
@@ -1174,15 +1283,18 @@ def engine_tier(probe_comfy=True, comfy_timeout=2.0):
 
     说明：档 1/2 在实现上收敛为同一个"local CUDA"，按"加速包已装"标记区分
     来源展示；MUPPET_FORCE_DEVICE=cpu 视为用户手动落到 CPU 档。
-    probe_comfy=True 时会做 localhost 探测（一般毫秒级；被挂起的端口最多
-    comfy_timeout×3，不要在每帧路径里调）。"""
+    probe_comfy=True 时会做 localhost 探测（三端口并行 + TTL 20s 缓存，
+    一般毫秒级）。
+
+    注意（task-18）：本函数包含 import torch 与 socket 探测，**只应在
+    后台线程调用**；菜单/UI 显示走 _tier_display()（纯读 _TIER_CACHE）。"""
     if os.environ.get("MUPPET_FORCE_DEVICE", "").strip().lower() == "cpu":
         return "cpu", "MUPPET_FORCE_DEVICE 已把设备钉为 CPU（需确认）"
     if _cuda_available():
         if _accel_pack_installed():
             return "accel_pack", "CUDA 加速包已装，本地引擎走 nf4 快档（约 14 分钟/张）"
         return "system_cuda", "系统 CUDA 可用，本地引擎走 nf4 快档"
-    if probe_comfy and _comfy_available(comfy_timeout):
+    if probe_comfy and _comfy_available(min(1.0, float(comfy_timeout))):
         return "comfy", "无 CUDA，检测到在跑的 ComfyUI（A 卡/ROCm 路线）"
     return "cpu", "无 CUDA 且无在跑的 ComfyUI，只剩 CPU 兜底档"
 
@@ -1604,8 +1716,174 @@ class LayerItemDelegate(ListItemDelegate):
         if old and new:
             self.wb.rename_layer(old, new)
 
+# ---------------- 资产管理菜单 mixin（MainWindow 与视频窗壳共用） ----------------
+class AssetMenuMixin:
+    """「资产管理」菜单的构建与下载：MainWindow / 视频窗壳共用同一套。
+
+    抽成 mixin 的原因：视频编辑窗口也要有同款资产管理菜单，但逻辑完全
+    一致（运行环境 / 模型 / 推理加速 / 刷新状态 / 当前拆图档位行）。
+    宿主需提供 self.asset_menu（RoundMenu）与 self.asset_btn（按钮），
+    由 _setup_asset_menu() 统一创建。
+    """
+
+    def _setup_asset_menu(self, parent=None):
+        """创建「资产管理」按钮 + 菜单并挂好 clicked -> 重建（先填后弹）。
+
+        首击无响应修复（v3.1.1）：重建挂在 clicked 上，qfw 的弹出链是
+        mouseReleaseEvent -> PushButton.mouseReleaseEvent（此处同步发
+        clicked）-> _showMenu（弹菜单），直接连接的槽同步执行，保证
+        「先填后弹」。挂 menu_opened 会在弹菜单之后重建，首击弹出空菜单。
+        """
+        p = parent if parent is not None else self
+        am = ToggleDropDownButton("资产管理", p)
+        self.asset_menu = RoundMenu(parent=p)
+        am.clicked.connect(lambda _=False: self._rebuild_asset_menu())
+        self.asset_menu_ref = self.asset_menu
+        am.setMenu(self.asset_menu)
+        self.asset_btn = am
+        self.asset_menu_btn = am
+        # v3.2.1：构造时**不**预热——直构 MainWindow 的脚本/测试秒退会和
+        # torch import 的 loader lock 竞态（py-spy 实锤 os._exit 卡死）。
+        # 预热改由两处触发：run_app 启动 1.5s 后 singleShot；菜单点开时
+        # 缓存为空兜底触发（均带 _APP_EXITING 检查）。
+        return am
+
+    def _asset_clear_menu(self):
+        """彻底清空资产菜单（含 view 残留行）。
+
+        坑：RoundMenu.clear() 只清 actions 与 _subMenus，view(QListWidget)
+        里的行会残留，每重建一次就多一行，菜单越点越长（"蜈蚣"效应）。
+        这里显式把 view 也清空，并丢掉旧子菜单的引用。
+        """
+        menu = getattr(self, "asset_menu", None)
+        if menu is None:
+            return
+        try:
+            menu.clear()
+        except Exception:
+            pass
+        try:
+            while menu.view.count() > 0:
+                menu.view.takeItem(0)
+        except Exception:
+            pass
+        # 清掉旧的子菜单引用（防累积持有已废弃的 RoundMenu）
+        try:
+            self._asset_subs = []
+        except Exception:
+            pass
+
+    def _rebuild_asset_menu(self):
+        """构建「资产管理」菜单（平铺样式）。
+
+        每次打开菜单都重建（本地可能刚下载完、或用户手动删过目录），
+        所以状态走 asset_catalog 的实时检查而不是缓存。
+        清空走 _asset_clear_menu —— 必须先清 view 残留行，否则每点一次
+        菜单就多一行，会越点越长（蜈蚣效应）。
+        """
+        try:
+            import asset_catalog as AC
+        except Exception as e:
+            self._asset_clear_menu()
+            self.asset_menu.addAction(Action(
+                FluentIcon.INFO, "资产清单模块缺失: %s" % e))
+            return
+        self._asset_clear_menu()
+        base = V2
+        try:
+            miss = {a["id"] for a in AC.missing_assets(base)}
+        except Exception:
+            miss = set()
+
+        # task-15 / task-18：档位行只读 _TIER_CACHE，**绝不在菜单重建路径上
+        # import torch / socket**。首次无缓存显示"正在检测档位…"并触发一次
+        # 后台预热（_start_tier_warmup 去重，预热中不重复 spawn）；预热完成
+        # 后下次打开菜单自然显示真实档位。
+        try:
+            tier = _tier_display()
+            if tier:
+                self.asset_menu.addAction(Action(
+                    FluentIcon.UPDATE, "当前拆图档位：%s" % tier))
+                self.asset_menu.addSeparator()
+            else:
+                self.asset_menu.addAction(Action(
+                    FluentIcon.UPDATE, "正在检测档位…"))
+                self.asset_menu.addSeparator()
+                _start_tier_warmup()
+        except Exception:
+            pass
+
+        # 运行环境（最影响"装完能不能打开"）
+        self.asset_menu.addAction(Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
+        for a in AC.ASSETS:
+            if (a.get("kind") or "") == "runtime":
+                self._add_asset_action(a, a.get("id") not in miss)
+        self.asset_menu.addSeparator()
+        # 模型
+        self.asset_menu.addAction(Action(FluentIcon.FOLDER, "— 模型 —"))
+        for a in AC.ASSETS:
+            if (a.get("kind") or "model") not in ("runtime", "accel"):
+                self._add_asset_action(a, a.get("id") not in miss)
+        # 推理加速（CUDA 分卷包，N 卡用户提速）
+        accel = [a for a in AC.ASSETS if (a.get("kind") or "") == "accel"]
+        if accel:
+            self.asset_menu.addSeparator()
+            self.asset_menu.addAction(
+                Action(FluentIcon.UP, "— 推理加速 —"))
+            for a in accel:
+                self._add_asset_action(a, a.get("id") not in miss)
+        self.asset_menu.addSeparator()
+        self.asset_menu.addAction(Action(
+            FluentIcon.SYNC, "刷新状态",
+            triggered=self._rebuild_asset_menu))
+
+    def _add_asset_action(self, a, done, menu=None):
+        """往指定菜单加一条资产项：已装显示 ✔+占用，未装显示 ⬇+体积并可点击下载。"""
+        import asset_catalog as AC
+        menu = menu if menu is not None else self.asset_menu
+        mb = a.get("size", 0) / (1024.0 * 1024.0)
+        if done:
+            try:
+                got = AC.installed_size(a, V2) / (1024.0 * 1024.0)
+            except Exception:
+                got = mb
+            text = "✔ %s（已下载 %.0f MB）" % (a.get("name", a["id"]), got)
+            menu.addAction(Action(FluentIcon.ACCEPT, text))
+        else:
+            text = "⬇ %s（%.0f MB）" % (a.get("name", a["id"]), mb)
+            act = Action(FluentIcon.DOWNLOAD, text,
+                         triggered=lambda _=False, x=a: self._start_asset_download(x))
+            menu.addAction(act)
+
+    def _start_asset_download(self, a):
+        """启动资产下载（后台线程）。下载器在 asset_downloader.py，
+        不在主线程做网络：5GB 会卡死 UI。"""
+        try:
+            import asset_downloader as AD
+        except Exception as e:
+            InfoBar.warning("资产下载", "下载模块缺失: %s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return
+        url = a.get("url") or ""
+        # parts 资产（如 CUDA 加速包）的链接在 parts[i]["url"]，顶层无 url 字段，
+        # 不能只认 a["url"]——否则 parts 资产会被误挡在「还没有配置下载地址」。
+        if not url and not a.get("parts"):
+            InfoBar.warning("资产下载",
+                            "%s 还没有配置下载地址" % a.get("name", a["id"]),
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=4000)
+            return
+        dlg = AD.AssetDownloadDialog(a, V2, self)
+        try:
+            dlg.start()
+            dlg.exec()
+        except Exception as e:
+            InfoBar.warning("资产下载", "启动失败: %s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+
+
 # ---------------- 工作台页 ----------------
-class Workbench(QWidget):
+class Workbench(AssetMenuMixin, QWidget):
     def __init__(self, win):
         super().__init__(win)
         self.win = win
@@ -1758,23 +2036,12 @@ class Workbench(QWidget):
 
         # ===== 资产管理（编辑右侧）：运行时 / 模型 的下载与状态 =====
         # 安装包不再下载模型，装完即可打开；缺什么在这里按需下载。
-        am = ToggleDropDownButton("资产管理", self)
-        self.asset_menu = RoundMenu(parent=self)
-        # 内容在点击时同步重建（要查本地是否已下载，可能扫目录）。
-        # 首击无响应修复：重建时机必须先于弹出。qfw 的弹出链是
-        # mouseReleaseEvent -> PushButton.mouseReleaseEvent（此处同步发
-        # clicked）-> _showMenu（弹菜单）——把重建挂在 clicked 上，
-        # 直接连接的槽同步执行，保证「先填后弹」。原来挂在 menu_opened
-        # 上时重建发生在弹菜单之后，首击弹出的是空菜单（adjustSize 按
-        # 0 项计算，视口高度≈0，用户体感"点了没反应"），第二次点击才
-        # 有内容。也顺带避免菜单可见期间 clear+refill 的闪烁与重复扫盘。
-        am.clicked.connect(lambda _=False: self._rebuild_asset_menu())
-        self.asset_menu_ref = self.asset_menu
-        am.setMenu(self.asset_menu)
-        self.asset_btn = am
-        self.asset_menu_btn = am
+        # 按钮/菜单构建与逻辑在 AssetMenuMixin，MainWindow 与视频窗壳共用。
+        self._setup_asset_menu()
+        am = self.asset_btn
         menu.setFixedHeight(30)
         edit.setFixedHeight(30)
+        self.asset_btn.setFixedHeight(30)
         tb_lay.addWidget(menu)
         tb_lay.addWidget(edit)
 
@@ -2408,130 +2675,6 @@ class Workbench(QWidget):
         self.canvas.lasso_cancel_selection()
         self._sync_edit_menu_state()
 
-    def _asset_clear_menu(self):
-        """彻底清空资产菜单（含 view 残留行）。
-
-        坑：RoundMenu.clear() 只清 actions 与 _subMenus，view(QListWidget)
-        里的行会残留，每重建一次就多一行，菜单越点越长（"蜈蚣"效应）。
-        这里显式把 view 也清空，并丢掉旧子菜单的引用。
-        """
-        menu = getattr(self, "asset_menu", None)
-        if menu is None:
-            return
-        try:
-            menu.clear()
-        except Exception:
-            pass
-        try:
-            while menu.view.count() > 0:
-                menu.view.takeItem(0)
-        except Exception:
-            pass
-        # 清掉旧的子菜单引用（防累积持有已废弃的 RoundMenu）
-        try:
-            self._asset_subs = []
-        except Exception:
-            pass
-
-    def _rebuild_asset_menu(self):
-        """构建「资产管理」菜单（平铺样式）。
-
-        每次打开菜单都重建（本地可能刚下载完、或用户手动删过目录），
-        所以状态走 asset_catalog 的实时检查而不是缓存。
-        清空走 _asset_clear_menu —— 必须先清 view 残留行，否则每点一次
-        菜单就多一行，会越点越长（蜈蚣效应）。
-        """
-        try:
-            import asset_catalog as AC
-        except Exception as e:
-            self._asset_clear_menu()
-            self.asset_menu.addAction(Action(
-                FluentIcon.INFO, "资产清单模块缺失: %s" % e))
-            return
-        self._asset_clear_menu()
-        base = V2
-        try:
-            miss = {a["id"] for a in AC.missing_assets(base)}
-        except Exception:
-            miss = set()
-
-        # task-15：先亮当前命中的引擎档位（加速包/系统 CUDA/ComfyUI/CPU 兜底）。
-        # 成本说明：首次会惰性 import torch（几秒，与点拆图按钮同成本，之后走
-        # 缓存）+ ComfyUI localhost 探测（无服务毫秒级）。
-        try:
-            tier, _why = engine_tier()
-            self.asset_menu.addAction(Action(
-                FluentIcon.UPDATE, "当前拆图档位：%s" % TIER_LABELS.get(tier, tier)))
-            self.asset_menu.addSeparator()
-        except Exception:
-            pass
-
-        # 运行环境（最影响"装完能不能打开"）
-        self.asset_menu.addAction(Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
-        for a in AC.ASSETS:
-            if (a.get("kind") or "") == "runtime":
-                self._add_asset_action(a, a.get("id") not in miss)
-        self.asset_menu.addSeparator()
-        # 模型
-        self.asset_menu.addAction(Action(FluentIcon.FOLDER, "— 模型 —"))
-        for a in AC.ASSETS:
-            if (a.get("kind") or "model") not in ("runtime", "accel"):
-                self._add_asset_action(a, a.get("id") not in miss)
-        # 推理加速（CUDA 分卷包，N 卡用户提速）
-        accel = [a for a in AC.ASSETS if (a.get("kind") or "") == "accel"]
-        if accel:
-            self.asset_menu.addSeparator()
-            self.asset_menu.addAction(
-                Action(FluentIcon.UP, "— 推理加速 —"))
-            for a in accel:
-                self._add_asset_action(a, a.get("id") not in miss)
-        self.asset_menu.addSeparator()
-        self.asset_menu.addAction(Action(
-            FluentIcon.SYNC, "刷新状态",
-            triggered=self._rebuild_asset_menu))
-
-    def _add_asset_action(self, a, done, menu=None):
-        """往指定菜单加一条资产项：已装显示 ✔+占用，未装显示 ⬇+体积并可点击下载。"""
-        import asset_catalog as AC
-        menu = menu if menu is not None else self.asset_menu
-        mb = a.get("size", 0) / (1024.0 * 1024.0)
-        if done:
-            try:
-                got = AC.installed_size(a, V2) / (1024.0 * 1024.0)
-            except Exception:
-                got = mb
-            text = "✔ %s（已下载 %.0f MB）" % (a.get("name", a["id"]), got)
-            menu.addAction(Action(FluentIcon.ACCEPT, text))
-        else:
-            text = "⬇ %s（%.0f MB）" % (a.get("name", a["id"]), mb)
-            act = Action(FluentIcon.DOWNLOAD, text,
-                         triggered=lambda _=False, x=a: self._start_asset_download(x))
-            menu.addAction(act)
-
-    def _start_asset_download(self, a):
-        """启动资产下载（后台线程）。下载器在 asset_downloader.py，
-        不在主线程做网络：5GB 会卡死 UI。"""
-        try:
-            import asset_downloader as AD
-        except Exception as e:
-            InfoBar.warning("资产下载", "下载模块缺失: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
-            return
-        url = a.get("url") or ""
-        if not url:
-            InfoBar.warning("资产下载",
-                            "%s 还没有配置下载地址" % a.get("name", a["id"]),
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=4000)
-            return
-        dlg = AD.AssetDownloadDialog(a, V2, self)
-        try:
-            dlg.start()
-            dlg.exec()
-        except Exception as e:
-            InfoBar.warning("资产下载", "启动失败: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
-    
     def _sync_edit_menu_state(self):
         """刷新「编辑」菜单里选区相关项的可用性（PS：没选区时复制/剪切/反选是灰的）。"""
         try:
@@ -4454,8 +4597,11 @@ class MainWindow(FluentWindow):
             if os.path.isdir(d):
                 self.add_project_entry(fn, d)
 
-class FluentShellWindow(FluentWindow):
-    """v3 视频工程用的单页 FluentWindow 壳：同款标题栏/图标，导航隐藏。"""
+class FluentShellWindow(AssetMenuMixin, FluentWindow):
+    """v3 视频工程用的单页 FluentWindow 壳：同款标题栏/图标，导航隐藏。
+
+    混入 AssetMenuMixin，让视频窗口顶部也有同款「资产管理」菜单。
+    """
 
     def __init__(self):
         super().__init__()
@@ -4483,19 +4629,152 @@ class FluentShellWindow(FluentWindow):
             item.setVisible(False)
 
 
+def _video_new_project(wb, set_proj):
+    """文件 → 新建工程：新建空工程并落盘。
+
+    video_workbench 当前没有 act_new，用现有 API 组合：换全新工程 ->
+    _apply_project 刷新界面 -> save_project(ask=True) 选目录落盘。
+    """
+    import video_model as VM
+    wb.proj = VM.new_project()
+    wb.proj_dir = None
+    try:
+        wb._apply_project(None)
+    except Exception:
+        pass
+    if wb.save_project(ask=True):
+        set_proj(os.path.basename(wb.proj_dir))
+
+
+def _video_open_project(win, wb, set_proj):
+    """文件 → 打开工程：选目录 -> 校验是视频工程 -> load_dir -> 更新标题。"""
+    import video_workbench as VW
+    d = QFileDialog.getExistingDirectory(win,
+                                         "打开工程（选择含 video_project.json 的文件夹）",
+                                         VW.PROJ_BASE)
+    if not d:
+        return
+    if not VW.VideoWorkbench.is_video_project(d):
+        InfoBar.error("不是视频工程", "所选文件夹里没有 video_project.json：\n%s" % d,
+                      parent=win, position=InfoBarPosition.TOP, duration=5000)
+        return
+    if wb.load_dir(d):
+        set_proj(os.path.basename(d))
+
+
+def _video_save(wb, set_proj):
+    """文件 → 保存：落盘当前工程并同步标题。"""
+    if wb.save_project():
+        set_proj(os.path.basename(wb.proj_dir))
+
+
+def _video_save_as(win, wb, set_proj):
+    """文件 → 另存为：选目录 -> save_as 落盘 -> 同步标题。"""
+    if wb.save_as():
+        set_proj(os.path.basename(wb.proj_dir))
+
+
+def _video_open_recent(win, wb, d, set_proj):
+    """最近工程 → 打开：失效目录给提示，成功更新标题。"""
+    import video_workbench as VW
+    if not os.path.isfile(os.path.join(d, VW.META_NAME)):
+        InfoBar.warning("工程已失效", "目录或 video_project.json 不存在：\n%s" % d,
+                        parent=win, position=InfoBarPosition.TOP, duration=4000)
+        return
+    if wb.load_dir(d):
+        set_proj(os.path.basename(d))
+
+
+def _build_video_menus(win, wb, set_proj):
+    """视频窗口顶部三菜单（文件/编辑/资产管理），挂 shell 标题栏左上横排。
+
+    裁剪范围（用户确认）：文件去掉导入图片/PSD/AE/JSON/GIF；编辑只留
+    撤销重做；资产管理整套复用 AssetMenuMixin。
+    """
+    # ---- 文件 ----
+    fb = ToggleDropDownButton("文件", win)
+    mf = RoundMenu(parent=win)
+    mf.addAction(Action(FluentIcon.ADD, "新建工程",
+                        triggered=lambda: _video_new_project(wb, set_proj)))
+    mf.addAction(Action(FluentIcon.FOLDER, "打开工程",
+                        triggered=lambda: _video_open_project(win, wb, set_proj)))
+    mf.addAction(Action(FluentIcon.SAVE, "保存",
+                        triggered=lambda: _video_save(wb, set_proj)))
+    mf.addAction(Action(FluentIcon.SAVE_AS, "另存为",
+                        triggered=lambda: _video_save_as(win, wb, set_proj)))
+    mf.addAction(Action(FluentIcon.PLAY, "导出视频",
+                        triggered=wb._open_export_dialog))
+    mf.addSeparator()
+    # 最近工程：只列 type=video 的工程，点击=打开工程同款流程
+    recent = RoundMenu("最近工程", parent=win)
+    recent.setIcon(FluentIcon.FOLDER)
+
+    def _rebuild_recent():
+        recent.clear()
+        items = [it for it in load_recent() if it.get("type") == "video"]
+        if not items:
+            _a = Action("暂无最近工程")
+            _a.setEnabled(False)
+            recent.addAction(_a)
+            return
+        for it in items[:RECENT_MENU_MAX]:
+            recent.addAction(Action(FluentIcon.FOLDER, it.get("name") or it["dir"],
+                                    triggered=lambda d=it["dir"]:
+                                    _video_open_recent(win, wb, d, set_proj)))
+
+    _rebuild_recent()
+    mf.addMenu(recent)
+    mf.addSeparator()
+    mf.addAction(Action(FluentIcon.CANCEL, "退出", triggered=win.close))
+    fb.setMenu(mf)
+    fb.menu_opened.connect(lambda _m=None: _rebuild_recent())
+    fb.setFixedHeight(30)
+
+    # ---- 编辑：只留撤销/重做 ----
+    eb = ToggleDropDownButton("编辑", win)
+    me = RoundMenu(parent=win)
+    me.addAction(Action(FluentIcon.HISTORY, "撤销  Ctrl+Z", triggered=wb.undo))
+    me.addAction(Action(FluentIcon.HISTORY, "重做  Ctrl+Y", triggered=wb.redo))
+    eb.setMenu(me)
+    eb.setFixedHeight(30)
+
+    # ---- 资产管理：复用 mixin（同款首击先填后弹）----
+    win._setup_asset_menu(win)
+    win.asset_btn.setFixedHeight(30)
+
+    # 挂到标题栏左上角横排（与 MainWindow 同款机制）
+    tbar = win.titleBar.hBoxLayout
+    tbar.insertWidget(0, fb, 0, Qt.AlignLeft | Qt.AlignVCenter)
+    tbar.insertWidget(1, eb, 0, Qt.AlignLeft | Qt.AlignVCenter)
+    tbar.insertWidget(2, win.asset_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
+    return fb, eb, win.asset_btn
+
+
 def _open_video_window(proj_dir=None):
     """新建/打开视频工程。返回 (win, wb)；打开失败返回 None（留在欢迎页）。"""
     import video_workbench as VW
     win = FluentShellWindow()
     wb = VW.VideoWorkbench(None)
     win.setCentralInterface(wb)
-    name = os.path.basename(proj_dir) if proj_dir else "未命名视频工程"
-    wb.project_dirty_changed = lambda: win.setWindowTitle(
-        "木偶工作室 v%s - %s*" % (VERSION, name))
-    if proj_dir and not wb.load_dir(proj_dir):
+    # 标题闭包：打开 / 另存为 / 改脏都走它（抽出可复用，避免散落）
+    title = {"name": "未命名视频工程"}
+
+    def set_proj(name, dirty=False):
+        title["name"] = name or "未命名视频工程"
+        win.setWindowTitle("木偶工作室 v%s - %s%s" % (
+            VERSION, title["name"], "*" if dirty else ""))
+
+    wb.project_dirty_changed = lambda: set_proj(title["name"], True)
+    file_btn, edit_btn, _ = _build_video_menus(win, wb, set_proj)
+    win.file_btn = file_btn          # 供测试/外部访问三个菜单按钮
+    win.edit_btn = edit_btn
+    if proj_dir:
+        if wb.load_dir(proj_dir):
+            set_proj(os.path.basename(proj_dir))
+            return win, wb
         win.deleteLater()
         return None
-    win.setWindowTitle("木偶工作室 v%s - %s" % (VERSION, name))
+    set_proj("未命名视频工程")
     return win, wb
 
 
@@ -4591,6 +4870,11 @@ def run_app():
     wel.show()
     # 欢迎页「检查更新」下好的新包，在进程真正退出前拉起静默安装
     app.aboutToQuit.connect(_run_pending_update)
+    # v3.2.1：退出序列开始后禁止新起档位预热（torch import 持 loader lock
+    # 时退出会卡死，py-spy 实锤）；并在启动 1.5s 后就预热——用户点资产
+    # 菜单时缓存已就绪，且预热窗口远离正常退出时刻。
+    app.aboutToQuit.connect(lambda: _APP_EXITING.__setitem__(0, True))
+    QTimer.singleShot(1500, _start_tier_warmup)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

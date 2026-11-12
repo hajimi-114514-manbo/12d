@@ -23,10 +23,10 @@ import time
 
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer, QSize
+from PySide6.QtCore import Qt, QTimer, QSize, QSettings
 from PySide6.QtGui import QImage, QPixmap, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-                               QFileDialog, QStackedLayout, QFrame)
+                               QFileDialog, QStackedLayout, QFrame, QSplitter)
 from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
                             ToolButton, ComboBox, SpinBox, DoubleSpinBox,
                             StrongBodyLabel, BodyLabel, CaptionLabel,
@@ -43,6 +43,24 @@ RECENT_FILE = os.path.join(_HERE, "recent_projects.json")
 META_NAME = "video_project.json"
 
 DEFAULT_DUR = {"image": 3.0, "video": 0, "puppet": 0, "audio": 0}  # 0=用素材全长
+
+# ---------- 面板 splitter（可拖拽调宽高）----------
+SETTINGS_NAME = "muppet_workbench.ini"
+SPLIT_H_DEFAULT = [300, 880, 260]     # 素材库 | 预览 | 属性
+SPLIT_H_MIN = [180, 420, 180]
+SPLIT_V_DEFAULT = [560, 340]         # 上方区域 | 时间轴（约 38%）
+SPLIT_V_MIN_TIMELINE = 120
+
+# handle 颜色与主界面统一：idle #3a3f4a / hover+drag #4d88ff。
+# 用 objectName 限定作用域，避免污染子控件里的其它 QSplitter。
+_SPLIT_QSS = (
+    "QSplitter#wbHSplit::handle { background: #3a3f4a; }"
+    "QSplitter#wbHSplit::handle:hover, QSplitter#wbHSplit::handle:active"
+    " { background: #4d88ff; }"
+    "QSplitter#wbVSplit::handle { background: #3a3f4a; }"
+    "QSplitter#wbVSplit::handle:hover, QSplitter#wbVSplit::handle:active"
+    " { background: #4d88ff; }"
+)
 
 
 def fmt_time(t):
@@ -153,17 +171,17 @@ class VideoWorkbench(QWidget):
         self.act_export.clicked.connect(self._open_export_dialog)
         pl.addWidget(self.act_save)
         pl.addWidget(self.act_export)
-        v.addWidget(pv)
-
-        # ---------- 中部三列 ----------
-        mid = QHBoxLayout()
-        mid.setContentsMargins(8, 4, 8, 0)
-        mid.setSpacing(8)
+        # ---------- 中部三列（QSplitter 可拖拽调宽）----------
+        hsplit = QSplitter(Qt.Horizontal, self)
+        hsplit.setObjectName("wbHSplit")
+        hsplit.setChildrenCollapsible(False)
+        hsplit.setHandleWidth(6)
+        hsplit.setStyleSheet(_SPLIT_QSS)
 
         # 左：素材库
         left = QFrame(self)
         left.setObjectName("assetPanel")
-        left.setFixedWidth(300)
+        left.setMinimumWidth(SPLIT_H_MIN[0])
         left.setStyleSheet("#assetPanel{background:#20232a;border-radius:8px;}")
         ll = QVBoxLayout(left)
         ll.setContentsMargins(10, 10, 10, 10)
@@ -191,7 +209,7 @@ class VideoWorkbench(QWidget):
                                         left)
         self.asset_empty.setAlignment(Qt.AlignCenter)
         ll.addWidget(self.asset_empty)
-        mid.addWidget(left)
+        hsplit.addWidget(left)
 
         # 中：预览
         center = QWidget(self)
@@ -219,12 +237,13 @@ class VideoWorkbench(QWidget):
         self.sld_pos.setRange(0, 1000)
         pb.addWidget(self.sld_pos, 1)
         cl.addLayout(pb)
-        mid.addWidget(center, 1)
+        center.setMinimumWidth(SPLIT_H_MIN[1])
+        hsplit.addWidget(center)
 
         # 右：属性
         right = QFrame(self)
         right.setObjectName("propPanel")
-        right.setFixedWidth(260)
+        right.setMinimumWidth(SPLIT_H_MIN[2])
         right.setStyleSheet("#propPanel{background:#20232a;border-radius:8px;}")
         rl = QVBoxLayout(right)
         rl.setContentsMargins(12, 12, 12, 12)
@@ -272,8 +291,20 @@ class VideoWorkbench(QWidget):
         self.btn_del_clip.clicked.connect(self._delete_selected)
         rl.addWidget(self.btn_del_clip)
         rl.addStretch(1)
-        mid.addWidget(right)
-        v.addLayout(mid, 1)
+        hsplit.addWidget(right)
+        hsplit.setStretchFactor(0, 0)
+        hsplit.setStretchFactor(1, 2)      # 预览列 stretch 最大
+        hsplit.setStretchFactor(2, 0)
+        hsplit.setSizes(SPLIT_H_DEFAULT)
+        self._hsplit = hsplit
+
+        # ---------- 顶部区域（pv + 三列 splitter）----------
+        top = QWidget(self)
+        tv = QVBoxLayout(top)
+        tv.setContentsMargins(0, 0, 0, 0)
+        tv.setSpacing(0)
+        tv.addWidget(pv)
+        tv.addWidget(hsplit, 1)
 
         # ---------- 底部：clip 时间轴 ----------
         import clip_timeline as CT
@@ -281,7 +312,42 @@ class VideoWorkbench(QWidget):
         self.timeline.seeked.connect(self.seek)
         self.timeline.selection_changed.connect(self._on_selection)
         self.timeline.edit_committed.connect(self._after_edit)
-        v.addWidget(self.timeline)
+        self.timeline.setMinimumHeight(SPLIT_V_MIN_TIMELINE)
+
+        # ---------- 垂直 splitter：上方区域 | 时间轴 ----------
+        vsplit = QSplitter(Qt.Vertical, self)
+        vsplit.setObjectName("wbVSplit")
+        vsplit.setChildrenCollapsible(False)
+        vsplit.setHandleWidth(6)
+        vsplit.setStyleSheet(_SPLIT_QSS)
+        vsplit.addWidget(top)
+        vsplit.addWidget(self.timeline)
+        vsplit.setStretchFactor(0, 3)
+        vsplit.setStretchFactor(1, 1)
+        vsplit.setSizes(SPLIT_V_DEFAULT)
+        self._vsplit = vsplit
+
+        # ---------- splitter 尺寸持久化 ----------
+        # QSettings(IniFormat) 在没设 organization 时会退到**当前工作目录**，
+        # 把 muppet_workbench.ini 落进安装目录/仓库。这里强制绝对路径：
+        # SETTINGS_NAME 是绝对路径（测试用临时 ini）就直接用，否则写到
+        # %APPDATA%\MuppetStudio\，不污染应用目录。
+        _sname = SETTINGS_NAME
+        if os.path.isabs(_sname):
+            _settings_path = _sname
+        else:
+            _base = os.environ.get("APPDATA") or os.path.expanduser("~")
+            _settings_path = os.path.join(_base, "MuppetStudio", _sname)
+            try:
+                os.makedirs(os.path.dirname(_settings_path), exist_ok=True)
+            except Exception:
+                pass
+        self._settings = QSettings(_settings_path, QSettings.IniFormat)
+        hsplit.splitterMoved.connect(lambda *a: self._save_splitter_sizes())
+        vsplit.splitterMoved.connect(lambda *a: self._save_splitter_sizes())
+        self._restore_splitter_sizes()
+
+        v.addWidget(vsplit)
 
         # 快捷键：Ctrl+S 保存 / Ctrl+Z Y 撤销重做 / 空格播放
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_project)
@@ -291,6 +357,30 @@ class VideoWorkbench(QWidget):
 
         self._apply_project(None)
         self._seed_history()
+
+    # ================= splitter 尺寸持久化 =================
+    def _save_splitter_sizes(self):
+        """拖拽结束（splitterMoved）：把两个 splitter 的尺寸写入 QSettings。"""
+        try:
+            self._settings.setValue("splitter/horizontal", self._hsplit.sizes())
+            self._settings.setValue("splitter/vertical", self._vsplit.sizes())
+            self._settings.sync()
+        except Exception:
+            pass
+
+    def _restore_splitter_sizes(self):
+        """构造时恢复：校验列表长度与正数，否则用默认尺寸。"""
+        try:
+            hs = self._settings.value("splitter/horizontal")
+            if isinstance(hs, (list, tuple)) and len(hs) == 3 \
+                    and all(int(v) > 0 for v in hs):
+                self._hsplit.setSizes([int(v) for v in hs])
+            vs = self._settings.value("splitter/vertical")
+            if isinstance(vs, (list, tuple)) and len(vs) == 2 \
+                    and all(int(v) > 0 for v in vs):
+                self._vsplit.setSizes([int(v) for v in vs])
+        except Exception:
+            pass
 
     # ================= 工程生命周期 =================
     def _refresh_all(self):
@@ -318,8 +408,11 @@ class VideoWorkbench(QWidget):
         self.cmb_res.blockSignals(True)
         idx = self.cmb_res.findText(want)
         if idx < 0:
-            self.cmb_res.insertText(0, want)
-            idx = 0
+            # ComboBox 只有 insertItem，没有 insertText（用 insertText 会 AttributeError）
+            if want not in [self.cmb_res.itemText(i)
+                            for i in range(self.cmb_res.count())]:
+                self.cmb_res.insertItem(0, want)
+            idx = self.cmb_res.findText(want)
         self.cmb_res.setCurrentIndex(idx)
         self.cmb_res.blockSignals(False)
 
@@ -410,6 +503,13 @@ class VideoWorkbench(QWidget):
             InfoBar.error("保存失败", repr(e), parent=self,
                           position=InfoBarPosition.TOP, duration=4000)
             return False
+
+    def save_as(self):
+        """另存为：选目录 -> 写 video_project.json -> 切 proj_dir -> _record_recent。
+
+        复用 save_project(ask=True) 的落盘逻辑，避免两份写盘代码。
+        """
+        return self.save_project(ask=True)
 
     def _record_recent(self):
         try:

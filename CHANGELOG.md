@@ -5,6 +5,57 @@
 
 ---
 
+## v3.2.1（2026-11-12 23:30）视频工作台可用性修复 + 用户报障三连
+
+### 面板可拖拽（用户需求「各模块的宽高应当可调节」，task-16）
+- 视频工作台三列（素材库|预览|工程属性）改水平 QSplitter（最小 180/420/180），
+  上方区域|时间轴改垂直 QSplitter（时间轴初始约 38%、最小 120），handle 6px
+  配色与主界面一致（#3a3f4a / 悬停 #4d88ff），不可拖没。
+- 尺寸记忆：QSettings 存 splitter sizes，启动恢复（坏数据容错）。
+- 测试 wb_splitters_test 22 项（offscreen isCollapsible 恒真不可靠，改行为断言）。
+
+### 时间轴高度拖不动（用户报障，lead 直修 clip_timeline.py）
+- 根因两层：面板垂直 sizePolicy=Fixed（QSplitter 拒绝分配空间）+
+  _update_height 把 minimumHeight 钉成全部轨道内容高并强制 resize。
+- 修法：垂直 Preferred；minimumHeight 降为「工具条+刻度尺+一行」；
+  **行高按可用高度自适应等比压缩**（下限 14px，剪映同款），拖大恢复默认，
+  绘制与命中同源（压缩态点选精确）。哨兵 tl_height_test 13 项。
+
+### 视频窗口菜单栏（用户需求带截图，task-17）
+- 抽出 AssetMenuMixin，Workbench 与 FluentShellWindow 共用（属性名不变）。
+- 视频窗口标题栏新增 文件/编辑/资产管理 三菜单：文件=新建/打开/保存/另存为/
+  导出视频/最近工程(仅 video 类型)/退出（去掉 PSD/AE/JSON/GIF/导入图片）；
+  编辑=撤销/重做（去掉全部木偶专属）；资产=整套复用含档位行、首击先填后弹。
+- video_workbench 仅新增 save_as()；新建工程在 shell 侧实现（wb 无 act_new）。
+- 测试 video_menu_test 23 项。
+
+### 资产管理点击未响应 ~18s（用户报障，task-18）
+- 档位行 engine_tier 在主线程 import torch（实测 11.8s）+ comfy 探测
+  3 端口×4s 串行（6.2s）。三层修复：后台预热线程（daemon threading.Thread，
+  批准偏离——QThread 在 torch import 期间析构 abort 0xC0000409）、菜单只读
+  _TIER_CACHE（未就绪显示「正在检测档位…」）、comfy 并行探测 1s 超时 + 20s TTL。
+- 测试 tier_thread_test 6 项（哨兵：stub 3s 探测主线程差值 -8ms）。
+
+### 加速包点击弹「还没有配置下载地址」（用户报障）
+- _start_asset_download 预检查只认顶层 url，parts 分卷资产（链接在
+  parts[i].url）被误挡。条件改 `if not url and not a.get("parts")`。
+
+### 非预设分辨率工程构造崩溃（lead 复现发现）
+- _set_res_combo 调 ComboBox.insertText（qfluentwidgets 无此方法）→
+  640×360 工程 AttributeError。改 insertItem + 同名去重。
+
+### 退出竞态死锁（lead 全量回归抓到，py-spy 定案）
+- 预热线程 import torch 持 OS loader lock 时进程退出（含 os._exit）卡死，
+  flaky ~1/6。修复：构造 MainWindow 不再自动预热（脚本直构秒退安全）、
+  预热改 run_app 启动 1.5s 后 singleShot + 菜单点开兜底，两处均查
+  _APP_EXITING（aboutToQuit 置位）。asset_ui_test 连跑 6/6 干净。
+
+### 测试维护
+- parts_dl_test 9b 过期断言（硬编码 tag v3.1.0）改为 Release 下载路径+
+  版本 tag 正则形态校验，升级 tag 不再失效。
+
+---
+
 ## v3.2.0（2026-11-12 19:10）自动更新闭环 + 推理引擎四档优先级链
 
 ### 检查更新（欢迎页 → 后台下载 → 静默安装，全程零弹窗）
