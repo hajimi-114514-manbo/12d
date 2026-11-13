@@ -71,6 +71,25 @@ class AssetDownloadThread(QThread):
     finished_ok = Signal(str)          # 成功，携带落盘/解压路径
     failed = Signal(str)               # 失败原因
 
+    # ---------- 活跃下载登记表（task-20：菜单项显示下载中百分比） ----------
+    # key = asset id，value = {"got": int, "total": int}。
+    # 并发说明：CPython 的单键 dict 赋值/读是原子的（GIL），登记表只有
+    # 单键 set/del 与读，不需要锁。登记在 run() 入口、清除在 finally
+    # 兜底（成功/失败/取消/异常全路径必清，防泄漏成"永远下载中"）。
+    _ACTIVE = {}
+
+    @classmethod
+    def active_progress(cls, aid):
+        """查询资产当前下载进度。进行中返回 (got, total)；无活跃下载返回 None。
+        total<=0（未知总大小）返回 (got, 0)——菜单层负责容错显示。"""
+        try:
+            st = cls._ACTIVE.get(aid)
+            if st is None:
+                return None
+            return (int(st.get("got", 0)), int(st.get("total", 0)))
+        except Exception:
+            return None
+
     def __init__(self, asset, base_dir, parent=None):
         super().__init__(parent)
         self.asset = asset
@@ -79,6 +98,39 @@ class AssetDownloadThread(QThread):
 
     def cancel(self):
         self._cancel = True
+
+    # ---------- 登记表维护（task-20） ----------
+    def _register_active(self):
+        """run() 入口登记：菜单层由此得知"该资产正在下载"。"""
+        try:
+            AssetDownloadThread._ACTIVE[self.asset.get("id")] = {
+                "got": 0, "total": int(self.asset.get("size") or 0)}
+        except Exception:
+            pass
+
+    def _clear_active(self):
+        """出口清除（成功/失败/取消/异常全路径经 finally 到这里，幂等）。"""
+        try:
+            AssetDownloadThread._ACTIVE.pop(self.asset.get("id"), None)
+        except Exception:
+            pass
+
+    def _emit_progress(self, got, total):
+        """progressed 信号统一出口：先更新登记表再发信号。
+        （信号是跨线程队列投递，接收方在主线程，不能在接收侧回写登记表
+        ——这里在下载线程内同步写，保证菜单重建时读到的是最新值。）"""
+        try:
+            st = AssetDownloadThread._ACTIVE.get(self.asset.get("id"))
+            if st is not None:
+                st["got"] = int(got)
+                st["total"] = int(total)
+            else:
+                # run() 尚未登记（理论上不可能）——兜底登记防查询落空
+                AssetDownloadThread._ACTIVE[self.asset.get("id")] = {
+                    "got": int(got), "total": int(total)}
+        except Exception:
+            pass
+        self.progressed.emit(got, total)   # _emit_progress 出口，勿直呼
 
     # ---------- 内部 ----------
     def _dest_dir(self):
@@ -126,7 +178,7 @@ class AssetDownloadThread(QThread):
                     break
                 f.write(chunk)
                 got += len(chunk)
-                self.progressed.emit(got, total or got)
+                self._emit_progress(got, total or got)
         # 大小校验
         if total and got < total:
             self.status.emit("不完整（%s / %s），可重试续传" % (human_mb(got), human_mb(total)))
@@ -174,6 +226,7 @@ class AssetDownloadThread(QThread):
            zip   （运行时/sam）：asset 有 "url" -> 下整包再解压
            分卷  （CUDA 包）：asset mode=="parts" -> 多卷下载拼接解压覆盖
         """
+        self._register_active()          # task-20：登记活跃下载（菜单显示进度用）
         try:
             import asset_catalog as AC
             if self.asset.get("mode") == "parts":
@@ -203,6 +256,8 @@ class AssetDownloadThread(QThread):
                     self._run_single_file(urls, dest_dir)
         except Exception as e:
             self.failed.emit("%s: %s" % (type(e).__name__, e))
+        finally:
+            self._clear_active()         # 成功/失败/取消/异常全路径必清
 
     # ---------- 逐文件模式（模型）----------
     def _run_multi_file(self, plan, dest_dir):
@@ -225,7 +280,7 @@ class AssetDownloadThread(QThread):
                     size = self._download_file(u, target, done_bytes, total_bytes)
                     if size is not None:
                         done_bytes += size
-                        self.progressed.emit(done_bytes, total_bytes or done_bytes)
+                        self._emit_progress(done_bytes, total_bytes or done_bytes)
                         ok = True
                         break
                 except Exception as e:
@@ -307,8 +362,8 @@ class AssetDownloadThread(QThread):
                     break
                 f.write(chunk)
                 got += len(chunk)
-                self.progressed.emit(base_bytes + got,
-                                     total_bytes or (base_bytes + got))
+                self._emit_progress(base_bytes + got,
+                                    total_bytes or (base_bytes + got))
         if total and got < total:
             self.status.emit("不完整 %s/%s" % (human_mb(got), human_mb(total)))
             return None
@@ -436,8 +491,10 @@ class AssetDownloadThread(QThread):
             self.failed.emit("分卷清单为空")
             return
         if "torch" in sys.modules:
-            self.failed.emit("推理引擎已在当前会话加载。请重启应用后再安装 "
-                             "CUDA 包（torch DLL 被占用会导致替换失败）")
+            self.failed.emit("当前会话已加载推理引擎(torch)，CUDA 包的文件替换会被 "
+                             "DLL 锁定。已下载部分已保留：重启应用后不要拆图，"
+                             "直接到「资产管理→推理加速」重新点击安装即可"
+                             "（自动续传，几秒完成）")
             return
         target = AC.parts_target_dir(asset, self.base_dir)
         if not target:
@@ -485,7 +542,7 @@ class AssetDownloadThread(QThread):
                                  % (i + 1, len(parts)))
                 return
             done += sz
-            self.progressed.emit(done, total_bytes or done)
+            self._emit_progress(done, total_bytes or done)
         # 拼接（流式，不把 2.6GB 读进内存）
         zip_path = os.path.join(work, "cuda_pack.zip")
         self.status.emit("合并分卷…")

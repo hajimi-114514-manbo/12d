@@ -26,7 +26,7 @@ from qfluentwidgets import (PrimaryPushButton, PushButton, LineEdit,
                             TableWidget, StrongBodyLabel, BodyLabel,
                             CaptionLabel, MessageBoxBase, InfoBar,
                             InfoBarPosition, TogglePushButton,
-                            ToolButton, FluentIcon)
+                            ToolButton, FluentIcon, ProgressBar)
 
 # 更新检查（task-13）：只依赖它自己的 QtCore，方向单向，无循环 import
 import update_checker as _UC
@@ -233,6 +233,7 @@ class WelcomeWindow(QWidget):
         self._rows = []            # 当前页行 -> 工程目录（_open_row 用）
         self._version = str(version or "")
         self._upd_thread = None    # UpdateThread（检查更新，task-13）
+        self._upd_gen = 0          # 更新轮次号：ready 后 1.5s 的隐藏定时器按代失效
         self.resize(1060, 660)
         self.setStyleSheet(
             "#welcomeRoot{background:#1f2126;}"
@@ -261,7 +262,11 @@ class WelcomeWindow(QWidget):
         tip = CaptionLabel("每种工程最多保留 50 个", side)
         tip.setStyleSheet("color:#8a93a2;")
         sl.addWidget(tip)
-        # ---------- 左下角：检查更新（task-13）----------
+        # ---------- 左下角：检查更新（task-13）+ 可见下载进度（task-19）----------
+        # 侧栏内容宽仅 260-24*2=212px：按钮 32 + 进度条 150 + 百分比 ~40 挤不进
+        # 同一行（会溢出裁切），进度条放按钮正下方第二行（实测 ~150 宽、默认隐藏）。
+        upd_box = QVBoxLayout()
+        upd_box.setSpacing(6)
         upd_row = QHBoxLayout()
         upd_row.setSpacing(10)
         _up_icon = getattr(FluentIcon, "UPDATE", None) or \
@@ -284,7 +289,26 @@ class WelcomeWindow(QWidget):
         self.update_lbl.setWordWrap(False)
         upd_row.addWidget(self.update_lbl, 1)
         upd_row.addStretch(1)
-        sl.addLayout(upd_row)
+        upd_box.addLayout(upd_row)
+        # 进度行：ProgressBar（1.11.3 的 paintEvent 不画文字）+ 右侧 CaptionLabel 百分比
+        prog_row = QHBoxLayout()
+        prog_row.setSpacing(8)
+        self.update_bar = ProgressBar(side)
+        self.update_bar.setFixedWidth(150)
+        self.update_bar.setUseAni(False)   # 150ms 动画对小步进度无益，值即时生效
+        self.update_bar.setRange(0, 100)
+        self.update_bar.setValue(0)
+        self.update_bar.hide()
+        self.upd_pct_lbl = CaptionLabel("", side)
+        self.upd_pct_lbl.setStyleSheet("color:#8a93a2;")
+        self.upd_pct_lbl.setFixedWidth(40)
+        self.upd_pct_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.upd_pct_lbl.hide()
+        prog_row.addWidget(self.update_bar)
+        prog_row.addWidget(self.upd_pct_lbl)
+        prog_row.addStretch(1)
+        upd_box.addLayout(prog_row)
+        sl.addLayout(upd_box)
         root.addWidget(side)
 
         # ---------- 右侧主区 ----------
@@ -525,6 +549,7 @@ class WelcomeWindow(QWidget):
             return
         self.btn_update.setEnabled(False)
         self.update_lbl.setText("检查中…")
+        self._reset_upd_bar()              # 上一轮 ready 的 100% 残留/定时器作废
         th = _UC.UpdateThread(self._version, parent=self)
         self._upd_thread = th
         th.status.connect(self._on_upd_status)
@@ -541,8 +566,14 @@ class WelcomeWindow(QWidget):
     def _on_upd_progress(self, done, total):
         pct = int(done * 100 / total) if total else 0
         self.btn_update.setToolTip("下载中 %d%%" % pct)
+        # 可见进度（task-19）：按钮下方细条 + 右侧百分比文字
+        self.update_bar.setVisible(True)
+        self.upd_pct_lbl.setVisible(True)
+        self.update_bar.setValue(pct)
+        self.upd_pct_lbl.setText("%d%%" % pct)
 
     def _on_upd_uptodate(self, ver):
+        self._hide_upd_bar()
         self.update_lbl.setText("已是最新版本 v%s" % ver)
         self.btn_update.setToolTip("检查更新")
         QTimer.singleShot(6000, lambda: self.update_lbl.setText("")
@@ -552,12 +583,33 @@ class WelcomeWindow(QWidget):
     def _on_upd_ready(self, path):
         self.update_lbl.setText("新版已下载，退出后自动安装")
         self.btn_update.setToolTip("检查更新")
+        # 先满格停留 1.5s 给用户“下完了”的确认感，再收起（带代次保护）
+        self.update_bar.setVisible(True)
+        self.upd_pct_lbl.setVisible(True)
+        self.update_bar.setValue(100)
+        self.upd_pct_lbl.setText("100%")
+        gen = self._upd_gen
+        QTimer.singleShot(1500, lambda: self._hide_upd_bar(gen))
         InfoBar.success("新版已下载", "退出后自动安装\n%s" % path,
                         parent=self, position=InfoBarPosition.TOP,
                         duration=8000)
 
     def _on_upd_failed(self, msg):
+        self._hide_upd_bar()
         self.update_lbl.setText("")
         self.btn_update.setToolTip("检查更新")
         InfoBar.warning("检查更新", msg, parent=self,
                         position=InfoBarPosition.TOP, duration=5000)
+
+    def _reset_upd_bar(self):
+        """新一轮检查开始：进度条清零隐藏，旧 ready 的延迟隐藏定时器作废。"""
+        self._upd_gen += 1
+        self._hide_upd_bar()
+
+    def _hide_upd_bar(self, gen=None):
+        if gen is not None and gen != self._upd_gen:
+            return                      # 迟到的 1.5s 定时器：别碰新一轮的状态
+        self.update_bar.setVisible(False)
+        self.upd_pct_lbl.setVisible(False)
+        self.update_bar.setValue(0)
+        self.upd_pct_lbl.setText("")

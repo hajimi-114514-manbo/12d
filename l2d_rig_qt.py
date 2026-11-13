@@ -109,7 +109,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.2.2"
+VERSION = "3.3.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -1110,6 +1110,46 @@ def _cuda_available():
             _CUDA_CACHE[0] = False
     return _CUDA_CACHE[0]
 
+
+# task-23：展示链（engine_tier/预热）的 CUDA 检测必须走**子进程**，不能 import
+# torch 到主进程——主进程 torch DLL 常驻会锁死文件，使 asset_downloader 的
+# "torch in sys.modules" 解压守卫永远命中，加速包永远装不上（P0）。
+_CUDA_PROBE_CACHE = [None]
+
+
+def _cuda_available_probe(timeout=60.0):
+    """子进程探测 CUDA 可用性（**不把 torch 导入主进程**）。
+
+    与 _cuda_available() 的区别：本函数只用于 engine_tier/预热展示链。
+    拆图路径（_engine_mode / DecomposeWorker）仍用主进程版 _cuda_available()
+    （那本来就要 import torch，是正常态）。
+
+    实现：[sys.executable, "-c", "import torch;print('CUDA' if ... else 'NO')"]，
+    DEVNULL 输出、超时 60s、CREATE_NO_WINDOW（Windows 无黑窗）。
+    失败语义（一律按 NO/False，与旧 _cuda_available() 的"失败即 False"一致）：
+      - 子进程非零退出（用户没装 runtime / import torch 失败）
+      - 超时
+      - stdout 无法解析出 CUDA
+    """
+    if _CUDA_PROBE_CACHE[0] is not None:
+        return _CUDA_PROBE_CACHE[0]
+    ok = False
+    cmd = [sys.executable, "-c",
+           "import torch;print('CUDA' if torch.cuda.is_available() else 'NO')"]
+    try:
+        import subprocess as _sp
+        creation = getattr(_sp, "CREATE_NO_WINDOW", 0)
+        p = _sp.run(cmd, stdout=_sp.PIPE, stderr=_sp.DEVNULL, timeout=timeout,
+                    creationflags=creation, cwd=os.getcwd())
+        # 非零退出（import torch 失败 / 无 runtime）一律 NO，即便 stdout 有残留
+        out = (p.stdout or b"").decode("utf8", "ignore").strip()
+        if p.returncode == 0 and "CUDA" in out:
+            ok = True
+    except Exception:
+        ok = False
+    _CUDA_PROBE_CACHE[0] = ok
+    return ok
+
 def find_meta(d):
     """工程元数据路径：优先 layers_meta.json；
     兼容在 ComfyUI 里手动跑工作流产出的 *_layers.json（A 卡备用路线，取最新一份）。"""
@@ -1286,11 +1326,13 @@ def engine_tier(probe_comfy=True, comfy_timeout=2.0):
     probe_comfy=True 时会做 localhost 探测（三端口并行 + TTL 20s 缓存，
     一般毫秒级）。
 
-    注意（task-18）：本函数包含 import torch 与 socket 探测，**只应在
-    后台线程调用**；菜单/UI 显示走 _tier_display()（纯读 _TIER_CACHE）。"""
+    注意（task-18/task-23）：本函数含子进程 CUDA 探测与 socket 探测，**只应
+    在后台线程调用**；菜单/UI 显示走 _tier_display()（纯读 _TIER_CACHE）。
+    CUDA 检测走 _cuda_available_probe()（子进程），**绝不在主进程 import torch**
+    ——否则 torch DLL 常驻会锁死文件，使加速包解压守卫永远命中（task-23 P0）。"""
     if os.environ.get("MUPPET_FORCE_DEVICE", "").strip().lower() == "cpu":
         return "cpu", "MUPPET_FORCE_DEVICE 已把设备钉为 CPU（需确认）"
-    if _cuda_available():
+    if _cuda_available_probe():
         if _accel_pack_installed():
             return "accel_pack", "CUDA 加速包已装，本地引擎走 nf4 快档（约 14 分钟/张）"
         return "system_cuda", "系统 CUDA 可用，本地引擎走 nf4 快档"
@@ -1838,7 +1880,8 @@ class AssetMenuMixin:
             triggered=self._rebuild_asset_menu))
 
     def _add_asset_action(self, a, done, menu=None):
-        """往指定菜单加一条资产项：已装显示 ✔+占用，未装显示 ⬇+体积并可点击下载。"""
+        """往指定菜单加一条资产项：已装显示 ✔+占用，未装显示 ⬇+体积并可点击下载；
+        下载进行中显示 ⬇+实时百分比（task-20，查 AssetDownloadThread 登记表）。"""
         import asset_catalog as AC
         menu = menu if menu is not None else self.asset_menu
         mb = a.get("size", 0) / (1024.0 * 1024.0)
@@ -1850,7 +1893,22 @@ class AssetMenuMixin:
             text = "✔ %s（已下载 %.0f MB）" % (a.get("name", a["id"]), got)
             menu.addAction(Action(FluentIcon.ACCEPT, text))
         else:
-            text = "⬇ %s（%.0f MB）" % (a.get("name", a["id"]), mb)
+            # 下载进行中（后台线程在跑）：菜单条目显示实时百分比
+            prog = None
+            try:
+                import asset_downloader as AD
+                prog = AD.AssetDownloadThread.active_progress(a.get("id"))
+            except Exception:
+                prog = None
+            if prog is not None:
+                got_b, total_b = prog
+                if total_b > 0:
+                    pct = max(0, min(100, int(got_b * 100 / total_b)))
+                    text = "⬇ %s（下载中 %d%%）" % (a.get("name", a["id"]), pct)
+                else:
+                    text = "⬇ %s（下载中…）" % a.get("name", a["id"])
+            else:
+                text = "⬇ %s（%.0f MB）" % (a.get("name", a["id"]), mb)
             act = Action(FluentIcon.DOWNLOAD, text,
                          triggered=lambda _=False, x=a: self._start_asset_download(x))
             menu.addAction(act)
@@ -1863,6 +1921,20 @@ class AssetMenuMixin:
         except Exception as e:
             InfoBar.warning("资产下载", "下载模块缺失: %s" % e, parent=self,
                             position=InfoBarPosition.TOP, duration=4000)
+            return
+        # task-20 防重入：该资产已有后台线程在下载时不再起新线程
+        # （AssetDownloadThread 本身无防重入，重复 start 会双线程抢同一
+        # .part 文件）。提示当前进度，用户等菜单条目/重开菜单看进度即可。
+        prog = AD.AssetDownloadThread.active_progress(a.get("id"))
+        if prog is not None:
+            got_b, total_b = prog
+            pct = (" %d%%" % max(0, min(100, int(got_b * 100 / total_b)))
+                   ) if total_b > 0 else ""
+            InfoBar.info("资产下载",
+                         "%s 已在下载中%s，可稍后重新打开菜单查看进度" %
+                         (a.get("name", a.get("id", "")), pct),
+                         parent=self, position=InfoBarPosition.TOP,
+                         duration=4000)
             return
         url = a.get("url") or ""
         # parts 资产（如 CUDA 加速包）的链接在 parts[i]["url"]，顶层无 url 字段，
@@ -1981,6 +2053,8 @@ class Workbench(AssetMenuMixin, QWidget):
         m.addAction(Action(FluentIcon.FOLDER, "导出 PSD", triggered=self.act_export_psd))
         m.addAction(Action(FluentIcon.CODE, "导出 AE 脚本", triggered=self.act_export_ae))
         m.addAction(Action(FluentIcon.SYNC, "导出 JSON", triggered=self.act_export_json))
+        m.addAction(Action(FluentIcon.SAVE_AS, "导出 Live2D 工程",
+                           triggered=self.act_export_l2d))
         m.addAction(Action(FluentIcon.PLAY, "导出 MP4", triggered=self._choose_mp4))
         m.addAction(Action(FluentIcon.IMAGE_EXPORT, "导出 GIF", triggered=self._choose_gif))
         menu.setMenu(m)
@@ -3984,6 +4058,64 @@ class Workbench(AssetMenuMixin, QWidget):
             C.export_json(self.rig, os.path.join(self.cur_dir or V2, "rig_spec.json"))
             InfoBar.success("完成", "rig_spec.json", parent=self,
                             position=InfoBarPosition.TOP, duration=2000)
+
+    # ---------- Live2D 工程导出（后台线程，防重入） ----------
+    def act_export_l2d(self):
+        """文件 → 导出 Live2D 工程：选输出目录 -> 调 l2d_export.export_project_dir。
+
+        主入口吃**工程目录**（self.cur_dir），产出 WebGAL/Cubism 骨架。
+        耗时秒级，但仍走后台线程避免主线程卡顿；用 _l2d_busy 防重入。
+        """
+        if not self._need_rig():
+            return
+        if not getattr(self, "cur_dir", None):
+            InfoBar.warning("提示", "还没有打开工程，无法导出 Live2D 工程",
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            return
+        if getattr(self, "_l2d_busy", False):
+            InfoBar.info("导出中", "请等待当前导出完成", parent=self,
+                         position=InfoBarPosition.TOP, duration=1800)
+            return
+        default = os.path.join(self.cur_dir, "l2d_export")
+        out_dir = QFileDialog.getExistingDirectory(self, "导出 Live2D 工程", default)
+        if not out_dir:
+            return
+        # 现有工程已导出过 PSD 则顺手透传（模块容错：不存在则跳过并在 msg 注明）
+        psd = None
+        psd_path = os.path.join(self.cur_dir, "rig_character.psd")
+        if os.path.isfile(psd_path):
+            psd = psd_path
+        self._l2d_busy = True
+        self.prog.setText("导出 Live2D 工程：准备中…")
+
+        def work():
+            try:
+                import l2d_export as X
+                ok, msg = X.export_project_dir(self.cur_dir, out_dir,
+                                               psd_path=psd,
+                                               name=getattr(self, "proj_name", None))
+            except Exception as e:
+                ok, msg = False, "导出异常 %s: %s" % (type(e).__name__, e)
+            self.after(0, lambda: self._l2d_done(ok, msg, out_dir))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _l2d_done(self, ok, msg, out_dir):
+        self._l2d_busy = False
+        if ok:
+            self.prog.setText("Live2D 导出完成")
+            InfoBar.success("Live2D 导出完成", msg, parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            try:
+                from PySide6.QtGui import QDesktopServices
+                from PySide6.QtCore import QUrl
+                QDesktopServices.openUrl(QUrl.fromLocalFile(out_dir))
+            except Exception:
+                pass
+        else:
+            self.prog.setText("Live2D 导出失败")
+            InfoBar.error("Live2D 导出失败", str(msg)[:200], parent=self,
+                          position=InfoBarPosition.TOP, duration=5000)
 
     # ---------- 视频/GIF 导出（后台线程） ----------
     def _choose_mp4(self):

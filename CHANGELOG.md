@@ -5,25 +5,52 @@
 
 ---
 
-## v3.2.2（2026-11-13 10:45）视频工作台「模板」页占位
+## v3.3.0（2026-11-13 15:50）L2D 适配启动 + 下载进度可视化 + 加速包 P0 修复
 
-### 用户需求
-「转场按钮旁边增加一个模板按钮，内部先内置一个模板导入，目前没有任何模板，
-按钮先做出来，功能先不做」——纯 UI 占位，后续接模板系统时替换。
+> 版本说明：原计划 3.2.2（模板占位/installer 清理），因 L2D 导出属成体系新功能
+> （用户规矩 minor+1），合并升为 **v3.3.0**，以下全部随本版打包。
 
-### 改动（video_workbench.py）
-- Pivot 标签追加 `("template", "模板")`（转场右侧，共 7 页）。
-- 模板页内容区内置单个「导入模板」PrimaryPushButton；点击 InfoBar 提示
-  「模板功能敬请期待」，无任何导入逻辑。
-- `_rebuild_asset_cards` 对 template 分支提前 return（不渲染素材卡片、
-  隐藏空态提示）；其余 6 页行为零改动。
-- 冒烟 + 回归：v3_ui 43 / video_integration 22 / video_menu 23 全绿。
+### L2D 适配 Phase A（用户路线：「模板用于适配 webgal,推荐先做好 l2d 的适配」→「开工」）
+- 新建 `l2d_export.py` 纯模块：木偶工程 → **Cubism/WebGAL 运行时目录**
+  （model3.json + motions/idle+keyframes motion3.json + textures + parts_map.json
+  + PSD 拷贝 + Cubism 导入指引）。
+- **格式编码以官方核实**（对照 CubismSpecs + CubismWebFramework + WebGAL 所用
+  pixi-live2d-display 源码，纠正早期简报 7 处凭记忆错误）：Target="Parameter"、
+  段类型码 Linear=0/Bezier=1/Stepped=2、贝塞尔段 7 数+控制点三等分
+  (AreBeziersRestricted)、Motions 对象数组、DisplayModels→cdi3、Meta 五件套。
+- 关键帧缓动**解析式转段**（smoothstep=三等分贝塞尔闭式解 3τ²-2τ³），
+  与 eval_track 对拍误差 <1e-4；idle 与内置动画同源采样 <0.02°。
+- `.moc3` 为 Cubism 专有格式无法离线生成——链路为"Cubism Editor 最少手工"：
+  导入 PSD（CA 自动转部件）→ 按 parts_map 绑参数 → 导出 moc3 放回目录 →
+  WebGAL showLive2d 引用整个目录。
+- UI 接线：文件菜单「导出 JSON」与「导出 MP4」之间新增「**导出 Live2D 工程**」
+  （后台线程+防重入+成功自动打开产物目录）。
+- 测试：l2d_export_test 78 / l2d_export_ui_test 9。
 
-### 已兑现（d3e6e5f，随 v3.2.2 打包生效）
-- installer.cs `LoadResources()` 解包的 %TEMP%\muppet_runtime_*/muppet_app_*
-  副本只在成功路径清理，异常退出留垃圾（实测用户网络重试可堆 GB；曾清出
-  109 个 7.7GB）。修复：ProcessExit 注册 CleanupTemp（覆盖所有
-  Environment.Exit 路径），假包冒烟验证退出零残留。
+### 加速包永远装不上（P0，用户实测截图报障）
+- 根因：v3.2.1 的档位预热线程 import torch → 主进程 torch 常驻 →
+  asset_downloader 解压守卫（防 DLL 锁定，本身正确）永远拒绝 → N 卡新用户
+  无法安装 CUDA 加速包。
+- 修复：档位展示链改用**子进程探测** `_cuda_available_probe()`（独立 python
+  跑 torch.cuda.is_available，CREATE_NO_WINDOW，60s 超时，失败语义全表容错）；
+  主进程 `_cuda_available()` 保留给拆图正常路径。P0 哨兵：预热完成后
+  `"torch" not in sys.modules` 断言。守卫文案改明白："重启后不要拆图，直接
+  资产管理点安装，自动续传几秒完成"。测试 tier_probe_test 14。
+
+### 下载进度可视化（用户需求两条）
+- 欢迎页「检查更新」按钮下方新增**可见进度条**（150px+百分比文字；qfluentwidgets
+  1.11.3 ProgressBar 不渲染自带文字，需补标签；代次保护防旧定时器误杀新下载）。
+- 资产管理菜单：下载中的资产条目显示「⬇ 名称（**下载中 45%**）」（_ACTIVE
+  登记表 + _emit_progress 统一出口 + finally 兜底清除）；重复点击防重入提示。
+- 测试：update_bar_test 48 / asset_menu_pct_test 18。
+
+### 模板页占位（v3.2.2 原计划内容，并入本节）
+- 视频工作台 Pivot 转场右侧新增「模板」页，内置「导入模板」按钮（纯占位，
+  点击提示敬请期待——Phase B WebGAL 模板铺路）。
+
+### installer 临时副本泄漏修复（d3e6e5f）
+- ProcessExit 注册 CleanupTemp 覆盖全部 Environment.Exit 路径；曾实测堆出
+  109 个 7.7GB 垃圾，修复后冒烟零残留。
 
 ---
 
