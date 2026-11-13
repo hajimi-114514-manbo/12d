@@ -19,10 +19,11 @@
   隐藏空态提示）；其余 6 页行为零改动。
 - 冒烟 + 回归：v3_ui 43 / video_integration 22 / video_menu 23 全绿。
 
-### 待办（lead 记录，下一版顺带）
+### 已兑现（d3e6e5f，随 v3.2.2 打包生效）
 - installer.cs `LoadResources()` 解包的 %TEMP%\muppet_runtime_*/muppet_app_*
-  副本只在成功路径清理，异常退出留垃圾（实测用户网络重试可堆 GB；今日清出
-  109 个 7.7GB）。Main 加 finally 清理自有临时副本。
+  副本只在成功路径清理，异常退出留垃圾（实测用户网络重试可堆 GB；曾清出
+  109 个 7.7GB）。修复：ProcessExit 注册 CleanupTemp（覆盖所有
+  Environment.Exit 路径），假包冒烟验证退出零残留。
 
 ---
 
