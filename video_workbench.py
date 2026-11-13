@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """视频工作台（v3.0.0）：剪映式布局壳。
 
-    ┌─ Pivot：媒体 | 音频 | 文本* | 贴纸* | 特效* | 转场*（*=敬请期待）─┐
+    ┌─ Pivot：媒体 | 音频 | 文本* | 贴纸* | 特效* | 转场* | 模板*（*=敬请期待）─┐
     │ 左素材库      │  中预览 + 播放条            │ 右属性面板        │
     │ [添加素材]    │  ┌────────────────┐        │ 工程：分辨率/帧率  │
     │ 卡片流式网格  │  │   画面 fit      │        │ 时长(只读)        │
@@ -152,7 +152,8 @@ class VideoWorkbench(QWidget):
         self.pivot = Pivot(self)
         for key, text in [("media", "媒体"), ("audio", "音频"),
                           ("text", "文本"), ("sticker", "贴纸"),
-                          ("effect", "特效"), ("transition", "转场")]:
+                          ("effect", "特效"), ("transition", "转场"),
+                          ("template", "模板")]:
             self.pivot.addItem(key, text)
         self.pivot.setCurrentItem("media")
         self._asset_tab = "media"   # currentItemChanged 槽参数记录（PivotItem 无 routeKey）
@@ -617,6 +618,16 @@ class VideoWorkbench(QWidget):
             if isinstance(wi, QWidget):
                 wi.deleteLater()
         filt = self._asset_tab
+        if filt == "template":
+            # v3.2.2：模板页占位——目前没有任何模板，只内置一个「导入模板」
+            # 入口按钮（功能未实现，点击提示敬请期待）。后续接模板列表时替换本分支。
+            btn = PrimaryPushButton("导入模板", self.asset_host)
+            btn.clicked.connect(lambda: InfoBar.warning(
+                "模板", "模板功能敬请期待", parent=self,
+                position=InfoBarPosition.TOP, duration=2500))
+            self.asset_flow.addWidget(btn)
+            self.asset_empty.setVisible(False)
+            return
         for src in self.assets:
             is_audio = src["kind"] == "audio"
             if filt == "audio" and not is_audio:
