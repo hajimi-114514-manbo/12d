@@ -62,6 +62,10 @@ class Installer
         catch { }
         Installer inst = new Installer();
         inst.LoadResources();
+        // v3.2.2：任何退出路径都删掉 %TEMP% 解包副本。Main 里大量
+        // Environment.Exit 不走 finally，只有 ProcessExit 事件覆盖全部退出；
+        // （实测失败重试会堆出上百个 muppet_runtime_*.zip，7.7GB 级垃圾）
+        AppDomain.CurrentDomain.ProcessExit += delegate { inst.CleanupTemp(); };
 
         List<string> a = new List<string>(args);
         bool noPause = a.Contains("--no-pause");
@@ -200,6 +204,12 @@ class Installer
             }
         }
         catch { runtimeZip = null; }
+    }
+
+    void CleanupTemp()
+    {
+        try { if (!string.IsNullOrEmpty(appZip) && File.Exists(appZip)) File.Delete(appZip); } catch { }
+        try { if (!string.IsNullOrEmpty(runtimeZip) && File.Exists(runtimeZip)) File.Delete(runtimeZip); } catch { }
     }
 
     // 把内嵌运行时解压到 <dir>/runtime。已装好则跳过。
