@@ -25,6 +25,10 @@ if not exist "%TMPDIR%\model_manifest.json" goto :err
 copy /y "%HERE%installer.cs" "%TMPDIR%\" >nul
 rem - inject app version from l2d_rig_qt.py VERSION into the installer title
 "D:\Python312\python.exe" "%HERE%inject_version.py" "%APP%\l2d_rig_qt.py" "%TMPDIR%\installer.cs"
+rem - capture version for the output filename (installer name carries the version)
+for /f "delims=" %%v in ('"%D:\Python312\python.exe%" "%HERE%get_version.py" "%APP%\l2d_rig_qt.py"') do set "VER=%%v"
+if "%VER%"=="" goto :err
+set "OUTEXE=MuppetStudio-Setup-%VER%.exe"
 
 copy /y "%APP%\anon_sewing_icon.ico" "%TMPDIR%\" >nul
 copy /y "%HERE%installer_banner.png" "%TMPDIR%\" >nul
@@ -34,12 +38,14 @@ if exist "D:\build\runtime.zip" copy /y "D:\build\runtime.zip" "%TMPDIR%\runtime
 set RT_RESOURCE=
 if exist "%TMPDIR%\runtime.zip" set RT_RESOURCE=/resource:runtime.zip
 pushd "%TMPDIR%"
-"%CSC%" /nologo /target:winexe /win32icon:anon_sewing_icon.ico /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Management.dll /resource:muppet_app.zip /resource:model_manifest.json /resource:installer_banner.png %RT_RESOURCE% /out:MuppetStudio-Setup.exe installer.cs
+"%CSC%" /nologo /target:winexe /win32icon:anon_sewing_icon.ico /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll /r:System.Management.dll /resource:muppet_app.zip /resource:model_manifest.json /resource:installer_banner.png %RT_RESOURCE% /out:%OUTEXE% installer.cs
 if errorlevel 1 popd & goto :err
 popd
-copy /y "%TMPDIR%\MuppetStudio-Setup.exe" "%HERE%MuppetStudio-Setup.exe" >nul
+copy /y "%TMPDIR%\%OUTEXE%" "%HERE%%OUTEXE%" >nul
+rem - also refresh the unversioned alias (update_checker/README may reference it)
+copy /y "%TMPDIR%\%OUTEXE%" "%HERE%MuppetStudio-Setup.exe" >nul
 rmdir /s /q "%TMPDIR%"
-echo BUILD OK
+echo BUILD OK: %OUTEXE%
 endlocal
 goto :eof
 :err

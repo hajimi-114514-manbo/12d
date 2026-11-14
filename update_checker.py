@@ -36,9 +36,12 @@ REPO_VERSION_URLS = [
     "https://cdn.jsdelivr.net/gh/%s@%s/version.json" % (OWNER_REPO, BRANCH),
 ]
 RELEASE_URL_TPL = ("https://github.com/%s/releases/download/v{ver}/"
-                   "MuppetStudio-Setup.exe" % OWNER_REPO)
+                   "MuppetStudio-Setup-v{ver}.exe" % OWNER_REPO)
 MIRROR_PREFIX = "https://ghfast.top/"
+# 安装包文件名。发布版带版本号（用户要求"给安装包名字打上版本号"），
+# 便于下载后一眼看出是哪个版本；老版本无参调用走 INSTALLER_NAME 保持兼容。
 INSTALLER_NAME = "MuppetStudio-Setup.exe"
+INSTALLER_NAME_TPL = "MuppetStudio-Setup-v{ver}.exe"
 FETCH_BUDGET = 30.0          # 三镜像总时长预算（秒）
 UA = {"User-Agent": "Mozilla/5.0 (MuppetStudio)"}
 
@@ -62,8 +65,15 @@ def update_dir():
     return d
 
 
-def installer_path():
-    return os.path.join(update_dir(), INSTALLER_NAME)
+def installer_name(ver=None):
+    """安装包文件名。给版本号时用带版本号名，否则用默认名。"""
+    if ver:
+        return INSTALLER_NAME_TPL.format(ver=str(ver))
+    return INSTALLER_NAME
+
+
+def installer_path(ver=None):
+    return os.path.join(update_dir(), installer_name(ver))
 
 
 # ---------------- 版本 ----------------
@@ -345,7 +355,7 @@ class UpdateThread(QThread):
         self.status.emit("发现新版本 v%s，开始后台下载…" % remote)
         url = RELEASE_URL_TPL.format(ver=remote)
         urls = [url, MIRROR_PREFIX + url]
-        target = installer_path()
+        target = installer_path(remote)
         # 上一轮已下好且仍是要的版本：直接复用
         if os.path.isfile(target) and os.path.getsize(target) > 0:
             try:

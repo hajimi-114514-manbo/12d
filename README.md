@@ -11,7 +11,7 @@
 
 ## 安装与启动
 
-**推荐**：从 [GitHub Releases](https://github.com/hajimi-114514-manbo/12d/releases) 下载 `MuppetStudio-Setup.exe`（约 411MB）。
+**推荐**：从 [GitHub Releases](https://github.com/hajimi-114514-manbo/12d/releases) 下载 `MuppetStudio-Setup-v3.4.4.exe`（约 419MB，文件名带版本号便于区分）。
 安装包**内置 Python 运行时**（含 CPU 版 torch 推理栈），装完即可打开软件、编辑、做视频，**不需要自备 Python 环境**。
 
 装完后双击 `木偶工作室.exe`；源码运行则在工作目录执行：

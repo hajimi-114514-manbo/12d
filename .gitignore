@@ -20,6 +20,9 @@ recent_projects.json
 __pycache__
 *.pyc
 dist/MuppetStudio-Setup.exe
+# 安装包带版本号后的名字（v3.4.4 起）：同样只走 Release 分发，不入库。
+# 419MB 远超 GitHub 单文件限制，且历史上直连上传反复被掐。
+dist/MuppetStudio-Setup-v*.exe
 
 # 用户工程目录（测试/实际使用都会生成，不入库）
 /projects/
