@@ -1,0 +1,7676 @@
+{
+ "version": 1,
+ "kind": "webgal_effect",
+ "credit": "特效代码由 B 站 UP 主「北风的猫5306」制作整理，此处仅做结构化收录，版权归原作者。",
+ "engine_note": "这些指令属 MyGO 二创引擎扩展（文档要求 WebGAL 4.5.13+，并提到 mygo2.5 引擎）。官方 WebGAL 4.6.6 不保证支持，**默认不启用**；仅在确认目标引擎支持时手动使用。",
+ "usage": "查表取出 code 直接粘进 WebGAL 脚本；效果作用对象由 -target= 决定（bg-main=背景，fig-left/center/right=立绘）。",
+ "categories": [
+  {
+   "id": "settransform",
+   "name": "滤镜特效类（setTransform）",
+   "items": [
+    {
+     "id": "settransform_001",
+     "no": 1,
+     "src_no": 1,
+     "name": "赛博朋克/电子故障风格",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"glitchFilm\": true, \"rgbFilm\": true, \"oldFilm\": true, \"colorRed\": 200, \"colorGreen\": 255, \"colorBlue\": 255, \"brightness\": 1.2} -target=bg-main -duration=0;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "glitchFilm": true,
+      "rgbFilm": true,
+      "oldFilm": true,
+      "colorRed": 200,
+      "colorGreen": 255,
+      "colorBlue": 255,
+      "brightness": 1.2
+     },
+     "notes": [
+      "适用：受到电磁干扰、黑客入侵、机器人视角、内心崩坏",
+      "效果：开启红绿蓝色彩分离、故障错位、老电影噪点，同时调整色调偏冷"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_002",
+     "no": 2,
+     "src_no": 2,
+     "name": "梦境/圣光/回忆杀",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"godrayFilm\": true, \"lightX\": 0.5, \"lightY\": -0.5, \"lightAngle\": 30, \"lightIntensity\": 1.0, \"bloom\": 1.5, \"bloomBlur\": 2, \"blur\": 1} -target=bg-main -duration=2000;",
+     "target": "bg-main",
+     "duration": 2000,
+     "next": false,
+     "params": {
+      "godrayFilm": true,
+      "lightX": 0.5,
+      "lightY": -0.5,
+      "lightAngle": 30,
+      "lightIntensity": 1.0,
+      "bloom": 1.5,
+      "bloomBlur": 2,
+      "blur": 1
+     },
+     "notes": [
+      "适用：回忆场景、清晨阳光、神圣时刻",
+      "效果：开启上帝之光（Godray），配合较强的泛光（Bloom）和轻微模糊，营造朦胧感"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_003",
+     "no": 3,
+     "src_no": 3,
+     "name": "受伤/濒死/强烈冲击",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"shakePower\": 20, \"shakeSpeed\": 5, \"colorRed\": 255, \"colorGreen\": 150, \"colorBlue\": 150, \"vignetting\": true, \"vignettingAlpha\": 0.5, \"shockwaveFilter\": 0.5} -target=bg-main -duration=300;",
+     "target": "bg-main",
+     "duration": 300,
+     "next": false,
+     "params": {
+      "shakePower": 20,
+      "shakeSpeed": 5,
+      "colorRed": 255,
+      "colorGreen": 150,
+      "colorBlue": 150,
+      "vignetting": true,
+      "vignettingAlpha": 0.5,
+      "shockwaveFilter": 0.5
+     },
+     "notes": [
+      "适用：主角受到攻击、地震、极度恐惧",
+      "效果：屏幕剧烈震动（Shake），产生冲击波纹（Shockwave），画面变红并产生暗角（Vignetting）"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_004",
+     "no": 4,
+     "src_no": 4,
+     "name": "复古黑白电视/监控画面",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"oldFilm\": true, \"vignetting\": true, \"vignettingBlur\": 0.5, \"vignettingAlpha\": 0.8, \"noise\": 0.5, \"saturation\": 0, \"contrast\": 1.5} -target=bg-main -duration=0;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "oldFilm": true,
+      "vignetting": true,
+      "vignettingBlur": 0.5,
+      "vignettingAlpha": 0.8,
+      "noise": 0.5,
+      "saturation": 0,
+      "contrast": 1.5
+     },
+     "notes": [
+      "适用：查看监控、老电视节目、过去的时间线",
+      "效果：开启老电影效果（噪点+划痕），去除饱和度（变黑白），增加对比度，增加暗角"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_005",
+     "no": 5,
+     "src_no": 5,
+     "name": "水下/热浪扭曲效果",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"reflectionFilm\": true, \"colorRed\": 200, \"colorGreen\": 220, \"colorBlue\": 255, \"blur\": 1} -target=bg-main -duration=0;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "reflectionFilm": true,
+      "colorRed": 200,
+      "colorGreen": 220,
+      "colorBlue": 255,
+      "blur": 1
+     },
+     "notes": [
+      "适用：海边、水下、极度炎热的沙漠",
+      "效果：开启反射滤镜（模拟水波），色调调整为青蓝色，轻微模糊"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_006",
+     "no": 6,
+     "src_no": 6,
+     "name": "角色高光/觉醒状态（立绘）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"bloom\": 1.5, \"bloomBlur\": 4, \"bloomThreshold\": 0.1, \"brightness\": 1.2} -target=fig-center -duration=500;",
+     "target": "fig-center",
+     "duration": 500,
+     "next": false,
+     "params": {
+      "bloom": 1.5,
+      "bloomBlur": 4,
+      "bloomThreshold": 0.1,
+      "brightness": 1.2
+     },
+     "notes": [
+      "适用：角色成为焦点、高能状态、灵体化",
+      "效果：对立绘使用强烈的泛光，使其边缘发光并变亮"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_007",
+     "no": 7,
+     "src_no": 7,
+     "name": "复古胶片（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.8,\"contrast\":1.2,\"saturation\":0.6,\"gamma\":0.9,\"colorRed\":255,\"colorGreen\":230,\"colorBlue\":200,\"bloom\":0.3,\"bloomBlur\":6,\"sepia\":0.7} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.8,
+      "contrast": 1.2,
+      "saturation": 0.6,
+      "gamma": 0.9,
+      "colorRed": 255,
+      "colorGreen": 230,
+      "colorBlue": 200,
+      "bloom": 0.3,
+      "bloomBlur": 6,
+      "sepia": 0.7
+     },
+     "notes": [
+      "复古胶片风格背景滤镜",
+      "暖黄色调+轻微泛光+棕褐色"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_008",
+     "no": 8,
+     "src_no": 8,
+     "name": "复古胶片（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.7,\"contrast\":1.3,\"saturation\":0.7,\"gamma\":1.0,\"colorRed\":255,\"colorGreen\":235,\"colorBlue\":210,\"bloom\":0.2,\"bloomBlur\":4,\"bevel\":1,\"bevelThickness\":15,\"bevelRotation\":45,\"bevelRed\":250,\"bevelGreen\":220,\"bevelBlue\":180} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.7,
+      "contrast": 1.3,
+      "saturation": 0.7,
+      "gamma": 1.0,
+      "colorRed": 255,
+      "colorGreen": 235,
+      "colorBlue": 210,
+      "bloom": 0.2,
+      "bloomBlur": 4,
+      "bevel": 1,
+      "bevelThickness": 15,
+      "bevelRotation": 45,
+      "bevelRed": 250,
+      "bevelGreen": 220,
+      "bevelBlue": 180
+     },
+     "notes": [
+      "复古胶片风格人物滤镜",
+      "配合背景使用的立绘效果"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_009",
+     "no": 9,
+     "src_no": 9,
+     "name": "赛博朋克（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.9,\"contrast\":1.5,\"saturation\":1.8,\"gamma\":0.7,\"colorRed\":180,\"colorGreen\":200,\"colorBlue\":255,\"bloom\":1.2,\"bloomBrightness\":0.9,\"bloomBlur\":12,\"glitchFilm\":true,\"red\":[3,0],\"blue\":[-3,0]} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.9,
+      "contrast": 1.5,
+      "saturation": 1.8,
+      "gamma": 0.7,
+      "colorRed": 180,
+      "colorGreen": 200,
+      "colorBlue": 255,
+      "bloom": 1.2,
+      "bloomBrightness": 0.9,
+      "bloomBlur": 12,
+      "glitchFilm": true,
+      "red": [
+       3,
+       0
+      ],
+      "blue": [
+       -3,
+       0
+      ]
+     },
+     "notes": [
+      "赛博朋克风格背景",
+      "冷蓝色调+高饱和度+故障效果"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_010",
+     "no": 10,
+     "src_no": 10,
+     "name": "赛博朋克（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.8,\"contrast\":1.4,\"saturation\":1.6,\"gamma\":0.8,\"colorRed\":200,\"colorGreen\":220,\"colorBlue\":255,\"bloom\":0.8,\"bloomBlur\":8,\"bevel\":2,\"bevelThickness\":20,\"bevelRotation\":60,\"bevelRed\":150,\"bevelGreen\":180,\"bevelBlue\":255} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.8,
+      "contrast": 1.4,
+      "saturation": 1.6,
+      "gamma": 0.8,
+      "colorRed": 200,
+      "colorGreen": 220,
+      "colorBlue": 255,
+      "bloom": 0.8,
+      "bloomBlur": 8,
+      "bevel": 2,
+      "bevelThickness": 20,
+      "bevelRotation": 60,
+      "bevelRed": 150,
+      "bevelGreen": 180,
+      "bevelBlue": 255
+     },
+     "notes": [
+      "赛博朋克风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_011",
+     "no": 11,
+     "src_no": 11,
+     "name": "梦幻柔光（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":1.1,\"contrast\":0.7,\"saturation\":1.3,\"gamma\":0.8,\"colorRed\":250,\"colorGreen\":240,\"colorBlue\":255,\"bloom\":1.5,\"bloomBrightness\":0.6,\"bloomBlur\":15} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 1.1,
+      "contrast": 0.7,
+      "saturation": 1.3,
+      "gamma": 0.8,
+      "colorRed": 250,
+      "colorGreen": 240,
+      "colorBlue": 255,
+      "bloom": 1.5,
+      "bloomBrightness": 0.6,
+      "bloomBlur": 15
+     },
+     "notes": [
+      "梦幻柔光风格背景",
+      "低对比度+强泛光+淡紫色调"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_012",
+     "no": 12,
+     "src_no": 12,
+     "name": "梦幻柔光（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":1.0,\"contrast\":0.8,\"saturation\":1.2,\"gamma\":0.9,\"colorRed\":252,\"colorGreen\":245,\"colorBlue\":255,\"bloom\":1.0,\"bloomBlur\":10,\"bevel\":0.8,\"bevelThickness\":12,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":250,\"bevelBlue\":255} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 1.0,
+      "contrast": 0.8,
+      "saturation": 1.2,
+      "gamma": 0.9,
+      "colorRed": 252,
+      "colorGreen": 245,
+      "colorBlue": 255,
+      "bloom": 1.0,
+      "bloomBlur": 10,
+      "bevel": 0.8,
+      "bevelThickness": 12,
+      "bevelRotation": 30,
+      "bevelRed": 255,
+      "bevelGreen": 250,
+      "bevelBlue": 255
+     },
+     "notes": [
+      "梦幻柔光风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_013",
+     "no": 13,
+     "src_no": 13,
+     "name": "冷色调极简（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.75,\"contrast\":1.2,\"saturation\":0.4,\"gamma\":0.8,\"colorRed\":180,\"colorGreen\":200,\"colorBlue\":255,\"bloom\":0.2,\"bloomBlur\":5} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.75,
+      "contrast": 1.2,
+      "saturation": 0.4,
+      "gamma": 0.8,
+      "colorRed": 180,
+      "colorGreen": 200,
+      "colorBlue": 255,
+      "bloom": 0.2,
+      "bloomBlur": 5
+     },
+     "notes": [
+      "冷色调极简风格背景",
+      "低饱和度+冷蓝色"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_014",
+     "no": 14,
+     "src_no": 14,
+     "name": "冷色调极简（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.7,\"contrast\":1.3,\"saturation\":0.5,\"gamma\":0.9,\"colorRed\":190,\"colorGreen\":210,\"colorBlue\":255,\"bevel\":1,\"bevelThickness\":10,\"bevelRotation\":40,\"bevelRed\":170,\"bevelGreen\":190,\"bevelBlue\":250} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.7,
+      "contrast": 1.3,
+      "saturation": 0.5,
+      "gamma": 0.9,
+      "colorRed": 190,
+      "colorGreen": 210,
+      "colorBlue": 255,
+      "bevel": 1,
+      "bevelThickness": 10,
+      "bevelRotation": 40,
+      "bevelRed": 170,
+      "bevelGreen": 190,
+      "bevelBlue": 250
+     },
+     "notes": [
+      "冷色调极简风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_015",
+     "no": 15,
+     "src_no": 15,
+     "name": "暖色调治愈（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.95,\"contrast\":0.9,\"saturation\":1.4,\"gamma\":0.9,\"colorRed\":255,\"colorGreen\":220,\"colorBlue\":180,\"bloom\":0.7,\"bloomBlur\":8} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.95,
+      "contrast": 0.9,
+      "saturation": 1.4,
+      "gamma": 0.9,
+      "colorRed": 255,
+      "colorGreen": 220,
+      "colorBlue": 180,
+      "bloom": 0.7,
+      "bloomBlur": 8
+     },
+     "notes": [
+      "暖色调治愈风格背景",
+      "暖橙色调+适中饱和度"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_016",
+     "no": 16,
+     "src_no": 16,
+     "name": "暖色调治愈（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.9,\"contrast\":1.0,\"saturation\":1.3,\"gamma\":1.0,\"colorRed\":255,\"colorGreen\":225,\"colorBlue\":190,\"bloom\":0.5,\"bloomBlur\":6,\"bevel\":1.2,\"bevelThickness\":14,\"bevelRotation\":50,\"bevelRed\":255,\"bevelGreen\":210,\"bevelBlue\":170} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.9,
+      "contrast": 1.0,
+      "saturation": 1.3,
+      "gamma": 1.0,
+      "colorRed": 255,
+      "colorGreen": 225,
+      "colorBlue": 190,
+      "bloom": 0.5,
+      "bloomBlur": 6,
+      "bevel": 1.2,
+      "bevelThickness": 14,
+      "bevelRotation": 50,
+      "bevelRed": 255,
+      "bevelGreen": 210,
+      "bevelBlue": 170
+     },
+     "notes": [
+      "暖色调治愈风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_017",
+     "no": 17,
+     "src_no": 17,
+     "name": "水墨风（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.8,\"contrast\":1.6,\"saturation\":0.2,\"gamma\":0.7,\"colorRed\":200,\"colorGreen\":200,\"colorBlue\":200,\"bloom\":0.1,\"bloomBlur\":3} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.8,
+      "contrast": 1.6,
+      "saturation": 0.2,
+      "gamma": 0.7,
+      "colorRed": 200,
+      "colorGreen": 200,
+      "colorBlue": 200,
+      "bloom": 0.1,
+      "bloomBlur": 3
+     },
+     "notes": [
+      "水墨风格背景",
+      "极低饱和度+高对比度"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_018",
+     "no": 18,
+     "src_no": 18,
+     "name": "水墨风（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.75,\"contrast\":1.7,\"saturation\":0.3,\"gamma\":0.8,\"colorRed\":210,\"colorGreen\":210,\"colorBlue\":210,\"bevel\":0.5,\"bevelThickness\":8,\"bevelRotation\":30,\"bevelRed\":180,\"bevelGreen\":180,\"bevelBlue\":180} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.75,
+      "contrast": 1.7,
+      "saturation": 0.3,
+      "gamma": 0.8,
+      "colorRed": 210,
+      "colorGreen": 210,
+      "colorBlue": 210,
+      "bevel": 0.5,
+      "bevelThickness": 8,
+      "bevelRotation": 30,
+      "bevelRed": 180,
+      "bevelGreen": 180,
+      "bevelBlue": 180
+     },
+     "notes": [
+      "水墨风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_019",
+     "no": 19,
+     "src_no": 19,
+     "name": "油画质感（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.9,\"contrast\":0.8,\"saturation\":1.5,\"gamma\":0.9,\"colorRed\":245,\"colorGreen\":235,\"colorBlue\":225,\"bloom\":0.4,\"bloomBlur\":10,\"pixelSize\":3} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.9,
+      "contrast": 0.8,
+      "saturation": 1.5,
+      "gamma": 0.9,
+      "colorRed": 245,
+      "colorGreen": 235,
+      "colorBlue": 225,
+      "bloom": 0.4,
+      "bloomBlur": 10,
+      "pixelSize": 3
+     },
+     "notes": [
+      "油画质感风格背景",
+      "暖色调+轻微像素化"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_020",
+     "no": 20,
+     "src_no": 20,
+     "name": "油画质感（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.85,\"contrast\":0.9,\"saturation\":1.4,\"gamma\":1.0,\"colorRed\":248,\"colorGreen\":238,\"colorBlue\":228,\"bloom\":0.3,\"bloomBlur\":8,\"pixelSize\":2,\"bevel\":1,\"bevelThickness\":12,\"bevelRotation\":45,\"bevelRed\":240,\"bevelGreen\":230,\"bevelBlue\":220} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.85,
+      "contrast": 0.9,
+      "saturation": 1.4,
+      "gamma": 1.0,
+      "colorRed": 248,
+      "colorGreen": 238,
+      "colorBlue": 228,
+      "bloom": 0.3,
+      "bloomBlur": 8,
+      "pixelSize": 2,
+      "bevel": 1,
+      "bevelThickness": 12,
+      "bevelRotation": 45,
+      "bevelRed": 240,
+      "bevelGreen": 230,
+      "bevelBlue": 220
+     },
+     "notes": [
+      "油画质感风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_021",
+     "no": 21,
+     "src_no": 21,
+     "name": "电影感暗角（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.8,\"contrast\":1.3,\"saturation\":1.1,\"gamma\":0.8,\"colorRed\":250,\"colorGreen\":245,\"colorBlue\":240,\"bloom\":0.5,\"bloomBlur\":7,\"vignetting\":true,\"vignettingAlpha\":0.6,\"vignettingBlur\":0.8} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.8,
+      "contrast": 1.3,
+      "saturation": 1.1,
+      "gamma": 0.8,
+      "colorRed": 250,
+      "colorGreen": 245,
+      "colorBlue": 240,
+      "bloom": 0.5,
+      "bloomBlur": 7,
+      "vignetting": true,
+      "vignettingAlpha": 0.6,
+      "vignettingBlur": 0.8
+     },
+     "notes": [
+      "电影感暗角风格背景",
+      "暗角效果+适中对比度"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_022",
+     "no": 22,
+     "src_no": 22,
+     "name": "电影感暗角（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.9,\"contrast\":1.2,\"saturation\":1.0,\"gamma\":0.9,\"colorRed\":252,\"colorGreen\":247,\"colorBlue\":242,\"bloom\":0.4,\"bloomBlur\":5,\"bevel\":1.1,\"bevelThickness\":15,\"bevelRotation\":35,\"bevelRed\":245,\"bevelGreen\":240,\"bevelBlue\":235} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.9,
+      "contrast": 1.2,
+      "saturation": 1.0,
+      "gamma": 0.9,
+      "colorRed": 252,
+      "colorGreen": 247,
+      "colorBlue": 242,
+      "bloom": 0.4,
+      "bloomBlur": 5,
+      "bevel": 1.1,
+      "bevelThickness": 15,
+      "bevelRotation": 35,
+      "bevelRed": 245,
+      "bevelGreen": 240,
+      "bevelBlue": 235
+     },
+     "notes": [
+      "电影感暗角风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_023",
+     "no": 23,
+     "src_no": 23,
+     "name": "高光溢出（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":1.3,\"contrast\":0.8,\"saturation\":1.2,\"gamma\":0.7,\"colorRed\":255,\"colorGreen\":250,\"colorBlue\":240,\"bloom\":1.8,\"bloomBrightness\":0.8,\"bloomBlur\":12} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 1.3,
+      "contrast": 0.8,
+      "saturation": 1.2,
+      "gamma": 0.7,
+      "colorRed": 255,
+      "colorGreen": 250,
+      "colorBlue": 240,
+      "bloom": 1.8,
+      "bloomBrightness": 0.8,
+      "bloomBlur": 12
+     },
+     "notes": [
+      "高光溢出风格背景",
+      "高亮度+强泛光"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_024",
+     "no": 24,
+     "src_no": 24,
+     "name": "高光溢出（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":1.2,\"contrast\":0.9,\"saturation\":1.1,\"gamma\":0.8,\"colorRed\":255,\"colorGreen\":252,\"colorBlue\":245,\"bloom\":1.2,\"bloomBlur\":9,\"bevel\":0.9,\"bevelThickness\":10,\"bevelRotation\":55,\"bevelRed\":255,\"bevelGreen\":248,\"bevelBlue\":238} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 1.2,
+      "contrast": 0.9,
+      "saturation": 1.1,
+      "gamma": 0.8,
+      "colorRed": 255,
+      "colorGreen": 252,
+      "colorBlue": 245,
+      "bloom": 1.2,
+      "bloomBlur": 9,
+      "bevel": 0.9,
+      "bevelThickness": 10,
+      "bevelRotation": 55,
+      "bevelRed": 255,
+      "bevelGreen": 248,
+      "bevelBlue": 238
+     },
+     "notes": [
+      "高光溢出风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_025",
+     "no": 25,
+     "src_no": 25,
+     "name": "清新日系（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":1.05,\"contrast\":0.85,\"saturation\":1.2,\"gamma\":0.95,\"colorRed\":245,\"colorGreen\":250,\"colorBlue\":255,\"bloom\":0.6,\"bloomBlur\":9} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 1.05,
+      "contrast": 0.85,
+      "saturation": 1.2,
+      "gamma": 0.95,
+      "colorRed": 245,
+      "colorGreen": 250,
+      "colorBlue": 255,
+      "bloom": 0.6,
+      "bloomBlur": 9
+     },
+     "notes": [
+      "清新日系风格背景",
+      "淡蓝色调+适中泛光"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_026",
+     "no": 26,
+     "src_no": 26,
+     "name": "清新日系（人物）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":1.0,\"contrast\":0.9,\"saturation\":1.1,\"gamma\":1.0,\"colorRed\":248,\"colorGreen\":252,\"colorBlue\":255,\"bloom\":0.5,\"bloomBlur\":7,\"bevel\":0.7,\"bevelThickness\":10,\"bevelRotation\":30,\"bevelRed\":240,\"bevelGreen\":245,\"bevelBlue\":250} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 1.0,
+      "contrast": 0.9,
+      "saturation": 1.1,
+      "gamma": 1.0,
+      "colorRed": 248,
+      "colorGreen": 252,
+      "colorBlue": 255,
+      "bloom": 0.5,
+      "bloomBlur": 7,
+      "bevel": 0.7,
+      "bevelThickness": 10,
+      "bevelRotation": 30,
+      "bevelRed": 240,
+      "bevelGreen": 245,
+      "bevelBlue": 250
+     },
+     "notes": [
+      "清新日系风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_027",
+     "no": 27,
+     "src_no": 27,
+     "name": "圣光降临",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"godrayFilm\":true, \"bloom\":1} -target=bg-main -duration=1000;",
+     "target": "bg-main",
+     "duration": 1000,
+     "next": false,
+     "params": {
+      "godrayFilm": true,
+      "bloom": 1
+     },
+     "notes": [
+      "开启WebGAL内置的体积光特效",
+      "模拟阳光透过树叶或教堂穹顶"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_028",
+     "no": 28,
+     "src_no": 28,
+     "name": "天使光环",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"bloom\":2.0, \"bloomBlur\":6, \"bloomThreshold\":0.2, \"brightness\":1.2} -target=bg-main -duration=2000;",
+     "target": "bg-main",
+     "duration": 2000,
+     "next": false,
+     "params": {
+      "bloom": 2.0,
+      "bloomBlur": 6,
+      "bloomThreshold": 0.2,
+      "brightness": 1.2
+     },
+     "notes": [
+      "利用Bloom制造强烈的发光效果",
+      "让画面看起来神圣不可侵犯"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_029",
+     "no": 29,
+     "src_no": 29,
+     "name": "梦境边缘·色差",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"rgbFilm\":true, \"blur\":1} -target=bg-main -duration=1000;",
+     "target": "bg-main",
+     "duration": 1000,
+     "next": false,
+     "params": {
+      "rgbFilm": true,
+      "blur": 1
+     },
+     "notes": [
+      "轻微的RGB色彩分离",
+      "制造一种迷离、不真实的梦幻感"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_030",
+     "no": 30,
+     "src_no": 30,
+     "name": "水下/波光粼粼",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"reflectionFilm\":true} -target=bg-main -duration=0;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "reflectionFilm": true
+     },
+     "notes": [
+      "开启反射滤镜模拟水面波纹",
+      "适用于海边约会或内心深处"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_031",
+     "no": 31,
+     "src_no": 31,
+     "name": "岁月静好·老照片",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"oldFilm\":true, \"sepia\":0.5, \"brightness\":0.9} -target=bg-main -duration=0;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "oldFilm": true,
+      "sepia": 0.5,
+      "brightness": 0.9
+     },
+     "notes": [
+      "泛黄的老电影效果",
+      "用于温馨的过去回忆"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_032",
+     "no": 32,
+     "src_no": 32,
+     "name": "羞涩脸红·暖色滤镜",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"colorRed\":255, \"colorGreen\":200, \"colorBlue\":200, \"saturation\":1.3, \"brightness\":1.1} -target=bg-main -duration=1500;",
+     "target": "bg-main",
+     "duration": 1500,
+     "next": false,
+     "params": {
+      "colorRed": 255,
+      "colorGreen": 200,
+      "colorBlue": 200,
+      "saturation": 1.3,
+      "brightness": 1.1
+     },
+     "notes": [
+      "画面缓慢变得温暖、泛红",
+      "模拟害羞的主观视角"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_033",
+     "no": 33,
+     "src_no": 33,
+     "name": "暧昧气氛·朦胧美",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"blur\":2, \"bloom\":1, \"bloomBrightness\":1.1, \"bloomThreshold\":0.1} -target=bg-main -duration=1000;",
+     "target": "bg-main",
+     "duration": 1000,
+     "next": false,
+     "params": {
+      "blur": 2,
+      "bloom": 1,
+      "bloomBrightness": 1.1,
+      "bloomThreshold": 0.1
+     },
+     "notes": [
+      "永久开启轻微的模糊和泛光",
+      "让画面变得像加了美颜滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_034",
+     "no": 34,
+     "src_no": 34,
+     "name": "视线模糊·含泪",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"blur\":4, \"bloom\":1.5, \"brightness\":1.1} -target=bg-main -duration=1500;",
+     "target": "bg-main",
+     "duration": 1500,
+     "next": false,
+     "params": {
+      "blur": 4,
+      "bloom": 1.5,
+      "brightness": 1.1
+     },
+     "notes": [
+      "模拟感动或悲伤时眼眶含泪的模糊感"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_035",
+     "no": 35,
+     "src_no": 35,
+     "name": "恋爱脑·色彩增强",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"saturation\":1.5, \"contrast\":1.1, \"brightness\":1.05} -target=bg-main -duration=1000;",
+     "target": "bg-main",
+     "duration": 1000,
+     "next": false,
+     "params": {
+      "saturation": 1.5,
+      "contrast": 1.1,
+      "brightness": 1.05
+     },
+     "notes": [
+      "大幅提升饱和度",
+      "让画面看起来非常鲜艳快乐"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_036",
+     "no": 36,
+     "src_no": 36,
+     "name": "病娇·精神污染",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"glitchFilm\":true, \"rgbFilm\":true, \"colorRed\":255, \"colorGreen\":200, \"colorBlue\":200} -target=bg-main -duration=200;",
+     "target": "bg-main",
+     "duration": 200,
+     "next": false,
+     "params": {
+      "glitchFilm": true,
+      "rgbFilm": true,
+      "colorRed": 255,
+      "colorGreen": 200,
+      "colorBlue": 200
+     },
+     "notes": [
+      "剧烈的故障（Glitch）和色调偏离",
+      "适用：病娇、黑化场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_037",
+     "no": 37,
+     "src_no": 37,
+     "name": "黑化·深渊模式",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"radiusAlphaFilter\":0.4} -target=bg-main -duration=1500;",
+     "target": "bg-main",
+     "duration": 1500,
+     "next": false,
+     "params": {
+      "radiusAlphaFilter": 0.4
+     },
+     "notes": [
+      "周围极黑，只有中心微亮",
+      "RadiusAlpha遮罩效果"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_038",
+     "no": 38,
+     "src_no": 38,
+     "name": "耳鸣·视觉重影",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"rgbFilm\":true, \"blur\":3} -target=bg-main -duration=100;",
+     "target": "bg-main",
+     "duration": 100,
+     "next": false,
+     "params": {
+      "rgbFilm": true,
+      "blur": 3
+     },
+     "notes": [
+      "利用RGB分离模拟眩晕和耳鸣感"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_039",
+     "no": 39,
+     "src_no": 39,
+     "name": "立绘·接吻前奏（凑近）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"scale\":{\"x\":1.4,\"y\":1.4},\"position\":{\"y\":200}} -target=fig-center -duration=1000;",
+     "target": "fig-center",
+     "duration": 1000,
+     "next": false,
+     "params": {
+      "scale": {
+       "x": 1.4,
+       "y": 1.4
+      },
+      "position": {
+       "y": 200
+      }
+     },
+     "notes": [
+      "立绘放大并下移",
+      "模拟凑近脸庞"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_040",
+     "no": 40,
+     "src_no": 40,
+     "name": "立绘·灵体化/幽灵",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"alpha\":0.6, \"bloom\":1, \"brightness\":1.2} -target=fig-center -duration=1000;",
+     "target": "fig-center",
+     "duration": 1000,
+     "next": false,
+     "params": {
+      "alpha": 0.6,
+      "bloom": 1,
+      "brightness": 1.2
+     },
+     "notes": [
+      "半透明+泛光效果",
+      "适用：幽灵、灵体化"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_041",
+     "no": 41,
+     "src_no": 41,
+     "name": "立绘·暗淡退场",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.5, \"alpha\":0.5} -target=fig-center -duration=500;",
+     "target": "fig-center",
+     "duration": 500,
+     "next": false,
+     "params": {
+      "brightness": 0.5,
+      "alpha": 0.5
+     },
+     "notes": [
+      "变暗并透明",
+      "不移除立绘"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_042",
+     "no": 42,
+     "src_no": 42,
+     "name": "立绘·高光时刻（背景变暗）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.5} -target=bg-main -duration=500;",
+     "target": "bg-main",
+     "duration": 500,
+     "next": false,
+     "params": {
+      "brightness": 0.5
+     },
+     "notes": [
+      "背景变暗，配合立绘发光使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_043",
+     "no": 43,
+     "src_no": 43,
+     "name": "立绘·高光时刻（立绘发光）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"bloom\":0.5, \"brightness\":1.1} -target=fig-center -duration=500;",
+     "target": "fig-center",
+     "duration": 500,
+     "next": false,
+     "params": {
+      "bloom": 0.5,
+      "brightness": 1.1
+     },
+     "notes": [
+      "立绘保持亮色发光",
+      "配合背景变暗指令使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_044",
+     "no": 44,
+     "src_no": 44,
+     "name": "雨天窗户",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"blur\":2, \"reflectionFilm\":true} -target=bg-main -duration=0;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "blur": 2,
+      "reflectionFilm": true
+     },
+     "notes": [
+      "模糊+反射滤镜",
+      "模拟雨水打在玻璃上"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_045",
+     "no": 45,
+     "src_no": 45,
+     "name": "深夜模式",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"colorRed\":80, \"colorGreen\":80, \"colorBlue\":200, \"brightness\":0.5, \"contrast\":1.2} -target=bg-main -duration=2000;",
+     "target": "bg-main",
+     "duration": 2000,
+     "next": false,
+     "params": {
+      "colorRed": 80,
+      "colorGreen": 80,
+      "colorBlue": 200,
+      "brightness": 0.5,
+      "contrast": 1.2
+     },
+     "notes": [
+      "整体变蓝变暗",
+      "对比度增加"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_046",
+     "no": 46,
+     "src_no": 46,
+     "name": "逢魔之时（黄昏）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"colorRed\":255, \"colorGreen\":150, \"colorBlue\":100, \"contrast\":1.3} -target=bg-main -duration=2000;",
+     "target": "bg-main",
+     "duration": 2000,
+     "next": false,
+     "params": {
+      "colorRed": 255,
+      "colorGreen": 150,
+      "colorBlue": 100,
+      "contrast": 1.3
+     },
+     "notes": [
+      "强烈的橙紫渐变",
+      "高对比度"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_047",
+     "no": 47,
+     "src_no": 47,
+     "name": "极速冲刺",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"blur\":10, \"position\":{\"x\":-50}} -target=bg-main -duration=200;",
+     "target": "bg-main",
+     "duration": 200,
+     "next": false,
+     "params": {
+      "blur": 10,
+      "position": {
+       "x": -50
+      }
+     },
+     "notes": [
+      "利用横向模糊制造速度线感"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_048",
+     "no": 48,
+     "src_no": 48,
+     "name": "电影宽银幕",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"scale\":{\"y\":0.85}} -target=bg-main -duration=1000;",
+     "target": "bg-main",
+     "duration": 1000,
+     "next": false,
+     "params": {
+      "scale": {
+       "y": 0.85
+      }
+     },
+     "notes": [
+      "使用scale.y模拟电影遮幅效果"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_049",
+     "no": 49,
+     "src_no": 49,
+     "name": "月下唯美·冷色调",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"colorRed\":180, \"colorGreen\":190, \"colorBlue\":255, \"brightness\":0.8, \"contrast\":1.2} -target=bg-main -duration=1500;",
+     "target": "bg-main",
+     "duration": 1500,
+     "next": false,
+     "params": {
+      "colorRed": 180,
+      "colorGreen": 190,
+      "colorBlue": 255,
+      "brightness": 0.8,
+      "contrast": 1.2
+     },
+     "notes": [
+      "将画面调整为静谧的蓝紫色调",
+      "增加对比度"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_050",
+     "no": 50,
+     "src_no": 50,
+     "name": "黄昏余晖·暖橙色",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"colorRed\":255, \"colorGreen\":210, \"colorBlue\":160, \"brightness\":1.05} -target=bg-main -duration=1500;",
+     "target": "bg-main",
+     "duration": 1500,
+     "next": false,
+     "params": {
+      "colorRed": 255,
+      "colorGreen": 210,
+      "colorBlue": 160,
+      "brightness": 1.05
+     },
+     "notes": [
+      "将画面调整为强烈的橘红色调",
+      "模拟夕阳"
+     ],
+     "source": ""
+    }
+   ]
+  },
+  {
+   "id": "settempanimation",
+   "name": "动画特效类（setTempAnimation）",
+   "items": [
+    {
+     "id": "settempanimation_051",
+     "no": 51,
+     "src_no": 51,
+     "name": "缓慢推近",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"scale\": {\"x\": 1, \"y\": 1}}, {\"duration\": 3000, \"scale\": {\"x\": 1.2, \"y\": 1.2}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 3000,
+       "scale": {
+        "x": 1.2,
+        "y": 1.2
+       }
+      }
+     ],
+     "notes": [
+      "制造压迫感或专注点",
+      "电影感运镜",
+      "3秒内缓慢放大由远及近"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_052",
+     "no": 52,
+     "src_no": 52,
+     "name": "快速拉远",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"scale\": {\"x\": 1.3, \"y\": 1.3}}, {\"duration\": 400, \"scale\": {\"x\": 1.0, \"y\": 1.0}}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1.3,
+        "y": 1.3
+       }
+      },
+      {
+       "duration": 400,
+       "scale": {
+        "x": 1.0,
+        "y": 1.0
+       }
+      }
+     ],
+     "notes": [
+      "用于揭示全景或惊讶",
+      "瞬间放大后快速回复原状"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_053",
+     "no": 53,
+     "src_no": 53,
+     "name": "横向摇摄·向右",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"scale\": {\"x\": 1.1, \"y\": 1.1}, \"position\": {\"x\": -50, \"y\": 0}}, {\"duration\": 4000, \"position\": {\"x\": 50, \"y\": 0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "position": {
+        "x": -50,
+        "y": 0
+       }
+      },
+      {
+       "duration": 4000,
+       "position": {
+        "x": 50,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "环视周围",
+      "Pan Right镜头运动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_054",
+     "no": 54,
+     "src_no": 54,
+     "name": "纵向摇摄·向上",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"scale\": {\"x\": 1.1, \"y\": 1.1}, \"position\": {\"x\": 0, \"y\": 50}}, {\"duration\": 4000, \"position\": {\"x\": 0, \"y\": -50}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "position": {
+        "x": 0,
+        "y": 50
+       }
+      },
+      {
+       "duration": 4000,
+       "position": {
+        "x": 0,
+        "y": -50
+       }
+      }
+     ],
+     "notes": [
+      "仰望天空或高楼",
+      "Tilt Up镜头运动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_055",
+     "no": 55,
+     "src_no": 55,
+     "name": "镜头左摇",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":2000,\"position\":{\"x\":100,\"y\":0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 2000,
+       "position": {
+        "x": 100,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Pan Left",
+      "模拟向左转头看"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_056",
+     "no": 56,
+     "src_no": 56,
+     "name": "镜头右摇",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":2000,\"position\":{\"x\":-100,\"y\":0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 2000,
+       "position": {
+        "x": -100,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Pan Right",
+      "模拟向右转头看"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_057",
+     "no": 57,
+     "src_no": 57,
+     "name": "仰视天空",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":2000,\"position\":{\"x\":0,\"y\":100},\"scale\":{\"x\":1.05,\"y\":1.05}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 2000,
+       "position": {
+        "x": 0,
+        "y": 100
+       },
+       "scale": {
+        "x": 1.05,
+        "y": 1.05
+       }
+      }
+     ],
+     "notes": [
+      "Tilt Up",
+      "模拟抬头"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_058",
+     "no": 58,
+     "src_no": 58,
+     "name": "俯视地面",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":2000,\"position\":{\"x\":0,\"y\":-100},\"scale\":{\"x\":1.05,\"y\":1.05}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 2000,
+       "position": {
+        "x": 0,
+        "y": -100
+       },
+       "scale": {
+        "x": 1.05,
+        "y": 1.05
+       }
+      }
+     ],
+     "notes": [
+      "Tilt Down",
+      "模拟低头沮丧"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_059",
+     "no": 59,
+     "src_no": 59,
+     "name": "荷兰式倾斜",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"rotation\": 0, \"scale\": {\"x\": 1.2, \"y\": 1.2}}, {\"duration\": 2000, \"rotation\": 0.1}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "rotation": 0,
+       "scale": {
+        "x": 1.2,
+        "y": 1.2
+       }
+      },
+      {
+       "duration": 2000,
+       "rotation": 0.1
+      }
+     ],
+     "notes": [
+      "表现不安、疯狂或失衡（缓慢倾斜）",
+      "Dutch Angle",
+      "画面缓慢倾斜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_060",
+     "no": 60,
+     "src_no": 60,
+     "name": "急剧对焦",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"blur\": 30}, {\"duration\": 800, \"blur\": 0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 30
+      },
+      {
+       "duration": 800,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "Re-Focus",
+      "画面由极为模糊变清晰"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_061",
+     "no": 61,
+     "src_no": 61,
+     "name": "失焦模糊",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"blur\": 0}, {\"duration\": 1500, \"blur\": 20}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 0
+      },
+      {
+       "duration": 1500,
+       "blur": 20
+      }
+     ],
+     "notes": [
+      "Out of Focus",
+      "失去意识或视线模糊"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_062",
+     "no": 62,
+     "src_no": 62,
+     "name": "呼吸感镜头",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"scale\": {\"x\": 1.0, \"y\": 1.0}}, {\"duration\": 2000, \"scale\": {\"x\": 1.03, \"y\": 1.03}}, {\"duration\": 2000, \"scale\": {\"x\": 1.0, \"y\": 1.0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1.0,
+        "y": 1.0
+       }
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1.03,
+        "y": 1.03
+       }
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1.0,
+        "y": 1.0
+       }
+      }
+     ],
+     "notes": [
+      "极其微小的缩放循环，用于打破静止画面",
+      "Breathing Camera / Idle Breath",
+      "让静态演出有动态感，让长对话不显枯燥",
+      "「沉重呼吸」待机动画",
+      "让静止CG\"活\"起来"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_063",
+     "no": 63,
+     "src_no": 63,
+     "name": "水平震颤",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"position\": {\"x\": 0, \"y\": 0}}, {\"duration\": 100, \"position\": {\"x\": 5, \"y\": 0}}, {\"duration\": 100, \"position\": {\"x\": -5, \"y\": 0}}, {\"duration\": 100, \"position\": {\"x\": 5, \"y\": 0}}, {\"duration\": 100, \"position\": {\"x\": 0, \"y\": 0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": 5,
+        "y": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": -5,
+        "y": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": 5,
+        "y": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Horizontal Shiver",
+      "模拟坐车或轻微地震"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_064",
+     "no": 64,
+     "src_no": 65,
+     "name": "惊恐心跳",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"scale\": {\"x\": 1, \"y\": 1}, \"colorGreen\": 255, \"colorBlue\": 255}, {\"duration\": 100, \"scale\": {\"x\": 1.05, \"y\": 1.05}, \"colorGreen\": 200, \"colorBlue\": 200}, {\"duration\": 300, \"scale\": {\"x\": 1, \"y\": 1}, \"colorGreen\": 255, \"colorBlue\": 255}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "colorGreen": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 100,
+       "scale": {
+        "x": 1.05,
+        "y": 1.05
+       },
+       "colorGreen": 200,
+       "colorBlue": 200
+      },
+      {
+       "duration": 300,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "colorGreen": 255,
+       "colorBlue": 255
+      }
+     ],
+     "notes": [
+      "Heartbeat",
+      "画面随心跳收缩变红"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_065",
+     "no": 65,
+     "src_no": 66,
+     "name": "心跳悸动（暗角版）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"vignetting\": true, \"vignettingAlpha\": 0, \"colorRed\": 255, \"colorGreen\": 255, \"colorBlue\": 255}, {\"duration\": 200, \"vignettingAlpha\": 0.6, \"colorRed\": 255, \"colorGreen\": 200, \"colorBlue\": 200}, {\"duration\": 1000, \"vignettingAlpha\": 0, \"colorRed\": 255, \"colorGreen\": 255, \"colorBlue\": 255}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "vignetting": true,
+       "vignettingAlpha": 0,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 200,
+       "vignettingAlpha": 0.6,
+       "colorRed": 255,
+       "colorGreen": 200,
+       "colorBlue": 200
+      },
+      {
+       "duration": 1000,
+       "vignettingAlpha": 0,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      }
+     ],
+     "notes": [
+      "「心跳/悸动」压抑氛围",
+      "利用暗角（Vignetting）和红色调的周期性收缩",
+      "模拟紧张时的视线收窄和充血感",
+      "适用：恐惧、紧张、遇到危险、心动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_066",
+     "no": 66,
+     "src_no": 67,
+     "name": "闪回白光",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"brightness\": 1, \"blur\": 0}, {\"duration\": 200, \"brightness\": 5, \"blur\": 10}, {\"duration\": 1500, \"brightness\": 1, \"blur\": 0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1,
+       "blur": 0
+      },
+      {
+       "duration": 200,
+       "brightness": 5,
+       "blur": 10
+      },
+      {
+       "duration": 1500,
+       "brightness": 1,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "Bright Flashback",
+      "记忆涌现"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_067",
+     "no": 67,
+     "src_no": 68,
+     "name": "灰暗绝望",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"saturation\": 1}, {\"duration\": 2000, \"saturation\": 0, \"brightness\": 0.8}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "saturation": 1
+      },
+      {
+       "duration": 2000,
+       "saturation": 0,
+       "brightness": 0.8
+      }
+     ],
+     "notes": [
+      "Despair/Grey",
+      "失去色彩",
+      "石化（Desaturate）表示绝望或震惊"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_068",
+     "no": 68,
+     "src_no": 69,
+     "name": "愤怒爆发",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"colorGreen\": 255, \"colorBlue\": 255}, {\"duration\": 200, \"colorGreen\": 100, \"colorBlue\": 100, \"position\": {\"x\": 10, \"y\": 10}}, {\"duration\": 200, \"position\": {\"x\": -10, \"y\": -10}}, {\"duration\": 200, \"position\": {\"x\": 0, \"y\": 0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorGreen": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 200,
+       "colorGreen": 100,
+       "colorBlue": 100,
+       "position": {
+        "x": 10,
+        "y": 10
+       }
+      },
+      {
+       "duration": 200,
+       "position": {
+        "x": -10,
+        "y": -10
+       }
+      },
+      {
+       "duration": 200,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Rage",
+      "画面染红并颤抖"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_069",
+     "no": 69,
+     "src_no": 70,
+     "name": "中毒/眩晕",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"colorRed\": 255, \"colorGreen\": 255, \"colorBlue\": 255, \"blur\": 0}, {\"duration\": 1000, \"colorRed\": 200, \"colorGreen\": 100, \"colorBlue\": 255, \"blur\": 5}, {\"duration\": 1000, \"colorRed\": 255, \"colorGreen\": 255, \"colorBlue\": 255, \"blur\": 0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "blur": 0
+      },
+      {
+       "duration": 1000,
+       "colorRed": 200,
+       "colorGreen": 100,
+       "colorBlue": 255,
+       "blur": 5
+      },
+      {
+       "duration": 1000,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "Poisoned",
+      "变紫并模糊"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_070",
+     "no": 70,
+     "src_no": 71,
+     "name": "冰冻/寒冷",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"colorRed\": 255, \"colorGreen\": 255, \"contrast\": 1}, {\"duration\": 1000, \"colorRed\": 150, \"colorGreen\": 200, \"contrast\": 1.2}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "contrast": 1
+      },
+      {
+       "duration": 1000,
+       "colorRed": 150,
+       "colorGreen": 200,
+       "contrast": 1.2
+      }
+     ],
+     "notes": [
+      "Freezing",
+      "变蓝并提升对比度"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_071",
+     "no": 71,
+     "src_no": 72,
+     "name": "警报红光闪烁",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"colorGreen\": 255, \"colorBlue\": 255}, {\"duration\": 500, \"colorGreen\": 100, \"colorBlue\": 100}, {\"duration\": 500, \"colorGreen\": 255, \"colorBlue\": 255}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorGreen": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 500,
+       "colorGreen": 100,
+       "colorBlue": 100
+      },
+      {
+       "duration": 500,
+       "colorGreen": 255,
+       "colorBlue": 255
+      }
+     ],
+     "notes": [
+      "Alarm",
+      "红光周期性闪烁"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_072",
+     "no": 72,
+     "src_no": 73,
+     "name": "眨眼",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"brightness\": 1}, {\"duration\": 100, \"brightness\": 0}, {\"duration\": 50, \"brightness\": 0}, {\"duration\": 100, \"brightness\": 1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 100,
+       "brightness": 0
+      },
+      {
+       "duration": 50,
+       "brightness": 0
+      },
+      {
+       "duration": 100,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Blinking",
+      "单次眨眼效果"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_073",
+     "no": 73,
+     "src_no": 74,
+     "name": "昏昏欲睡",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"brightness\": 1, \"blur\": 0}, {\"duration\": 3000, \"brightness\": 0.5, \"blur\": 10}, {\"duration\": 200, \"brightness\": 1, \"blur\": 0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1,
+       "blur": 0
+      },
+      {
+       "duration": 3000,
+       "brightness": 0.5,
+       "blur": 10
+      },
+      {
+       "duration": 200,
+       "brightness": 1,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "Drowsy",
+      "缓慢地暗下去模糊，然后惊醒"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_074",
+     "no": 74,
+     "src_no": 75,
+     "name": "灵感/发现",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"brightness\": 1}, {\"duration\": 100, \"brightness\": 1.5}, {\"duration\": 300, \"brightness\": 1}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 100,
+       "brightness": 1.5
+      },
+      {
+       "duration": 300,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Idea",
+      "瞬间变亮"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_075",
+     "no": 75,
+     "src_no": 76,
+     "name": "受击震动",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":50,\"position\":{\"x\":20,\"y\":-15}},{\"duration\":50,\"position\":{\"x\":-15,\"y\":20}},{\"duration\":50,\"position\":{\"x\":-10,\"y\":-10}},{\"duration\":50,\"position\":{\"x\":0,\"y\":0}}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 20,
+        "y": -15
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -15,
+        "y": 20
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -10,
+        "y": -10
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Damage Shake",
+      "剧烈的乱向震动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_076",
+     "no": 76,
+     "src_no": 77,
+     "name": "致命一击",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1},{\"duration\":50,\"brightness\":-1},{\"duration\":50,\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 50,
+       "brightness": -1
+      },
+      {
+       "duration": 50,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Critical Hit",
+      "画面反色闪烁"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_077",
+     "no": 77,
+     "src_no": 78,
+     "name": "躲闪",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":100,\"position\":{\"x\":-200,\"y\":0}},{\"duration\":200,\"position\":{\"x\":0,\"y\":0}}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": -200,
+        "y": 0
+       }
+      },
+      {
+       "duration": 200,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Dodge",
+      "快速横移然后移回"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_078",
+     "no": 78,
+     "src_no": 79,
+     "name": "后坐力",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":50,\"scale\":{\"x\":1.05,\"y\":1.05}},{\"duration\":200,\"scale\":{\"x\":1,\"y\":1}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 50,
+       "scale": {
+        "x": 1.05,
+        "y": 1.05
+       }
+      },
+      {
+       "duration": 200,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      }
+     ],
+     "notes": [
+      "Recoil",
+      "画面瞬间放大后复原"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_079",
+     "no": 79,
+     "src_no": 80,
+     "name": "跌倒",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"rotation\":0,\"position\":{\"y\":0}},{\"duration\":600,\"rotation\":0.1,\"position\":{\"y\":300},\"alpha\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "rotation": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 600,
+       "rotation": 0.1,
+       "position": {
+        "y": 300
+       },
+       "alpha": 0
+      }
+     ],
+     "notes": [
+      "Fall Down",
+      "画面旋转并向下位移"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_080",
+     "no": 80,
+     "src_no": 81,
+     "name": "蓄力",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"brightness\":1},{\"duration\":1000,\"scale\":{\"x\":0.95,\"y\":0.95},\"brightness\":0.7}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "brightness": 1
+      },
+      {
+       "duration": 1000,
+       "scale": {
+        "x": 0.95,
+        "y": 0.95
+       },
+       "brightness": 0.7
+      }
+     ],
+     "notes": [
+      "Charge",
+      "画面轻微收缩震动变暗"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_081",
+     "no": 81,
+     "src_no": 82,
+     "name": "冲击波释放",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":0.95,\"y\":0.95},\"brightness\":0.7},{\"duration\":100,\"scale\":{\"x\":1.1,\"y\":1.1},\"brightness\":1.5},{\"duration\":300,\"scale\":{\"x\":1,\"y\":1},\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 0.95,
+        "y": 0.95
+       },
+       "brightness": 0.7
+      },
+      {
+       "duration": 100,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "brightness": 1.5
+      },
+      {
+       "duration": 300,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Release",
+      "蓄力后的释放，放大并变亮"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_082",
+     "no": 82,
+     "src_no": 83,
+     "name": "拔刀/斩击",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":50,\"position\":{\"x\":50,\"y\":50}},{\"duration\":50,\"position\":{\"x\":-50,\"y\":-50}},{\"duration\":50,\"position\":{\"x\":0,\"y\":0}}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 50,
+        "y": 50
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -50,
+        "y": -50
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Slash",
+      "画面快速错位"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_083",
+     "no": 83,
+     "src_no": 84,
+     "name": "地震",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"y\":0}},{\"duration\":100,\"position\":{\"y\":10}},{\"duration\":100,\"position\":{\"y\":-10}},{\"duration\":100,\"position\":{\"y\":10}},{\"duration\":100,\"position\":{\"y\":0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": 10
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": -10
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": 10
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Earthquake",
+      "持续较长的垂直震动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_084",
+     "no": 84,
+     "src_no": 85,
+     "name": "时间停止",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"saturation\":1}, {\"duration\":100,\"saturation\":0, \"brightness\": 0.8}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "saturation": 1
+      },
+      {
+       "duration": 100,
+       "saturation": 0,
+       "brightness": 0.8
+      }
+     ],
+     "notes": [
+      "Time Stop",
+      "瞬间灰色"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_085",
+     "no": 85,
+     "src_no": 86,
+     "name": "立绘跳跃",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"y\":0}},{\"duration\":150,\"position\":{\"y\":-50}},{\"duration\":150,\"position\":{\"y\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 150,
+       "position": {
+        "y": -50
+       }
+      },
+      {
+       "duration": 150,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Figure Jump",
+      "表示高兴或惊讶",
+      "立绘原地跳起"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_086",
+     "no": 86,
+     "src_no": 87,
+     "name": "立绘震惊",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":50,\"scale\":{\"x\":1.1,\"y\":1.1},\"position\":{\"x\":10,\"y\":0}},{\"duration\":50,\"scale\":{\"x\":1.1,\"y\":1.1},\"position\":{\"x\":-10,\"y\":0}},{\"duration\":50,\"scale\":{\"x\":1.1,\"y\":1.1},\"position\":{\"x\":0,\"y\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 50,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "position": {
+        "x": 10,
+        "y": 0
+       }
+      },
+      {
+       "duration": 50,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "position": {
+        "x": -10,
+        "y": 0
+       }
+      },
+      {
+       "duration": 50,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Figure Shock",
+      "快速放大并震动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_087",
+     "no": 87,
+     "src_no": 88,
+     "name": "立绘点头",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"y\":0}},{\"duration\":150,\"position\":{\"y\":20}},{\"duration\":150,\"position\":{\"y\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 150,
+       "position": {
+        "y": 20
+       }
+      },
+      {
+       "duration": 150,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Figure Nod",
+      "表示同意"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_088",
+     "no": 88,
+     "src_no": 89,
+     "name": "立绘摇头/拒绝",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0}},{\"duration\":100,\"position\":{\"x\":-15}},{\"duration\":100,\"position\":{\"x\":15}},{\"duration\":100,\"position\":{\"x\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": -15
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": 15
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "x": 0
+       }
+      }
+     ],
+     "notes": [
+      "Figure Shake No",
+      "害羞躲避"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_089",
+     "no": 89,
+     "src_no": 90,
+     "name": "立绘逼近",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":500,\"scale\":{\"x\":1.3,\"y\":1.3}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 500,
+       "scale": {
+        "x": 1.3,
+        "y": 1.3
+       }
+      }
+     ],
+     "notes": [
+      "Figure Approach",
+      "压迫感或亲密",
+      "Zoom In角色凑近镜头"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_090",
+     "no": 90,
+     "src_no": 91,
+     "name": "立绘后退",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":500,\"scale\":{\"x\":0.8,\"y\":0.8},\"alpha\":0.8}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 500,
+       "scale": {
+        "x": 0.8,
+        "y": 0.8
+       },
+       "alpha": 0.8
+      }
+     ],
+     "notes": [
+      "Figure Retreat",
+      "害怕或离开",
+      "Zoom Out角色远离镜头"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_091",
+     "no": 91,
+     "src_no": 92,
+     "name": "立绘叹气/沮丧",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}, \"position\":{\"y\":0}},{\"duration\":600,\"scale\":{\"x\":1.02,\"y\":0.98}, \"position\":{\"y\":5}},{\"duration\":600,\"scale\":{\"x\":1,\"y\":1}, \"position\":{\"y\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 600,
+       "scale": {
+        "x": 1.02,
+        "y": 0.98
+       },
+       "position": {
+        "y": 5
+       }
+      },
+      {
+       "duration": 600,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Figure Sigh",
+      "身体轻微下沉压扁",
+      "立绘被垂直压扁一点"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_092",
+     "no": 92,
+     "src_no": 93,
+     "name": "立绘闪亮登场",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":0,\"brightness\":2},{\"duration\":500,\"alpha\":1,\"brightness\":1}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 0,
+       "brightness": 2
+      },
+      {
+       "duration": 500,
+       "alpha": 1,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Figure Flash Enter"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_093",
+     "no": 93,
+     "src_no": 94,
+     "name": "立绘灵体化/幽灵",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":1}, {\"duration\":1000,\"alpha\":0.5}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 1
+      },
+      {
+       "duration": 1000,
+       "alpha": 0.5
+      }
+     ],
+     "notes": [
+      "Ghost Mode",
+      "半透明漂浮"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_094",
+     "no": 94,
+     "src_no": 95,
+     "name": "立绘跌倒/被推倒",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"rotation\":0,\"position\":{\"y\":0}},{\"duration\":300,\"rotation\":-1.5,\"position\":{\"y\":300, \"x\": -200}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "rotation": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 300,
+       "rotation": -1.5,
+       "position": {
+        "y": 300,
+        "x": -200
+       }
+      }
+     ],
+     "notes": [
+      "Figure Fall",
+      "旋转并向侧面倒下"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_095",
+     "no": 95,
+     "src_no": 96,
+     "name": "立绘登场（滑入）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":0,\"position\":{\"x\":-100}},{\"duration\":600,\"alpha\":1,\"position\":{\"x\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 0,
+       "position": {
+        "x": -100
+       }
+      },
+      {
+       "duration": 600,
+       "alpha": 1,
+       "position": {
+        "x": 0
+       }
+      }
+     ],
+     "notes": [
+      "Fade In slide",
+      "从侧面滑入并显现"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_096",
+     "no": 96,
+     "src_no": 97,
+     "name": "立绘暗淡",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1},{\"duration\":300,\"brightness\":0.6}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 300,
+       "brightness": 0.6
+      }
+     ],
+     "notes": [
+      "Dim",
+      "角色变暗（用于非当前发言角色）"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_097",
+     "no": 97,
+     "src_no": 98,
+     "name": "立绘点亮",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":0.6},{\"duration\":300,\"brightness\":1}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 0.6
+      },
+      {
+       "duration": 300,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Light Up",
+      "角色变亮（用于当前发言角色）"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_098",
+     "no": 98,
+     "src_no": 99,
+     "name": "立绘左右张望",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0}},{\"duration\":400,\"position\":{\"x\":-30}},{\"duration\":800,\"position\":{\"x\":30}},{\"duration\":400,\"position\":{\"x\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0
+       }
+      },
+      {
+       "duration": 400,
+       "position": {
+        "x": -30
+       }
+      },
+      {
+       "duration": 800,
+       "position": {
+        "x": 30
+       }
+      },
+      {
+       "duration": 400,
+       "position": {
+        "x": 0
+       }
+      }
+     ],
+     "notes": [
+      "Look Around",
+      "立绘左右移动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_099",
+     "no": 99,
+     "src_no": 100,
+     "name": "打雷闪电",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1},{\"duration\":50,\"brightness\":3},{\"duration\":50,\"brightness\":1},{\"duration\":100,\"brightness\":2},{\"duration\":800,\"brightness\":1}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 50,
+       "brightness": 3
+      },
+      {
+       "duration": 50,
+       "brightness": 1
+      },
+      {
+       "duration": 100,
+       "brightness": 2
+      },
+      {
+       "duration": 800,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Lightning / Thunder",
+      "瞬间白屏",
+      "随机的快速闪光"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_100",
+     "no": 100,
+     "src_no": 101,
+     "name": "日出/天亮",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":0.3,\"colorBlue\":200,\"colorRed\":100},{\"duration\":3000,\"brightness\":1,\"colorBlue\":255,\"colorRed\":255}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 0.3,
+       "colorBlue": 200,
+       "colorRed": 100
+      },
+      {
+       "duration": 3000,
+       "brightness": 1,
+       "colorBlue": 255,
+       "colorRed": 255
+      }
+     ],
+     "notes": [
+      "Sunrise",
+      "亮度从暗变亮，色调从蓝变正常",
+      "从暗蓝渐变到正常亮度"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_101",
+     "no": 101,
+     "src_no": 102,
+     "name": "日落/黄昏",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1,\"colorBlue\":255},{\"duration\":3000,\"brightness\":0.8,\"colorBlue\":150,\"colorGreen\":200}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1,
+       "colorBlue": 255
+      },
+      {
+       "duration": 3000,
+       "brightness": 0.8,
+       "colorBlue": 150,
+       "colorGreen": 200
+      }
+     ],
+     "notes": [
+      "Sunset",
+      "变暗且变橘黄"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_102",
+     "no": 102,
+     "src_no": 103,
+     "name": "夜晚降临",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1,\"colorRed\":255},{\"duration\":3000,\"brightness\":0.4,\"colorRed\":100,\"colorGreen\":100,\"colorBlue\":255}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1,
+       "colorRed": 255
+      },
+      {
+       "duration": 3000,
+       "brightness": 0.4,
+       "colorRed": 100,
+       "colorGreen": 100,
+       "colorBlue": 255
+      }
+     ],
+     "notes": [
+      "Nightfall",
+      "变暗且偏蓝"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_103",
+     "no": 103,
+     "src_no": 104,
+     "name": "故障信号",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"noise\":0},{\"duration\":100,\"noise\":1},{\"duration\":100,\"noise\":0.2},{\"duration\":100,\"noise\":0.8},{\"duration\":100,\"noise\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "noise": 0
+      },
+      {
+       "duration": 100,
+       "noise": 1
+      },
+      {
+       "duration": 100,
+       "noise": 0.2
+      },
+      {
+       "duration": 100,
+       "noise": 0.8
+      },
+      {
+       "duration": 100,
+       "noise": 0
+      }
+     ],
+     "notes": [
+      "Signal Interference",
+      "模拟老电视信号不稳定"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_104",
+     "no": 104,
+     "src_no": 105,
+     "name": "逐渐石化",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"saturation\":1},{\"duration\":2000,\"saturation\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "saturation": 1
+      },
+      {
+       "duration": 2000,
+       "saturation": 0
+      }
+     ],
+     "notes": [
+      "Petrification",
+      "饱和度降低为0"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_105",
+     "no": 105,
+     "src_no": 106,
+     "name": "神秘氛围",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"contrast\":1,\"brightness\":1},{\"duration\":2000,\"contrast\":1.5,\"brightness\":0.8}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "contrast": 1,
+       "brightness": 1
+      },
+      {
+       "duration": 2000,
+       "contrast": 1.5,
+       "brightness": 0.8
+      }
+     ],
+     "notes": [
+      "Mystery",
+      "增加对比度并轻微变暗"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_106",
+     "no": 106,
+     "src_no": 107,
+     "name": "梦幻柔光动画",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0},{\"duration\":1500,\"bloom\":1.5},{\"duration\":1500,\"bloom\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0
+      },
+      {
+       "duration": 1500,
+       "bloom": 1.5
+      },
+      {
+       "duration": 1500,
+       "bloom": 0
+      }
+     ],
+     "notes": [
+      "Bloom Pulse",
+      "缓慢的柔光闪烁",
+      "星光闪烁"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_107",
+     "no": 107,
+     "src_no": 108,
+     "name": "紧张对峙",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"vignettingAlpha\":0},{\"duration\":3000,\"scale\":{\"x\":1.1,\"y\":1.1},\"vignettingAlpha\":0.7}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "vignettingAlpha": 0
+      },
+      {
+       "duration": 3000,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "vignettingAlpha": 0.7
+      }
+     ],
+     "notes": [
+      "Standoff",
+      "拉近镜头并变暗（只有中间亮）"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_108",
+     "no": 108,
+     "src_no": 109,
+     "name": "结束/谢幕",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1,\"alpha\":1},{\"duration\":2000,\"brightness\":5,\"alpha\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1,
+       "alpha": 1
+      },
+      {
+       "duration": 2000,
+       "brightness": 5,
+       "alpha": 0
+      }
+     ],
+     "notes": [
+      "Fade to White",
+      "缓慢白屏"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_109",
+     "no": 109,
+     "src_no": 110,
+     "name": "拉镜聚焦",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"scale\": { \"x\": 1.2, \"y\": 1.2 }, \"blur\": 20, \"brightness\": 2.0}, {\"duration\": 1500, \"scale\": { \"x\": 1.0, \"y\": 1.0 }, \"blur\": 0, \"brightness\": 1.0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1.2,
+        "y": 1.2
+       },
+       "blur": 20,
+       "brightness": 2.0
+      },
+      {
+       "duration": 1500,
+       "scale": {
+        "x": 1.0,
+        "y": 1.0
+       },
+       "blur": 0,
+       "brightness": 1.0
+      }
+     ],
+     "notes": [
+      "电影级拉镜聚焦效果",
+      "画面瞬间放大、变亮并模糊（模拟摄像机对焦），然后缓慢恢复正常"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_110",
+     "no": 110,
+     "src_no": 111,
+     "name": "苏醒/睁眼（主观视角）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"blur\": 20, \"brightness\": 0},{\"duration\": 1500, \"blur\": 15, \"brightness\": 0.6},{\"duration\": 200, \"blur\": 20, \"brightness\": 0},{\"duration\": 1500, \"blur\": 5, \"brightness\": 0.8},{\"duration\": 1300, \"blur\": 0, \"brightness\": 1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 20,
+       "brightness": 0
+      },
+      {
+       "duration": 1500,
+       "blur": 15,
+       "brightness": 0.6
+      },
+      {
+       "duration": 200,
+       "blur": 20,
+       "brightness": 0
+      },
+      {
+       "duration": 1500,
+       "blur": 5,
+       "brightness": 0.8
+      },
+      {
+       "duration": 1300,
+       "blur": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Waking Up / Blinking",
+      "模拟主角刚醒来，视线模糊，眼睛眨动（变黑再变亮），最后对焦清晰的过程",
+      "适用场景：开场、昏迷后醒来、切换到第一人称视角",
+      "持续时间：约4.5秒"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_111",
+     "no": 111,
+     "src_no": 112,
+     "name": "严重眩晕/醉酒",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"rotation\": 0, \"scale\": {\"x\": 1, \"y\": 1}, \"blur\": 0},{\"duration\": 2000, \"rotation\": 0.05, \"scale\": {\"x\": 1.1, \"y\": 1.1}, \"blur\": 4},{\"duration\": 2000, \"rotation\": -0.05, \"scale\": {\"x\": 1.1, \"y\": 1.1}, \"blur\": 6},{\"duration\": 2000, \"rotation\": 0, \"scale\": {\"x\": 1, \"y\": 1}, \"blur\": 0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "rotation": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "blur": 0
+      },
+      {
+       "duration": 2000,
+       "rotation": 0.05,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "blur": 4
+      },
+      {
+       "duration": 2000,
+       "rotation": -0.05,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "blur": 6
+      },
+      {
+       "duration": 2000,
+       "rotation": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "Dizzy / Drunk",
+      "画面缓慢地左右摇摆旋转，同时伴随着焦距无法对准（Blur）和轻微变大",
+      "模拟站立不稳的感觉",
+      "适用场景：喝醉、中毒、生病、精神受到打击",
+      "持续时间：约6秒"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_112",
+     "no": 112,
+     "src_no": 113,
+     "name": "闪回/记忆重叠",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\": 0, \"rgbFilm\": false, \"noise\": 0, \"brightness\": 1},{\"duration\": 200, \"rgbFilm\": true, \"red\": [2, 0], \"green\": [-2, 0], \"blue\": [0, 2], \"noise\": 0.5, \"brightness\": 1.5},{\"duration\": 500, \"rgbFilm\": false, \"noise\": 0, \"brightness\": 1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "rgbFilm": false,
+       "noise": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 200,
+       "rgbFilm": true,
+       "red": [
+        2,
+        0
+       ],
+       "green": [
+        -2,
+        0
+       ],
+       "blue": [
+        0,
+        2
+       ],
+       "noise": 0.5,
+       "brightness": 1.5
+      },
+      {
+       "duration": 500,
+       "rgbFilm": false,
+       "noise": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Flashback / Glitch",
+      "画面瞬间发生色偏（RGB分离）和噪点，亮度爆发，然后迅速恢复",
+      "这是一种比较柔和的故障切换",
+      "适用场景：突然想起某事、世界线变动、电子信号接入"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_113",
+     "no": 113,
+     "src_no": 114,
+     "name": "冲击波",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"shockwaveFilter\":0},{\"duration\":1000,\"shockwaveFilter\":1,\"amplitude\":30,\"wavelength\":160}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "shockwaveFilter": 0
+      },
+      {
+       "duration": 1000,
+       "shockwaveFilter": 1,
+       "amplitude": 30,
+       "wavelength": 160
+      }
+     ],
+     "notes": [
+      "Shockwave",
+      "画面中心扩散出波纹"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_114",
+     "no": 114,
+     "src_no": 115,
+     "name": "寒冷",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"contrast\":1,\"colorRed\":255},{\"duration\":2000,\"contrast\":1.2,\"colorRed\":180,\"colorGreen\":220}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "contrast": 1,
+       "colorRed": 255
+      },
+      {
+       "duration": 2000,
+       "contrast": 1.2,
+       "colorRed": 180,
+       "colorGreen": 220
+      }
+     ],
+     "notes": [
+      "Freeze",
+      "色调变冷蓝，对比度增加"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_115",
+     "no": 115,
+     "src_no": 116,
+     "name": "老电视开机",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"y\":0},\"brightness\":5},{\"duration\":300,\"scale\":{\"y\":1},\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "y": 0
+       },
+       "brightness": 5
+      },
+      {
+       "duration": 300,
+       "scale": {
+        "y": 1
+       },
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "TV On",
+      "从一条横线展开成画面（利用Scale Y）",
+      "从一条亮线展开成画面"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_116",
+     "no": 116,
+     "src_no": 117,
+     "name": "老电视关机",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"y\":1}},{\"duration\":300,\"scale\":{\"y\":0.01},\"position\":{\"y\":360}},{\"duration\":100,\"scale\":{\"x\":0},\"alpha\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "y": 1
+       }
+      },
+      {
+       "duration": 300,
+       "scale": {
+        "y": 0.01
+       },
+       "position": {
+        "y": 360
+       }
+      },
+      {
+       "duration": 100,
+       "scale": {
+        "x": 0
+       },
+       "alpha": 0
+      }
+     ],
+     "notes": [
+      "TV Off",
+      "画面压扁成一条线然后消失",
+      "电视关机转场"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_117",
+     "no": 117,
+     "src_no": 118,
+     "name": "对焦切换",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"blur\":0},{\"duration\":800,\"blur\":15},{\"duration\":1200,\"blur\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 0
+      },
+      {
+       "duration": 800,
+       "blur": 15
+      },
+      {
+       "duration": 1200,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "清晰→模糊→清晰",
+      "场景切换过渡"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_118",
+     "no": 118,
+     "src_no": 119,
+     "name": "震动推近",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1.0,\"y\":1.0},\"position\":{\"x\":0,\"y\":0}},{\"duration\":2000,\"scale\":{\"x\":1.1,\"y\":1.1},\"position\":{\"x\":3,\"y\":3}},{\"duration\":50,\"position\":{\"x\":-3,\"y\":-3}},{\"duration\":50,\"position\":{\"x\":3,\"y\":3}},{\"duration\":50,\"position\":{\"x\":0,\"y\":0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1.0,
+        "y": 1.0
+       },
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "position": {
+        "x": 3,
+        "y": 3
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -3,
+        "y": -3
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 3,
+        "y": 3
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "紧张对峙",
+      "推近+震动组合"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_119",
+     "no": 119,
+     "src_no": 120,
+     "name": "剧烈地震",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":50,\"position\":{\"x\":20,\"y\":-20}},{\"duration\":50,\"position\":{\"x\":-20,\"y\":20}},{\"duration\":50,\"position\":{\"x\":15,\"y\":15}},{\"duration\":50,\"position\":{\"x\":-15,\"y\":-15}},{\"duration\":50,\"position\":{\"x\":0,\"y\":0}}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 20,
+        "y": -20
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -20,
+        "y": 20
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 15,
+        "y": 15
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -15,
+        "y": -15
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Earthquake（剧烈版）",
+      "高频大幅度震动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_120",
+     "no": 120,
+     "src_no": 121,
+     "name": "车辆颠簸",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"y\":0}},{\"duration\":200,\"position\":{\"y\":3},\"scale\":{\"x\":1.01,\"y\":1.01}},{\"duration\":200,\"position\":{\"y\":-3}},{\"duration\":200,\"position\":{\"y\":0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 200,
+       "position": {
+        "y": 3
+       },
+       "scale": {
+        "x": 1.01,
+        "y": 1.01
+       }
+      },
+      {
+       "duration": 200,
+       "position": {
+        "y": -3
+       }
+      },
+      {
+       "duration": 200,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Vehicle",
+      "持续轻微的上下浮动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_121",
+     "no": 121,
+     "src_no": 122,
+     "name": "回忆杀·纯白淡入",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":5,\"blur\":10},{\"duration\":3000,\"brightness\":1,\"blur\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 5,
+       "blur": 10
+      },
+      {
+       "duration": 3000,
+       "brightness": 1,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "从全白屏幕高亮模糊，缓慢过渡到清晰画面"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_122",
+     "no": 122,
+     "src_no": 123,
+     "name": "甜蜜眩晕·呼吸感",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"rotation\":0},{\"duration\":2500,\"scale\":{\"x\":1.02,\"y\":1.02},\"rotation\":0.015},{\"duration\":2500,\"scale\":{\"x\":1,\"y\":1},\"rotation\":-0.015}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "rotation": 0
+      },
+      {
+       "duration": 2500,
+       "scale": {
+        "x": 1.02,
+        "y": 1.02
+       },
+       "rotation": 0.015
+      },
+      {
+       "duration": 2500,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "rotation": -0.015
+      }
+     ],
+     "notes": [
+      "画面带有节奏的微弱缩放和左右摇摆",
+      "像醉氧一样"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_123",
+     "no": 123,
+     "src_no": 124,
+     "name": "时间定格·一见钟情",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"saturation\":1,\"contrast\":1},{\"duration\":100,\"saturation\":0,\"contrast\":1.5},{\"duration\":3000,\"saturation\":1,\"contrast\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "saturation": 1,
+       "contrast": 1
+      },
+      {
+       "duration": 100,
+       "saturation": 0,
+       "contrast": 1.5
+      },
+      {
+       "duration": 3000,
+       "saturation": 1,
+       "contrast": 1
+      }
+     ],
+     "notes": [
+      "画面瞬间极高对比度+去色（仿佛时间停止）",
+      "然后缓慢恢复"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_124",
+     "no": 124,
+     "src_no": 125,
+     "name": "小鹿乱撞·快速心跳",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":80,\"scale\":{\"x\":1.03,\"y\":1.03},\"colorGreen\":200},{\"duration\":80,\"scale\":{\"x\":1,\"y\":1},\"colorGreen\":255},{\"duration\":80,\"scale\":{\"x\":1.05,\"y\":1.05},\"colorGreen\":180},{\"duration\":200,\"scale\":{\"x\":1,\"y\":1},\"colorGreen\":255}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 80,
+       "scale": {
+        "x": 1.03,
+        "y": 1.03
+       },
+       "colorGreen": 200
+      },
+      {
+       "duration": 80,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "colorGreen": 255
+      },
+      {
+       "duration": 80,
+       "scale": {
+        "x": 1.05,
+        "y": 1.05
+       },
+       "colorGreen": 180
+      },
+      {
+       "duration": 200,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "colorGreen": 255
+      }
+     ],
+     "notes": [
+      "连续三次快速的震动和红光闪烁"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_125",
+     "no": 125,
+     "src_no": 126,
+     "name": "七彩棱镜·炫光",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"rgbFilm\":true},{\"duration\":2000,\"rgbFilm\":true,\"blur\":2,\"brightness\":1.2},{\"duration\":2000,\"rgbFilm\":false,\"blur\":0,\"brightness\":1}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "rgbFilm": true
+      },
+      {
+       "duration": 2000,
+       "rgbFilm": true,
+       "blur": 2,
+       "brightness": 1.2
+      },
+      {
+       "duration": 2000,
+       "rgbFilm": false,
+       "blur": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "强烈的RGB分离动画",
+      "像光线穿过钻石，五彩斑斓"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_126",
+     "no": 126,
+     "src_no": 127,
+     "name": "灵魂出窍·升天",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":1,\"position\":{\"y\":0}},{\"duration\":4000,\"alpha\":0,\"position\":{\"y\":-100}}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 1,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 4000,
+       "alpha": 0,
+       "position": {
+        "y": -100
+       }
+      }
+     ],
+     "notes": [
+      "背景半透明并缓慢向上飘动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_127",
+     "no": 127,
+     "src_no": 128,
+     "name": "像素重构",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"pixelSize\":20},{\"duration\":1500,\"pixelSize\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "pixelSize": 20
+      },
+      {
+       "duration": 1500,
+       "pixelSize": 1
+      }
+     ],
+     "notes": [
+      "画面从马赛克逐渐变清晰",
+      "模拟数据重组或魔法解除"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_128",
+     "no": 128,
+     "src_no": 129,
+     "name": "压迫感·缓慢逼近",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"brightness\":1},{\"duration\":5000,\"scale\":{\"x\":1.3,\"y\":1.3},\"brightness\":0.6,\"colorRed\":255,\"colorGreen\":150,\"colorBlue\":150}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "brightness": 1
+      },
+      {
+       "duration": 5000,
+       "scale": {
+        "x": 1.3,
+        "y": 1.3
+       },
+       "brightness": 0.6,
+       "colorRed": 255,
+       "colorGreen": 150,
+       "colorBlue": 150
+      }
+     ],
+     "notes": [
+      "镜头缓慢放大，同时画面变暗变红"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_129",
+     "no": 129,
+     "src_no": 130,
+     "name": "心碎·冲击波",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"shockwaveFilter\":0},{\"duration\":1500,\"shockwaveFilter\":0.5},{\"duration\":100,\"shockwaveFilter\":-1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "shockwaveFilter": 0
+      },
+      {
+       "duration": 1500,
+       "shockwaveFilter": 0.5
+      },
+      {
+       "duration": 100,
+       "shockwaveFilter": -1
+      }
+     ],
+     "notes": [
+      "通过Shockwave模拟心碎的瞬间震感"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_130",
+     "no": 130,
+     "src_no": 131,
+     "name": "坏掉的电视",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"glitchFilm\":false},{\"duration\":100,\"glitchFilm\":true},{\"duration\":100,\"glitchFilm\":false},{\"duration\":100,\"glitchFilm\":true}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "glitchFilm": false
+      },
+      {
+       "duration": 100,
+       "glitchFilm": true
+      },
+      {
+       "duration": 100,
+       "glitchFilm": false
+      },
+      {
+       "duration": 100,
+       "glitchFilm": true
+      }
+     ],
+     "notes": [
+      "信号干扰（Glitch + Noise）"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_131",
+     "no": 131,
+     "src_no": 132,
+     "name": "不安的搏动",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255},{\"duration\":1000,\"colorRed\":150,\"colorGreen\":200},{\"duration\":1000,\"colorRed\":255}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255
+      },
+      {
+       "duration": 1000,
+       "colorRed": 150,
+       "colorGreen": 200
+      },
+      {
+       "duration": 1000,
+       "colorRed": 255
+      }
+     ],
+     "notes": [
+      "画面整体颜色在正常和冷色之间缓慢脉冲"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_132",
+     "no": 132,
+     "src_no": 133,
+     "name": "破碎预警",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0},\"glitchFilm\":false},{\"duration\":50,\"position\":{\"x\":5},\"glitchFilm\":true},{\"duration\":50,\"position\":{\"x\":-5}},{\"duration\":50,\"position\":{\"x\":0},\"glitchFilm\":false}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0
+       },
+       "glitchFilm": false
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 5
+       },
+       "glitchFilm": true
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -5
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 0
+       },
+       "glitchFilm": false
+      }
+     ],
+     "notes": [
+      "高频的微小震动 + 故障"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_133",
+     "no": 133,
+     "src_no": 134,
+     "name": "立绘·丝滑登场",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":0,\"position\":{\"y\":100}},{\"duration\":600,\"alpha\":1,\"position\":{\"y\":0}}] -target=fig-center -next;",
+     "target": "fig-center",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 0,
+       "position": {
+        "y": 100
+       }
+      },
+      {
+       "duration": 600,
+       "alpha": 1,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "从下方滑入 + 透明度渐变"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_134",
+     "no": 134,
+     "src_no": 135,
+     "name": "立绘·生气/发抖",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0}},{\"duration\":30,\"position\":{\"x\":3}},{\"duration\":30,\"position\":{\"x\":-3}},{\"duration\":30,\"position\":{\"x\":3}},{\"duration\":30,\"position\":{\"x\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0
+       }
+      },
+      {
+       "duration": 30,
+       "position": {
+        "x": 3
+       }
+      },
+      {
+       "duration": 30,
+       "position": {
+        "x": -3
+       }
+      },
+      {
+       "duration": 30,
+       "position": {
+        "x": 3
+       }
+      },
+      {
+       "duration": 30,
+       "position": {
+        "x": 0
+       }
+      }
+     ],
+     "notes": [
+      "极高频的小幅度震动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_135",
+     "no": 135,
+     "src_no": 136,
+     "name": "吃醋·世界扭曲",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"rotation\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":3000,\"rotation\":0.2,\"scale\":{\"x\":1.5,\"y\":1.5}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "rotation": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 3000,
+       "rotation": 0.2,
+       "scale": {
+        "x": 1.5,
+        "y": 1.5
+       }
+      }
+     ],
+     "notes": [
+      "画面进行扭曲旋转（Rotation）",
+      "用旋转+缩放代替Twist滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_136",
+     "no": 136,
+     "src_no": 137,
+     "name": "聚光灯开启",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"radiusAlphaFilter\":0},{\"duration\":1500,\"radiusAlphaFilter\":1.5}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "radiusAlphaFilter": 0
+      },
+      {
+       "duration": 1500,
+       "radiusAlphaFilter": 1.5
+      }
+     ],
+     "notes": [
+      "圆形遮罩从0扩大到全屏"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_137",
+     "no": 137,
+     "src_no": 138,
+     "name": "聚光灯关闭",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"radiusAlphaFilter\":1.5},{\"duration\":1500,\"radiusAlphaFilter\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "radiusAlphaFilter": 1.5
+      },
+      {
+       "duration": 1500,
+       "radiusAlphaFilter": 0
+      }
+     ],
+     "notes": [
+      "圆形遮罩收缩直至全黑"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_138",
+     "no": 138,
+     "src_no": 139,
+     "name": "清晨苏醒",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"blur\":20,\"brightness\":2},{\"duration\":3000,\"blur\":0,\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 20,
+       "brightness": 2
+      },
+      {
+       "duration": 3000,
+       "blur": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "高亮度模糊 -> 清晰正常"
+     ],
+     "source": ""
+    }
+   ]
+  },
+  {
+   "id": "cat2",
+   "name": "恋爱场景专用特效",
+   "items": [
+    {
+     "id": "settempanimation_139",
+     "no": 139,
+     "src_no": 140,
+     "name": "瞬间心动·粉色冲击",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"bloom\":0},{\"duration\":150,\"scale\":{\"x\":1.05,\"y\":1.05},\"bloom\":2,\"colorRed\":255,\"colorGreen\":220,\"colorBlue\":230},{\"duration\":1000,\"scale\":{\"x\":1,\"y\":1},\"bloom\":0.5,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "bloom": 0
+      },
+      {
+       "duration": 150,
+       "scale": {
+        "x": 1.05,
+        "y": 1.05
+       },
+       "bloom": 2,
+       "colorRed": 255,
+       "colorGreen": 220,
+       "colorBlue": 230
+      },
+      {
+       "duration": 1000,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "bloom": 0.5,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      }
+     ],
+     "notes": [
+      "画面瞬间泛起粉色光晕并轻微放大",
+      "模拟那一刻心脏漏跳了一拍"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_140",
+     "no": 140,
+     "src_no": 141,
+     "name": "满眼都是你·聚光",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"radiusAlphaFilter\":0},{\"duration\":2000,\"radiusAlphaFilter\":0.6}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "radiusAlphaFilter": 0
+      },
+      {
+       "duration": 2000,
+       "radiusAlphaFilter": 0.6
+      }
+     ],
+     "notes": [
+      "利用圆形遮罩，让周围变暗，只聚焦中心",
+      "通常配合立绘使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_141",
+     "no": 141,
+     "src_no": 142,
+     "name": "心动悸动·温柔红光",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"vignetting\":true,\"vignettingAlpha\":0,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":245},{\"duration\":300,\"vignettingAlpha\":0.4,\"colorRed\":255,\"colorGreen\":230,\"colorBlue\":235},{\"duration\":900,\"vignettingAlpha\":0,\"colorRed\":255,\"colorGreen\":245,\"colorBlue\":250}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "vignetting": true,
+       "vignettingAlpha": 0,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 245
+      },
+      {
+       "duration": 300,
+       "vignettingAlpha": 0.4,
+       "colorRed": 255,
+       "colorGreen": 230,
+       "colorBlue": 235
+      },
+      {
+       "duration": 900,
+       "vignettingAlpha": 0,
+       "colorRed": 255,
+       "colorGreen": 245,
+       "colorBlue": 250
+      }
+     ],
+     "notes": [
+      "温柔红光收缩+轻微模糊",
+      "模拟心动瞬间"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_142",
+     "no": 142,
+     "src_no": 143,
+     "name": "柔光环绕",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0,\"brightness\":1},{\"duration\":2000,\"bloom\":1.2,\"bloomBlur\":3,\"brightness\":1.05},{\"duration\":2000,\"bloom\":0,\"brightness\":1}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 2000,
+       "bloom": 1.2,
+       "bloomBlur": 3,
+       "brightness": 1.05
+      },
+      {
+       "duration": 2000,
+       "bloom": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "泛光渐变+轻微提亮",
+      "营造温柔氛围"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_143",
+     "no": 143,
+     "src_no": 144,
+     "name": "甜度升温",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255,\"colorGreen\":230,\"colorBlue\":220,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":3000,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":225,\"scale\":{\"x\":1.02,\"y\":1.02}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 230,
+       "colorBlue": 220,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 3000,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 225,
+       "scale": {
+        "x": 1.02,
+        "y": 1.02
+       }
+      }
+     ],
+     "notes": [
+      "色调变暖+轻微缩放",
+      "氛围逐渐甜蜜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_144",
+     "no": 144,
+     "src_no": 145,
+     "name": "靠近对视",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"position\":{\"x\":0,\"y\":0}},{\"duration\":2500,\"scale\":{\"x\":1.2,\"y\":1.2},\"position\":{\"x\":0,\"y\":-10}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 2500,
+       "scale": {
+        "x": 1.2,
+        "y": 1.2
+       },
+       "position": {
+        "x": 0,
+        "y": -10
+       }
+      }
+     ],
+     "notes": [
+      "立绘缓慢凑近镜头",
+      "增加亲密感"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_145",
+     "no": 145,
+     "src_no": 146,
+     "name": "害羞低头",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"y\":0},\"alpha\":1},{\"duration\":800,\"position\":{\"y\":15},\"alpha\":0.95},{\"duration\":800,\"position\":{\"y\":0},\"alpha\":1}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "y": 0
+       },
+       "alpha": 1
+      },
+      {
+       "duration": 800,
+       "position": {
+        "y": 15
+       },
+       "alpha": 0.95
+      },
+      {
+       "duration": 800,
+       "position": {
+        "y": 0
+       },
+       "alpha": 1
+      }
+     ],
+     "notes": [
+      "立绘轻微下移+透明度微调",
+      "模拟害羞"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_146",
+     "no": 146,
+     "src_no": 147,
+     "name": "脸颊微红",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0},{\"duration\":1500,\"colorRed\":255,\"colorGreen\":235,\"colorBlue\":235,\"bloom\":0.8},{\"duration\":1500,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0
+      },
+      {
+       "duration": 1500,
+       "colorRed": 255,
+       "colorGreen": 235,
+       "colorBlue": 235,
+       "bloom": 0.8
+      },
+      {
+       "duration": 1500,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0
+      }
+     ],
+     "notes": [
+      "立绘局部泛红+柔光",
+      "模拟害羞升温"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_147",
+     "no": 147,
+     "src_no": 148,
+     "name": "落日余晖",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255,\"colorGreen\":200,\"colorBlue\":150,\"vignettingAlpha\":0},{\"duration\":3000,\"colorRed\":255,\"colorGreen\":210,\"colorBlue\":160,\"vignettingAlpha\":0.3},{\"duration\":3000,\"colorRed\":255,\"colorGreen\":220,\"colorBlue\":180,\"vignettingAlpha\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 200,
+       "colorBlue": 150,
+       "vignettingAlpha": 0
+      },
+      {
+       "duration": 3000,
+       "colorRed": 255,
+       "colorGreen": 210,
+       "colorBlue": 160,
+       "vignettingAlpha": 0.3
+      },
+      {
+       "duration": 3000,
+       "colorRed": 255,
+       "colorGreen": 220,
+       "colorBlue": 180,
+       "vignettingAlpha": 0
+      }
+     ],
+     "notes": [
+      "暖橙色调渐变+暗角",
+      "适配黄昏约会"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_148",
+     "no": 148,
+     "src_no": 149,
+     "name": "星光闪烁",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0.5,\"brightness\":1},{\"duration\":1000,\"bloom\":0.8,\"brightness\":1.1},{\"duration\":1000,\"bloom\":0.5,\"brightness\":1},{\"duration\":1000,\"bloom\":0.8,\"brightness\":1.1},{\"duration\":1000,\"bloom\":0.5,\"brightness\":1}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0.5,
+       "brightness": 1
+      },
+      {
+       "duration": 1000,
+       "bloom": 0.8,
+       "brightness": 1.1
+      },
+      {
+       "duration": 1000,
+       "bloom": 0.5,
+       "brightness": 1
+      },
+      {
+       "duration": 1000,
+       "bloom": 0.8,
+       "brightness": 1.1
+      },
+      {
+       "duration": 1000,
+       "bloom": 0.5,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "轻微亮度波动+泛光",
+      "模拟星空/灯光"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_149",
+     "no": 149,
+     "src_no": 150,
+     "name": "花瓣飘落感",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0},\"blur\":0},{\"duration\":5000,\"position\":{\"x\":20,\"y\":-10},\"blur\":0.5},{\"duration\":5000,\"position\":{\"x\":-20,\"y\":10},\"blur\":0.5}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       },
+       "blur": 0
+      },
+      {
+       "duration": 5000,
+       "position": {
+        "x": 20,
+        "y": -10
+       },
+       "blur": 0.5
+      },
+      {
+       "duration": 5000,
+       "position": {
+        "x": -20,
+        "y": 10
+       },
+       "blur": 0.5
+      }
+     ],
+     "notes": [
+      "背景轻微位移+模糊",
+      "模拟轻柔动态"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_150",
+     "no": 150,
+     "src_no": 151,
+     "name": "雨夜浪漫",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":200,\"colorGreen\":220,\"colorBlue\":255,\"blur\":1},{\"duration\":4000,\"colorRed\":230,\"colorGreen\":240,\"colorBlue\":255,\"blur\":0.5}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 200,
+       "colorGreen": 220,
+       "colorBlue": 255,
+       "blur": 1
+      },
+      {
+       "duration": 4000,
+       "colorRed": 230,
+       "colorGreen": 240,
+       "colorBlue": 255,
+       "blur": 0.5
+      }
+     ],
+     "notes": [
+      "轻微模糊+冷调变暖",
+      "适配雨中约会"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_151",
+     "no": 151,
+     "src_no": 152,
+     "name": "甜蜜回忆",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"sepia\":0,\"noise\":0,\"brightness\":1},{\"duration\":1500,\"sepia\":0.3,\"noise\":0.1,\"brightness\":0.9},{\"duration\":3000,\"sepia\":0.3,\"noise\":0.1,\"brightness\":0.9},{\"duration\":1500,\"sepia\":0,\"noise\":0,\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "sepia": 0,
+       "noise": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 1500,
+       "sepia": 0.3,
+       "noise": 0.1,
+       "brightness": 0.9
+      },
+      {
+       "duration": 3000,
+       "sepia": 0.3,
+       "noise": 0.1,
+       "brightness": 0.9
+      },
+      {
+       "duration": 1500,
+       "sepia": 0,
+       "noise": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "暖黄调+轻微噪点",
+      "模拟老照片闪回"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_152",
+     "no": 152,
+     "src_no": 153,
+     "name": "初见闪回",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":2,\"blur\":10,\"brightness\":1.5},{\"duration\":1000,\"bloom\":0,\"blur\":0,\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 2,
+       "blur": 10,
+       "brightness": 1.5
+      },
+      {
+       "duration": 1000,
+       "bloom": 0,
+       "blur": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "柔光爆发+快速对焦",
+      "模拟初见心动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_153",
+     "no": 153,
+     "src_no": 154,
+     "name": "细节回忆",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"bloom\":0},{\"duration\":3000,\"scale\":{\"x\":1.1,\"y\":1.1},\"bloom\":0.7},{\"duration\":2000,\"scale\":{\"x\":1.1,\"y\":1.1},\"bloom\":0.7},{\"duration\":3000,\"scale\":{\"x\":1,\"y\":1},\"bloom\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "bloom": 0
+      },
+      {
+       "duration": 3000,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "bloom": 0.7
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "bloom": 0.7
+      },
+      {
+       "duration": 3000,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "bloom": 0
+      }
+     ],
+     "notes": [
+      "镜头缓慢推近+柔光",
+      "聚焦美好细节"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_154",
+     "no": 154,
+     "src_no": 155,
+     "name": "告白瞬间",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0,\"brightness\":1,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255},{\"duration\":1500,\"bloom\":2,\"brightness\":1.2,\"colorRed\":255,\"colorGreen\":245,\"colorBlue\":250},{\"duration\":2000,\"bloom\":0,\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0,
+       "brightness": 1,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 1500,
+       "bloom": 2,
+       "brightness": 1.2,
+       "colorRed": 255,
+       "colorGreen": 245,
+       "colorBlue": 250
+      },
+      {
+       "duration": 2000,
+       "bloom": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "强烈泛光+缓慢提亮",
+      "聚焦告白时刻"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_155",
+     "no": 155,
+     "src_no": 156,
+     "name": "点头回应",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"y\":0}},{\"duration\":300,\"position\":{\"y\":-10}},{\"duration\":300,\"position\":{\"y\":0}},{\"duration\":300,\"position\":{\"y\":-10}},{\"duration\":300,\"position\":{\"y\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 300,
+       "position": {
+        "y": -10
+       }
+      },
+      {
+       "duration": 300,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 300,
+       "position": {
+        "y": -10
+       }
+      },
+      {
+       "duration": 300,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "立绘轻微上下位移",
+      "模拟同意告白"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_156",
+     "no": 156,
+     "src_no": 157,
+     "name": "拥抱预热（左立绘）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":-50,\"y\":0}},{\"duration\":3000,\"position\":{\"x\":0,\"y\":0}}] -target=fig-left;",
+     "target": "fig-left",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": -50,
+        "y": 0
+       }
+      },
+      {
+       "duration": 3000,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "双立绘缓慢靠近",
+      "模拟拥抱前的默契"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_157",
+     "no": 157,
+     "src_no": 158,
+     "name": "拥抱预热（右立绘）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":50,\"y\":0}},{\"duration\":3000,\"position\":{\"x\":0,\"y\":0}}] -target=fig-right;",
+     "target": "fig-right",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 50,
+        "y": 0
+       }
+      },
+      {
+       "duration": 3000,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "配合左立绘使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_158",
+     "no": 158,
+     "src_no": 159,
+     "name": "心动确认",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0,\"rotation\":0},{\"duration\":1000,\"bloom\":1,\"rotation\":0.02},{\"duration\":1000,\"bloom\":1,\"rotation\":-0.02},{\"duration\":1000,\"bloom\":0,\"rotation\":0}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0,
+       "rotation": 0
+      },
+      {
+       "duration": 1000,
+       "bloom": 1,
+       "rotation": 0.02
+      },
+      {
+       "duration": 1000,
+       "bloom": 1,
+       "rotation": -0.02
+      },
+      {
+       "duration": 1000,
+       "bloom": 0,
+       "rotation": 0
+      }
+     ],
+     "notes": [
+      "立绘泛光+轻微旋转",
+      "模拟心动共鸣"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_159",
+     "no": 159,
+     "src_no": 160,
+     "name": "耳鬓厮磨",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"position\":{\"x\":0,\"y\":0}},{\"duration\":1800,\"scale\":{\"x\":1.1,\"y\":1.1},\"position\":{\"x\":-10,\"y\":5}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 1800,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "position": {
+        "x": -10,
+        "y": 5
+       }
+      }
+     ],
+     "notes": [
+      "立绘轻微侧移+缩放",
+      "模拟近距离耳语"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_160",
+     "no": 160,
+     "src_no": 161,
+     "name": "温柔注视",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1,\"bloom\":0},{\"duration\":1500,\"brightness\":1.1,\"bloom\":1,\"bloomThreshold\":0.2},{\"duration\":1500,\"brightness\":1,\"bloom\":0}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1,
+       "bloom": 0
+      },
+      {
+       "duration": 1500,
+       "brightness": 1.1,
+       "bloom": 1,
+       "bloomThreshold": 0.2
+      },
+      {
+       "duration": 1500,
+       "brightness": 1,
+       "bloom": 0
+      }
+     ],
+     "notes": [
+      "立绘轻微提亮+边缘发光",
+      "突出眼神"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_161",
+     "no": 161,
+     "src_no": 162,
+     "name": "樱花氛围",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255,\"colorGreen\":245,\"colorBlue\":250,\"blur\":0},{\"duration\":2500,\"colorRed\":255,\"colorGreen\":250,\"colorBlue\":255,\"blur\":0.3},{\"duration\":2500,\"colorRed\":255,\"colorGreen\":245,\"colorBlue\":250,\"blur\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 245,
+       "colorBlue": 250,
+       "blur": 0
+      },
+      {
+       "duration": 2500,
+       "colorRed": 255,
+       "colorGreen": 250,
+       "colorBlue": 255,
+       "blur": 0.3
+      },
+      {
+       "duration": 2500,
+       "colorRed": 255,
+       "colorGreen": 245,
+       "colorBlue": 250,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "背景粉白渐变+轻微模糊",
+      "适配樱花约会"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_162",
+     "no": 162,
+     "src_no": 163,
+     "name": "牵手升温",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255,\"colorGreen\":230,\"colorBlue\":220,\"shakePower\":0},{\"duration\":500,\"colorRed\":255,\"colorGreen\":220,\"colorBlue\":210,\"shakePower\":2},{\"duration\":500,\"colorRed\":255,\"colorGreen\":230,\"colorBlue\":220,\"shakePower\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 230,
+       "colorBlue": 220,
+       "shakePower": 0
+      },
+      {
+       "duration": 500,
+       "colorRed": 255,
+       "colorGreen": 220,
+       "colorBlue": 210,
+       "shakePower": 2
+      },
+      {
+       "duration": 500,
+       "colorRed": 255,
+       "colorGreen": 230,
+       "colorBlue": 220,
+       "shakePower": 0
+      }
+     ],
+     "notes": [
+      "整体色调变暖+轻微震动",
+      "模拟牵手心动"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_163",
+     "no": 163,
+     "src_no": 164,
+     "name": "月下告白",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":200,\"colorGreen\":220,\"colorBlue\":255,\"bloom\":0},{\"duration\":3000,\"colorRed\":220,\"colorGreen\":230,\"colorBlue\":255,\"bloom\":1.5},{\"duration\":3000,\"colorRed\":230,\"colorGreen\":240,\"colorBlue\":255,\"bloom\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 200,
+       "colorGreen": 220,
+       "colorBlue": 255,
+       "bloom": 0
+      },
+      {
+       "duration": 3000,
+       "colorRed": 220,
+       "colorGreen": 230,
+       "colorBlue": 255,
+       "bloom": 1.5
+      },
+      {
+       "duration": 3000,
+       "colorRed": 230,
+       "colorGreen": 240,
+       "colorBlue": 255,
+       "bloom": 0
+      }
+     ],
+     "notes": [
+      "冷调渐变+泛光",
+      "适配夜晚告白"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_164",
+     "no": 164,
+     "src_no": 165,
+     "name": "害羞躲闪",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":300,\"position\":{\"x\":15,\"y\":0}},{\"duration\":300,\"position\":{\"x\":-10,\"y\":0}},{\"duration\":300,\"position\":{\"x\":0,\"y\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 300,
+       "position": {
+        "x": 15,
+        "y": 0
+       }
+      },
+      {
+       "duration": 300,
+       "position": {
+        "x": -10,
+        "y": 0
+       }
+      },
+      {
+       "duration": 300,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "立绘快速侧移+恢复",
+      "模拟眼神躲闪"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_165",
+     "no": 165,
+     "src_no": 166,
+     "name": "氛围升温",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"vignettingAlpha\":0,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":230},{\"duration\":4000,\"vignettingAlpha\":0.5,\"colorRed\":255,\"colorGreen\":230,\"colorBlue\":220}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "vignettingAlpha": 0,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 230
+      },
+      {
+       "duration": 4000,
+       "vignettingAlpha": 0.5,
+       "colorRed": 255,
+       "colorGreen": 230,
+       "colorBlue": 220
+      }
+     ],
+     "notes": [
+      "暗角渐变+暖调",
+      "适配独处升温"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_166",
+     "no": 166,
+     "src_no": 167,
+     "name": "惊喜瞬间",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1,\"bloom\":0},{\"duration\":200,\"brightness\":1.5,\"bloom\":1.8},{\"duration\":800,\"brightness\":1,\"bloom\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1,
+       "bloom": 0
+      },
+      {
+       "duration": 200,
+       "brightness": 1.5,
+       "bloom": 1.8
+      },
+      {
+       "duration": 800,
+       "brightness": 1,
+       "bloom": 0
+      }
+     ],
+     "notes": [
+      "亮度突发+泛光",
+      "模拟收到惊喜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_167",
+     "no": 167,
+     "src_no": 168,
+     "name": "并肩同行（左立绘）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":5000,\"position\":{\"x\":30,\"y\":0}}] -target=fig-left;",
+     "target": "fig-left",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 5000,
+       "position": {
+        "x": 30,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "双立绘同步轻微位移",
+      "模拟一起散步"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_168",
+     "no": 168,
+     "src_no": 169,
+     "name": "并肩同行（右立绘）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":5000,\"position\":{\"x\":30,\"y\":0}}] -target=fig-right;",
+     "target": "fig-right",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 5000,
+       "position": {
+        "x": 30,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "配合左立绘使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_169",
+     "no": 169,
+     "src_no": 170,
+     "name": "温柔告别",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":1,\"bloom\":0},{\"duration\":3000,\"alpha\":0.8,\"bloom\":0.7},{\"duration\":2000,\"alpha\":0.5,\"bloom\":0.5}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 1,
+       "bloom": 0
+      },
+      {
+       "duration": 3000,
+       "alpha": 0.8,
+       "bloom": 0.7
+      },
+      {
+       "duration": 2000,
+       "alpha": 0.5,
+       "bloom": 0.5
+      }
+     ],
+     "notes": [
+      "立绘缓慢淡化+背景柔光",
+      "适配分别场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_170",
+     "no": 170,
+     "src_no": 171,
+     "name": "告白成功",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0,\"brightness\":1,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":230},{\"duration\":1500,\"bloom\":2,\"brightness\":1.3,\"colorRed\":255,\"colorGreen\":220,\"colorBlue\":210},{\"duration\":1500,\"bloom\":0,\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0,
+       "brightness": 1,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 230
+      },
+      {
+       "duration": 1500,
+       "bloom": 2,
+       "brightness": 1.3,
+       "colorRed": 255,
+       "colorGreen": 220,
+       "colorBlue": 210
+      },
+      {
+       "duration": 1500,
+       "bloom": 0,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "全画面泛光+暖调爆发",
+      "适配确认关系"
+     ],
+     "source": ""
+    }
+   ]
+  },
+  {
+   "id": "cat3",
+   "name": "复合特效类（滤镜+动画结合）",
+   "items": [
+    {
+     "id": "settransform_171",
+     "no": 171,
+     "src_no": 172,
+     "name": "复古回忆（背景滤镜）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.7,\"contrast\":1.2,\"saturation\":0.5,\"sepia\":0.8,\"bloom\":0.4} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.7,
+      "contrast": 1.2,
+      "saturation": 0.5,
+      "sepia": 0.8,
+      "bloom": 0.4
+     },
+     "notes": [
+      "复古回忆风格滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_172",
+     "no": 172,
+     "src_no": 173,
+     "name": "复古回忆（背景动画）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"blur\":0},{\"duration\":5000,\"blur\":3}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 0
+      },
+      {
+       "duration": 5000,
+       "blur": 3
+      }
+     ],
+     "notes": [
+      "缓慢模糊动画",
+      "配合复古回忆滤镜使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_173",
+     "no": 173,
+     "src_no": 174,
+     "name": "复古回忆（人物滤镜）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.6,\"contrast\":1.3,\"saturation\":0.6,\"sepia\":0.7,\"bevel\":0.8} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.6,
+      "contrast": 1.3,
+      "saturation": 0.6,
+      "sepia": 0.7,
+      "bevel": 0.8
+     },
+     "notes": [
+      "复古回忆风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_174",
+     "no": 174,
+     "src_no": 175,
+     "name": "复古回忆（人物动画）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":4000,\"scale\":{\"x\":1.02,\"y\":1.02}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 4000,
+       "scale": {
+        "x": 1.02,
+        "y": 1.02
+       }
+      }
+     ],
+     "notes": [
+      "轻微缩放动画",
+      "配合复古回忆滤镜使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_175",
+     "no": 175,
+     "src_no": 176,
+     "name": "赛博波动（背景滤镜）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.9,\"contrast\":1.5,\"saturation\":1.8,\"colorRed\":180,\"colorGreen\":200,\"colorBlue\":255,\"glitchFilm\":true} -target=bg-main -duration=0 -next;",
+     "target": "bg-main",
+     "duration": 0,
+     "next": true,
+     "params": {
+      "brightness": 0.9,
+      "contrast": 1.5,
+      "saturation": 1.8,
+      "colorRed": 180,
+      "colorGreen": 200,
+      "colorBlue": 255,
+      "glitchFilm": true
+     },
+     "notes": [
+      "赛博波动风格背景滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_176",
+     "no": 176,
+     "src_no": 177,
+     "name": "赛博波动（背景动画）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":180},{\"duration\":1000,\"colorRed\":200},{\"duration\":1000,\"colorRed\":180}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 180
+      },
+      {
+       "duration": 1000,
+       "colorRed": 200
+      },
+      {
+       "duration": 1000,
+       "colorRed": 180
+      }
+     ],
+     "notes": [
+      "色彩漂移动画",
+      "配合赛博波动滤镜使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_177",
+     "no": 177,
+     "src_no": 178,
+     "name": "赛博波动（人物滤镜）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"brightness\":0.8,\"contrast\":1.4,\"saturation\":1.6,\"colorRed\":200,\"colorGreen\":220,\"colorBlue\":255} -target=fig-center -duration=0;",
+     "target": "fig-center",
+     "duration": 0,
+     "next": false,
+     "params": {
+      "brightness": 0.8,
+      "contrast": 1.4,
+      "saturation": 1.6,
+      "colorRed": 200,
+      "colorGreen": 220,
+      "colorBlue": 255
+     },
+     "notes": [
+      "赛博波动风格人物滤镜"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_178",
+     "no": 178,
+     "src_no": 179,
+     "name": "赛博波动（人物动画）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":0.8},{\"duration\":500,\"brightness\":1.2},{\"duration\":500,\"brightness\":0.8}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 0.8
+      },
+      {
+       "duration": 500,
+       "brightness": 1.2
+      },
+      {
+       "duration": 500,
+       "brightness": 0.8
+      }
+     ],
+     "notes": [
+      "闪烁动画",
+      "配合赛博波动滤镜使用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_179",
+     "no": 179,
+     "src_no": 180,
+     "name": "渐变显示（背景）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":0,\"brightness\":0.5},{\"duration\":2000,\"alpha\":1,\"brightness\":1}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 0,
+       "brightness": 0.5
+      },
+      {
+       "duration": 2000,
+       "alpha": 1,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Fade In",
+      "从透明到显现"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_180",
+     "no": 180,
+     "src_no": 181,
+     "name": "渐变显示（人物）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":0,\"position\":{\"y\":50}},{\"duration\":2500,\"alpha\":1,\"position\":{\"y\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 0,
+       "position": {
+        "y": 50
+       }
+      },
+      {
+       "duration": 2500,
+       "alpha": 1,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Fade In slide",
+      "从下方滑入显现"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_181",
+     "no": 181,
+     "src_no": 182,
+     "name": "轻微旋转",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"rotation\":0},{\"duration\":6000,\"rotation\":0.05},{\"duration\":6000,\"rotation\":-0.05},{\"duration\":6000,\"rotation\":0}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "rotation": 0
+      },
+      {
+       "duration": 6000,
+       "rotation": 0.05
+      },
+      {
+       "duration": 6000,
+       "rotation": -0.05
+      },
+      {
+       "duration": 6000,
+       "rotation": 0
+      }
+     ],
+     "notes": [
+      "Slow Rotate",
+      "缓慢旋转，增加灵动性"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_182",
+     "no": 182,
+     "src_no": 183,
+     "name": "快速抖动",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":50,\"position\":{\"x\":15,\"y\":-10}},{\"duration\":50,\"position\":{\"x\":-20,\"y\":15}},{\"duration\":50,\"position\":{\"x\":10,\"y\":-5}},{\"duration\":50,\"position\":{\"x\":0,\"y\":0}}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 15,
+        "y": -10
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": -20,
+        "y": 15
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 10,
+        "y": -5
+       }
+      },
+      {
+       "duration": 50,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Shake Strong",
+      "紧张/冲击场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_183",
+     "no": 183,
+     "src_no": 184,
+     "name": "模糊渐变",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"blur\":0},{\"duration\":1000,\"blur\":15},{\"duration\":1000,\"blur\":0}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 0
+      },
+      {
+       "duration": 1000,
+       "blur": 15
+      },
+      {
+       "duration": 1000,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "Blur Transition",
+      "场景切换过渡"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_184",
+     "no": 184,
+     "src_no": 185,
+     "name": "色彩漂移（背景）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255},{\"duration\":1500,\"colorRed\":240,\"colorGreen\":255,\"colorBlue\":240},{\"duration\":1500,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":250},{\"duration\":1500,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 1500,
+       "colorRed": 240,
+       "colorGreen": 255,
+       "colorBlue": 240
+      },
+      {
+       "duration": 1500,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 250
+      },
+      {
+       "duration": 1500,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      }
+     ],
+     "notes": [
+      "Color Drift",
+      "梦幻/混乱场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_185",
+     "no": 185,
+     "src_no": 186,
+     "name": "色彩漂移（人物）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255},{\"duration\":1500,\"colorRed\":245,\"colorGreen\":255,\"colorBlue\":245},{\"duration\":1500,\"colorRed\":255,\"colorBlue\":255},{\"duration\":1500,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 1500,
+       "colorRed": 245,
+       "colorGreen": 255,
+       "colorBlue": 245
+      },
+      {
+       "duration": 1500,
+       "colorRed": 255,
+       "colorBlue": 255
+      },
+      {
+       "duration": 1500,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255
+      }
+     ],
+     "notes": [
+      "Color Drift人物版"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_186",
+     "no": 186,
+     "src_no": 187,
+     "name": "闪烁强调",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1},{\"duration\":100,\"brightness\":1.8},{\"duration\":100,\"brightness\":1},{\"duration\":100,\"brightness\":1.8},{\"duration\":100,\"brightness\":1}] -target=fig-center -next;",
+     "target": "fig-center",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1
+      },
+      {
+       "duration": 100,
+       "brightness": 1.8
+      },
+      {
+       "duration": 100,
+       "brightness": 1
+      },
+      {
+       "duration": 100,
+       "brightness": 1.8
+      },
+      {
+       "duration": 100,
+       "brightness": 1
+      }
+     ],
+     "notes": [
+      "Flash Highlight",
+      "重点镜头/惊讶反应"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_187",
+     "no": 187,
+     "src_no": 188,
+     "name": "左右摇摆",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"x\":0}},{\"duration\":800,\"position\":{\"x\":-20}},{\"duration\":1600,\"position\":{\"x\":20}},{\"duration\":800,\"position\":{\"x\":0}}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "x": 0
+       }
+      },
+      {
+       "duration": 800,
+       "position": {
+        "x": -20
+       }
+      },
+      {
+       "duration": 1600,
+       "position": {
+        "x": 20
+       }
+      },
+      {
+       "duration": 800,
+       "position": {
+        "x": 0
+       }
+      }
+     ],
+     "notes": [
+      "Swing Left-Right",
+      "活泼/犹豫场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_188",
+     "no": 188,
+     "src_no": 189,
+     "name": "聚焦效果",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"blur\":5},{\"duration\":1500,\"scale\":{\"x\":1.2,\"y\":1.2},\"blur\":0}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "blur": 5
+      },
+      {
+       "duration": 1500,
+       "scale": {
+        "x": 1.2,
+        "y": 1.2
+       },
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "Focus In",
+      "特写镜头"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_189",
+     "no": 189,
+     "src_no": 190,
+     "name": "散焦退场",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"alpha\":1,\"blur\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":1500,\"alpha\":0,\"blur\":10,\"scale\":{\"x\":0.9,\"y\":0.9}}] -target=fig-center -next;",
+     "target": "fig-center",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "alpha": 1,
+       "blur": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 1500,
+       "alpha": 0,
+       "blur": 10,
+       "scale": {
+        "x": 0.9,
+        "y": 0.9
+       }
+      }
+     ],
+     "notes": [
+      "Defocus Exit",
+      "离场过渡"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_190",
+     "no": 190,
+     "src_no": 191,
+     "name": "地震震动（长版）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"position\":{\"y\":0}},{\"duration\":100,\"position\":{\"y\":20}},{\"duration\":100,\"position\":{\"y\":-20}},{\"duration\":100,\"position\":{\"y\":15}},{\"duration\":100,\"position\":{\"y\":-15}},{\"duration\":100,\"position\":{\"y\":10}},{\"duration\":100,\"position\":{\"y\":-10}},{\"duration\":200,\"position\":{\"y\":0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "position": {
+        "y": 0
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": 20
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": -20
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": 15
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": -15
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": 10
+       }
+      },
+      {
+       "duration": 100,
+       "position": {
+        "y": -10
+       }
+      },
+      {
+       "duration": 200,
+       "position": {
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "Earthquake Long",
+      "灾难/冲突场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_191",
+     "no": 191,
+     "src_no": 192,
+     "name": "高光闪烁（背景）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0.5},{\"duration\":800,\"bloom\":1.5},{\"duration\":800,\"bloom\":0.5}] -target=bg-main -next;",
+     "target": "bg-main",
+     "duration": null,
+     "next": true,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0.5
+      },
+      {
+       "duration": 800,
+       "bloom": 1.5
+      },
+      {
+       "duration": 800,
+       "bloom": 0.5
+      }
+     ],
+     "notes": [
+      "Bloom Pulse",
+      "魔法/特效场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_192",
+     "no": 192,
+     "src_no": 193,
+     "name": "高光闪烁（人物）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"bloom\":0.3},{\"duration\":800,\"bloom\":1.0},{\"duration\":800,\"bloom\":0.3}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "bloom": 0.3
+      },
+      {
+       "duration": 800,
+       "bloom": 1.0
+      },
+      {
+       "duration": 800,
+       "bloom": 0.3
+      }
+     ],
+     "notes": [
+      "Bloom Pulse人物版"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_193",
+     "no": 193,
+     "src_no": 194,
+     "name": "慢动作特写（立绘）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1.0,\"y\":1.0},\"brightness\":1.0},{\"duration\":800,\"scale\":{\"x\":1.1,\"y\":1.1},\"brightness\":1.1,\"blur\":0.5},{\"duration\":2000,\"scale\":{\"x\":1.0,\"y\":1.0},\"brightness\":1.0,\"blur\":0}] -target=fig-center;",
+     "target": "fig-center",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1.0,
+        "y": 1.0
+       },
+       "brightness": 1.0
+      },
+      {
+       "duration": 800,
+       "scale": {
+        "x": 1.1,
+        "y": 1.1
+       },
+       "brightness": 1.1,
+       "blur": 0.5
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1.0,
+        "y": 1.0
+       },
+       "brightness": 1.0,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "慢动作特写立绘部分"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_194",
+     "no": 194,
+     "src_no": 195,
+     "name": "慢动作特写（背景）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"brightness\":1.0,\"blur\":0},{\"duration\":800,\"brightness\":0.8,\"blur\":2},{\"duration\":2000,\"brightness\":1.0,\"blur\":0}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "brightness": 1.0,
+       "blur": 0
+      },
+      {
+       "duration": 800,
+       "brightness": 0.8,
+       "blur": 2
+      },
+      {
+       "duration": 2000,
+       "brightness": 1.0,
+       "blur": 0
+      }
+     ],
+     "notes": [
+      "慢动作特写背景部分"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_195",
+     "no": 195,
+     "src_no": 196,
+     "name": "时间停止（灰度+暗角）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"saturation\":1,\"vignettingAlpha\":0},{\"duration\":300,\"saturation\":0,\"vignettingAlpha\":0.5},{\"duration\":5000,\"saturation\":0,\"vignettingAlpha\":0.5}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "saturation": 1,
+       "vignettingAlpha": 0
+      },
+      {
+       "duration": 300,
+       "saturation": 0,
+       "vignettingAlpha": 0.5
+      },
+      {
+       "duration": 5000,
+       "saturation": 0,
+       "vignettingAlpha": 0.5
+      }
+     ],
+     "notes": [
+      "时间停止效果",
+      "灰度+暗角组合"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_196",
+     "no": 196,
+     "src_no": 197,
+     "name": "神秘氛围动画",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"contrast\":1,\"brightness\":1,\"colorGreen\":255},{\"duration\":2000,\"contrast\":1.5,\"brightness\":0.8,\"colorGreen\":150}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "contrast": 1,
+       "brightness": 1,
+       "colorGreen": 255
+      },
+      {
+       "duration": 2000,
+       "contrast": 1.5,
+       "brightness": 0.8,
+       "colorGreen": 150
+      }
+     ],
+     "notes": [
+      "紫色调+对比度",
+      "神秘场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_197",
+     "no": 197,
+     "src_no": 198,
+     "name": "水下波纹",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"reflectionFilm\":true,\"colorRed\":200,\"colorGreen\":220,\"colorBlue\":255,\"blur\":1},{\"duration\":1000,\"reflectionFilm\":true,\"colorRed\":200,\"colorGreen\":220,\"colorBlue\":255,\"blur\":1.5},{\"duration\":1000,\"reflectionFilm\":true,\"colorRed\":200,\"colorGreen\":220,\"colorBlue\":255,\"blur\":1}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "reflectionFilm": true,
+       "colorRed": 200,
+       "colorGreen": 220,
+       "colorBlue": 255,
+       "blur": 1
+      },
+      {
+       "duration": 1000,
+       "reflectionFilm": true,
+       "colorRed": 200,
+       "colorGreen": 220,
+       "colorBlue": 255,
+       "blur": 1.5
+      },
+      {
+       "duration": 1000,
+       "reflectionFilm": true,
+       "colorRed": 200,
+       "colorGreen": 220,
+       "colorBlue": 255,
+       "blur": 1
+      }
+     ],
+     "notes": [
+      "扭曲泛蓝",
+      "水下场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_198",
+     "no": 198,
+     "src_no": 199,
+     "name": "热浪扭曲",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"reflectionFilm\":true,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":200,\"blur\":0.5},{\"duration\":500,\"reflectionFilm\":true,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":200,\"blur\":1},{\"duration\":500,\"reflectionFilm\":true,\"colorRed\":255,\"colorGreen\":240,\"colorBlue\":200,\"blur\":0.5}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "reflectionFilm": true,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 200,
+       "blur": 0.5
+      },
+      {
+       "duration": 500,
+       "reflectionFilm": true,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 200,
+       "blur": 1
+      },
+      {
+       "duration": 500,
+       "reflectionFilm": true,
+       "colorRed": 255,
+       "colorGreen": 240,
+       "colorBlue": 200,
+       "blur": 0.5
+      }
+     ],
+     "notes": [
+      "沙漠效果",
+      "炎热场景"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settempanimation_199",
+     "no": 199,
+     "src_no": 200,
+     "name": "雨滴效果",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"blur\":0,\"position\":{\"x\":0,\"y\":0}},{\"duration\":50,\"blur\":0.5,\"position\":{\"x\":2,\"y\":2}},{\"duration\":50,\"blur\":0.5,\"position\":{\"x\":-2,\"y\":-2}},{\"duration\":50,\"blur\":0.5,\"position\":{\"x\":2,\"y\":2}},{\"duration\":50,\"blur\":0,\"position\":{\"x\":0,\"y\":0}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "blur": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      },
+      {
+       "duration": 50,
+       "blur": 0.5,
+       "position": {
+        "x": 2,
+        "y": 2
+       }
+      },
+      {
+       "duration": 50,
+       "blur": 0.5,
+       "position": {
+        "x": -2,
+        "y": -2
+       }
+      },
+      {
+       "duration": 50,
+       "blur": 0.5,
+       "position": {
+        "x": 2,
+        "y": 2
+       }
+      },
+      {
+       "duration": 50,
+       "blur": 0,
+       "position": {
+        "x": 0,
+        "y": 0
+       }
+      }
+     ],
+     "notes": [
+      "背景模糊+震动",
+      "模拟雨滴"
+     ],
+     "source": ""
+    }
+   ]
+  },
+  {
+   "id": "cat4",
+   "name": "通用重置指令",
+   "items": [
+    {
+     "id": "settransform_200",
+     "no": 200,
+     "src_no": 201,
+     "name": "完全重置（背景）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"alpha\":1,\"scale\":{\"x\":1,\"y\":1},\"position\":{\"x\":0,\"y\":0},\"rotation\":0,\"blur\":0,\"brightness\":1,\"contrast\":1,\"saturation\":1,\"gamma\":1,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"oldFilm\":false,\"dotFilm\":false,\"reflectionFilm\":false,\"glitchFilm\":false,\"rgbFilm\":false,\"godrayFilm\":false,\"bloom\":0,\"shockwaveFilter\":0,\"radiusAlphaFilter\":0,\"bevel\":0,\"sepia\":0,\"noise\":0,\"vignetting\":false,\"vignettingAlpha\":0,\"shakePower\":0,\"pixelSize\":1} -target=bg-main -duration=500;",
+     "target": "bg-main",
+     "duration": 500,
+     "next": false,
+     "params": {
+      "alpha": 1,
+      "scale": {
+       "x": 1,
+       "y": 1
+      },
+      "position": {
+       "x": 0,
+       "y": 0
+      },
+      "rotation": 0,
+      "blur": 0,
+      "brightness": 1,
+      "contrast": 1,
+      "saturation": 1,
+      "gamma": 1,
+      "colorRed": 255,
+      "colorGreen": 255,
+      "colorBlue": 255,
+      "oldFilm": false,
+      "dotFilm": false,
+      "reflectionFilm": false,
+      "glitchFilm": false,
+      "rgbFilm": false,
+      "godrayFilm": false,
+      "bloom": 0,
+      "shockwaveFilter": 0,
+      "radiusAlphaFilter": 0,
+      "bevel": 0,
+      "sepia": 0,
+      "noise": 0,
+      "vignetting": false,
+      "vignettingAlpha": 0,
+      "shakePower": 0,
+      "pixelSize": 1
+     },
+     "notes": [
+      "万能还原药水",
+      "清除所有颜色、滤镜、形变",
+      "务必设置为通过快捷键或脚本末尾调用"
+     ],
+     "source": ""
+    },
+    {
+     "id": "settransform_201",
+     "no": 201,
+     "src_no": 202,
+     "name": "完全重置（立绘）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"alpha\":1,\"scale\":{\"x\":1,\"y\":1},\"position\":{\"x\":0,\"y\":0},\"rotation\":0,\"blur\":0,\"brightness\":1,\"contrast\":1,\"saturation\":1,\"gamma\":1,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0,\"bevel\":0} -target=fig-center -duration=500;",
+     "target": "fig-center",
+     "duration": 500,
+     "next": false,
+     "params": {
+      "alpha": 1,
+      "scale": {
+       "x": 1,
+       "y": 1
+      },
+      "position": {
+       "x": 0,
+       "y": 0
+      },
+      "rotation": 0,
+      "blur": 0,
+      "brightness": 1,
+      "contrast": 1,
+      "saturation": 1,
+      "gamma": 1,
+      "colorRed": 255,
+      "colorGreen": 255,
+      "colorBlue": 255,
+      "bloom": 0,
+      "bevel": 0
+     },
+     "notes": [
+      "立绘重置",
+      "根据需要改为fig-left/fig-right"
+     ],
+     "source": ""
+    }
+   ]
+  },
+  {
+   "id": "cat5_appendix",
+   "name": "通用重置指令（补充附录）",
+   "desc": "文档末尾补充条目，编号自成一套",
+   "items": [
+    {
+     "id": "settransform_202",
+     "no": 202,
+     "src_no": 1,
+     "name": "「失去高光·绝望」（setTransform版本）",
+     "cmd": "setTransform",
+     "code": "setTransform:{\"saturation\":0, \"brightness\":0.8, \"contrast\":1.3} -target=bg-main -duration=300;",
+     "target": "bg-main",
+     "duration": 300,
+     "next": false,
+     "params": {
+      "saturation": 0,
+      "brightness": 0.8,
+      "contrast": 1.3
+     },
+     "notes": [
+      "整合版第68条有类似的setTempAnimation动画版本，但缺少这个setTransform静态滤镜版本"
+     ],
+     "source": "没问题，完全理解.docx - 第三章"
+    },
+    {
+     "id": "settempanimation_203",
+     "no": 203,
+     "src_no": 2,
+     "name": "「同步呼吸」（fig-left 版本）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":2000,\"scale\":{\"x\":1.03,\"y\":1.03}},{\"duration\":2000,\"scale\":{\"x\":1,\"y\":1}}] -target=fig-left;",
+     "target": "fig-left",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1.03,
+        "y": 1.03
+       }
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      }
+     ],
+     "notes": [],
+     "source": "几十种高级演出特效.docx - 恋爱场景第6条"
+    },
+    {
+     "id": "settempanimation_204",
+     "no": 204,
+     "src_no": 3,
+     "name": "「同步呼吸」（fig-right 版本）",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1}},{\"duration\":2000,\"scale\":{\"x\":1.03,\"y\":1.03}},{\"duration\":2000,\"scale\":{\"x\":1,\"y\":1}}] -target=fig-right;",
+     "target": "fig-right",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1.03,
+        "y": 1.03
+       }
+      },
+      {
+       "duration": 2000,
+       "scale": {
+        "x": 1,
+        "y": 1
+       }
+      }
+     ],
+     "notes": [],
+     "source": "几十种高级演出特效.docx - 恋爱场景第6条"
+    },
+    {
+     "id": "settempanimation_205",
+     "no": 205,
+     "src_no": 4,
+     "name": "「心动共鸣」",
+     "cmd": "setTempAnimation",
+     "code": "setTempAnimation:[{\"duration\":0,\"scale\":{\"x\":1,\"y\":1},\"colorRed\":255,\"colorGreen\":245,\"colorBlue\":250},{\"duration\":1000,\"scale\":{\"x\":1.02,\"y\":1.02,\"colorRed\":255,\"colorGreen\":235,\"colorBlue\":240}},{\"duration\":1000,\"scale\":{\"x\":1,\"y\":1,\"colorRed\":255,\"colorGreen\":245,\"colorBlue\":250}}] -target=bg-main;",
+     "target": "bg-main",
+     "duration": null,
+     "next": false,
+     "params": [
+      {
+       "duration": 0,
+       "scale": {
+        "x": 1,
+        "y": 1
+       },
+       "colorRed": 255,
+       "colorGreen": 245,
+       "colorBlue": 250
+      },
+      {
+       "duration": 1000,
+       "scale": {
+        "x": 1.02,
+        "y": 1.02,
+        "colorRed": 255,
+        "colorGreen": 235,
+        "colorBlue": 240
+       }
+      },
+      {
+       "duration": 1000,
+       "scale": {
+        "x": 1,
+        "y": 1,
+        "colorRed": 255,
+        "colorGreen": 245,
+        "colorBlue": 250
+       }
+      }
+     ],
+     "notes": [],
+     "source": "几十种高级演出特效.docx - 恋爱场景第29条"
+    }
+   ]
+  },
+  {
+   "id": "film_light",
+   "name": "电影感滤镜（环境光配对）",
+   "desc": "每项含背景与人物两行，需成对使用（个别组只有人物行）",
+   "items": [
+    {
+     "id": "film_001",
+     "no": 1,
+     "name": "火光/爆炸↑",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.9,\"contrast\":0.8,\"saturation\":0.5,\"gamma\":0.6,\"colorRed\":255,\"colorGreen\":218,\"colorBlue\":184,\"bloom\":1,\"bloomBrightness\":0.8,\"bloomBlur\":8,\"bevelRed\":255,\"bevelGreen\":194,\"bevelBlue\":125} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.75,\"contrast\":1.1,\"saturation\":0.8,\"gamma\":1,\"colorRed\":255,\"colorGreen\":234,\"colorBlue\":217,\"bloom\":0.6,\"bloomBrightness\":0.7,\"bloomBlur\":4,\"bevel\":2,\"bevelThickness\":20,\"bevelRotation\":80,\"bevelRed\":255,\"bevelGreen\":201,\"bevelBlue\":125} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.9,
+       "contrast": 0.8,
+       "saturation": 0.5,
+       "gamma": 0.6,
+       "colorRed": 255,
+       "colorGreen": 218,
+       "colorBlue": 184,
+       "bloom": 1,
+       "bloomBrightness": 0.8,
+       "bloomBlur": 8,
+       "bevelRed": 255,
+       "bevelGreen": 194,
+       "bevelBlue": 125
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.75,
+       "contrast": 1.1,
+       "saturation": 0.8,
+       "gamma": 1,
+       "colorRed": 255,
+       "colorGreen": 234,
+       "colorBlue": 217,
+       "bloom": 0.6,
+       "bloomBrightness": 0.7,
+       "bloomBlur": 4,
+       "bevel": 2,
+       "bevelThickness": 20,
+       "bevelRotation": 80,
+       "bevelRed": 255,
+       "bevelGreen": 201,
+       "bevelBlue": 125
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_002",
+     "no": 2,
+     "name": "黑暗（有灯光）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":1,\"bloomBrightness\":0.7,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.6,\"contrast\":1.1,\"saturation\":0.9,\"gamma\":0.9,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.2,\"bloomBrightness\":0.9,\"bloomBlur\":10,\"bevel\":1,\"bevelThickness\":18,\"bevelRotation\":30,\"bevelRed\":204,\"bevelGreen\":204,\"bevelBlue\":204} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 1,
+       "bloomBrightness": 0.7,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.6,
+       "contrast": 1.1,
+       "saturation": 0.9,
+       "gamma": 0.9,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.2,
+       "bloomBrightness": 0.9,
+       "bloomBlur": 10,
+       "bevel": 1,
+       "bevelThickness": 18,
+       "bevelRotation": 30,
+       "bevelRed": 204,
+       "bevelGreen": 204,
+       "bevelBlue": 204
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_003",
+     "no": 3,
+     "name": "清晨/黄昏（轻）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":234,\"colorBlue\":214,\"bloom\":1,\"bloomBrightness\":0.7,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.6,\"contrast\":1.1,\"saturation\":0.9,\"gamma\":0.9,\"colorRed\":255,\"colorGreen\":234,\"colorBlue\":217,\"bloom\":0.4,\"bloomBrightness\":0.9,\"bloomBlur\":10,\"bevel\":1,\"bevelThickness\":10,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":238,\"bevelBlue\":224} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 234,
+       "colorBlue": 214,
+       "bloom": 1,
+       "bloomBrightness": 0.7,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.6,
+       "contrast": 1.1,
+       "saturation": 0.9,
+       "gamma": 0.9,
+       "colorRed": 255,
+       "colorGreen": 234,
+       "colorBlue": 217,
+       "bloom": 0.4,
+       "bloomBrightness": 0.9,
+       "bloomBlur": 10,
+       "bevel": 1,
+       "bevelThickness": 10,
+       "bevelRotation": 30,
+       "bevelRed": 255,
+       "bevelGreen": 238,
+       "bevelBlue": 224
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_004",
+     "no": 4,
+     "name": "黑暗（无灯光）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":222,\"colorGreen\":222,\"colorBlue\":222,\"bloom\":1,\"bloomBrightness\":0.7,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.4,\"contrast\":1.1,\"saturation\":0.9,\"gamma\":0.7,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.2,\"bloomBrightness\":0.9,\"bloomBlur\":10,\"bevel\":0.2,\"bevelThickness\":18,\"bevelRotation\":130,\"bevelRed\":161,\"bevelGreen\":161,\"bevelBlue\":161} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 222,
+       "colorGreen": 222,
+       "colorBlue": 222,
+       "bloom": 1,
+       "bloomBrightness": 0.7,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.4,
+       "contrast": 1.1,
+       "saturation": 0.9,
+       "gamma": 0.7,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.2,
+       "bloomBrightness": 0.9,
+       "bloomBlur": 10,
+       "bevel": 0.2,
+       "bevelThickness": 18,
+       "bevelRotation": 130,
+       "bevelRed": 161,
+       "bevelGreen": 161,
+       "bevelBlue": 161
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_005",
+     "no": 5,
+     "name": "白天",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":1.1,\"saturation\":0.8,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.5,\"bloomBrightness\":0.8,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.6,\"contrast\":1.1,\"saturation\":0.8,\"gamma\":0.6,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.7,\"bloomBrightness\":0.6,\"bloomBlur\":10,\"bevel\":1,\"bevelThickness\":18,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":255,\"bevelBlue\":255} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 1.1,
+       "saturation": 0.8,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.5,
+       "bloomBrightness": 0.8,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.6,
+       "contrast": 1.1,
+       "saturation": 0.8,
+       "gamma": 0.6,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.7,
+       "bloomBrightness": 0.6,
+       "bloomBlur": 10,
+       "bevel": 1,
+       "bevelThickness": 18,
+       "bevelRotation": 30,
+       "bevelRed": 255,
+       "bevelGreen": 255,
+       "bevelBlue": 255
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_006",
+     "no": 6,
+     "name": "黄昏(重)（室外）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.9,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":205,\"colorBlue\":171,\"bloom\":0.7,\"bloomBrightness\":0.8,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.4,\"contrast\":1.2,\"saturation\":0.7,\"gamma\":0.8,\"colorRed\":255,\"colorGreen\":213,\"colorBlue\":176,\"bloom\":0.5,\"bloomBlur\":10,\"bevel\":1,\"bevelThickness\":18,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":204,\"bevelBlue\":148} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.9,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 205,
+       "colorBlue": 171,
+       "bloom": 0.7,
+       "bloomBrightness": 0.8,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.4,
+       "contrast": 1.2,
+       "saturation": 0.7,
+       "gamma": 0.8,
+       "colorRed": 255,
+       "colorGreen": 213,
+       "colorBlue": 176,
+       "bloom": 0.5,
+       "bloomBlur": 10,
+       "bevel": 1,
+       "bevelThickness": 18,
+       "bevelRotation": 30,
+       "bevelRed": 255,
+       "bevelGreen": 204,
+       "bevelBlue": 148
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_007",
+     "no": 7,
+     "name": "黄昏(重)（室内）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.9,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":203,\"colorBlue\":171,\"bloom\":0.7,\"bloomBrightness\":0.9,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.5,\"contrast\":1.2,\"saturation\":0.7,\"gamma\":0.8,\"colorRed\":255,\"colorGreen\":208,\"colorBlue\":176,\"bloom\":0.5,\"bloomBlur\":10,\"bevel\":1,\"bevelThickness\":18,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":184,\"bevelBlue\":148} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.9,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 203,
+       "colorBlue": 171,
+       "bloom": 0.7,
+       "bloomBrightness": 0.9,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.5,
+       "contrast": 1.2,
+       "saturation": 0.7,
+       "gamma": 0.8,
+       "colorRed": 255,
+       "colorGreen": 208,
+       "colorBlue": 176,
+       "bloom": 0.5,
+       "bloomBlur": 10,
+       "bevel": 1,
+       "bevelThickness": 18,
+       "bevelRotation": 30,
+       "bevelRed": 255,
+       "bevelGreen": 184,
+       "bevelBlue": 148
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_008",
+     "no": 8,
+     "name": "面光（黄昏）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":203,\"colorBlue\":171,\"bloom\":0.6,\"bloomBrightness\":0.8,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.5,\"contrast\":1,\"saturation\":0.7,\"gamma\":1,\"colorRed\":255,\"colorGreen\":208,\"colorBlue\":176,\"bloom\":0.4,\"bloomBrightness\":1.8,\"bloomBlur\":10,\"bevel\":0.3,\"bevelThickness\":18,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":184,\"bevelBlue\":148} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 203,
+       "colorBlue": 171,
+       "bloom": 0.6,
+       "bloomBrightness": 0.8,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.5,
+       "contrast": 1,
+       "saturation": 0.7,
+       "gamma": 1,
+       "colorRed": 255,
+       "colorGreen": 208,
+       "colorBlue": 176,
+       "bloom": 0.4,
+       "bloomBrightness": 1.8,
+       "bloomBlur": 10,
+       "bevel": 0.3,
+       "bevelThickness": 18,
+       "bevelRotation": 30,
+       "bevelRed": 255,
+       "bevelGreen": 184,
+       "bevelBlue": 148
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_009",
+     "no": 9,
+     "name": "面光（白天）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.8,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":227,\"colorGreen\":227,\"colorBlue\":227,\"bloom\":0.7,\"bloomBrightness\":0.8,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.75,\"contrast\":1,\"saturation\":0.8,\"gamma\":0.7,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.5,\"bloomBrightness\":1,\"bloomBlur\":10,\"bevel\":0.5,\"bevelThickness\":18,\"bevelRotation\":30,\"bevelRed\":196,\"bevelGreen\":185,\"bevelBlue\":185} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.8,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 227,
+       "colorGreen": 227,
+       "colorBlue": 227,
+       "bloom": 0.7,
+       "bloomBrightness": 0.8,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.75,
+       "contrast": 1,
+       "saturation": 0.8,
+       "gamma": 0.7,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.5,
+       "bloomBrightness": 1,
+       "bloomBlur": 10,
+       "bevel": 0.5,
+       "bevelThickness": 18,
+       "bevelRotation": 30,
+       "bevelRed": 196,
+       "bevelGreen": 185,
+       "bevelBlue": 185
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_010",
+     "no": 10,
+     "name": "面光[清晨/黄昏（轻）]",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":234,\"colorBlue\":214,\"bloom\":1,\"bloomBrightness\":0.7,\"bloomBlur\":10} -target=bg-main -duration=0 -next;",
+     "fig": "setTransform:{\"brightness\":0.8,\"contrast\":1.1,\"saturation\":0.9,\"gamma\":0.8,\"colorRed\":242,\"colorGreen\":216,\"colorBlue\":194,\"bloom\":0.5,\"bloomBrightness\":0.8,\"bloomBlur\":10,\"bevel\":1,\"bevelThickness\":15,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":212,\"bevelBlue\":176} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": true,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 234,
+       "colorBlue": 214,
+       "bloom": 1,
+       "bloomBrightness": 0.7,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.8,
+       "contrast": 1.1,
+       "saturation": 0.9,
+       "gamma": 0.8,
+       "colorRed": 242,
+       "colorGreen": 216,
+       "colorBlue": 194,
+       "bloom": 0.5,
+       "bloomBrightness": 0.8,
+       "bloomBlur": 10,
+       "bevel": 1,
+       "bevelThickness": 15,
+       "bevelRotation": 30,
+       "bevelRed": 255,
+       "bevelGreen": 212,
+       "bevelBlue": 176
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_011",
+     "no": 11,
+     "name": "淡色黄昏",
+     "cmd": "setTransform",
+     "bg": null,
+     "fig": "setTransform:{\"brightness\":1,\"contrast\":1,\"saturation\":1.5,\"colorRed\":255,\"colorGreen\":251,\"colorBlue\":217,\"bloomThreshold\":10,\"bevel\":1,\"bevelThickness\":15,\"bevelSoftness\":1,\"bevelRed\":253,\"bevelGreen\":255,\"bevelBlue\":181} -target=fig-center -duration=0;",
+     "bg_meta": {
+      "target": "",
+      "duration": null,
+      "next": false,
+      "params": null
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 1,
+       "contrast": 1,
+       "saturation": 1.5,
+       "colorRed": 255,
+       "colorGreen": 251,
+       "colorBlue": 217,
+       "bloomThreshold": 10,
+       "bevel": 1,
+       "bevelThickness": 15,
+       "bevelSoftness": 1,
+       "bevelRed": 253,
+       "bevelGreen": 255,
+       "bevelBlue": 181
+      }
+     },
+     "notes": []
+    },
+    {
+     "id": "film_012",
+     "no": 12,
+     "name": "室内有光暖色",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.9,\"contrast\":0.8,\"saturation\":0.5,\"gamma\":0.6,\"colorRed\":255,\"colorGreen\":218,\"colorBlue\":184,\"bloom\":1,\"bloomBrightness\":0.8,\"bloomBlur\":2,\"bevelRed\":255,\"bevelGreen\":194,\"bevelBlue\":125} -next -target=bg-main -duration=0;",
+     "fig": "setTransform:{\"brightness\":0.75,\"contrast\":1.1,\"saturation\":0.8,\"gamma\":1,\"colorRed\":255,\"colorGreen\":234,\"colorBlue\":217,\"bloom\":0.6,\"bloomBrightness\":0.7,\"bloomBlur\":1,\"bevel\":2,\"bevelThickness\":5,\"bevelRotation\":80,\"bevelRed\":255,\"bevelGreen\":201,\"bevelBlue\":125} -next -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.9,
+       "contrast": 0.8,
+       "saturation": 0.5,
+       "gamma": 0.6,
+       "colorRed": 255,
+       "colorGreen": 218,
+       "colorBlue": 184,
+       "bloom": 1,
+       "bloomBrightness": 0.8,
+       "bloomBlur": 2,
+       "bevelRed": 255,
+       "bevelGreen": 194,
+       "bevelBlue": 125
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.75,
+       "contrast": 1.1,
+       "saturation": 0.8,
+       "gamma": 1,
+       "colorRed": 255,
+       "colorGreen": 234,
+       "colorBlue": 217,
+       "bloom": 0.6,
+       "bloomBrightness": 0.7,
+       "bloomBlur": 1,
+       "bevel": 2,
+       "bevelThickness": 5,
+       "bevelRotation": 80,
+       "bevelRed": 255,
+       "bevelGreen": 201,
+       "bevelBlue": 125
+      }
+     },
+     "notes": [
+      "人物行原文省略 -target，按默认补 fig-center"
+     ]
+    },
+    {
+     "id": "film_013",
+     "no": 13,
+     "name": "清爽版室内白天（虚影没加滤镜）（记得自己改人物名）",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":1.1,\"saturation\":0.8,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.5,\"bloomBrightness\":1,\"bloomBlur\":10} -next -target=bg-main -duration=0;",
+     "fig": "setTransform:{\"brightness\":0.6,\"contrast\":1.1,\"saturation\":0.9,\"gamma\":0.9,\"colorRed\":255,\"colorGreen\":234,\"colorBlue\":217,\"bloom\":0.7,\"bloomBrightness\":1,\"bloomBlur\":2,\"bevel\":1,\"bevelThickness\":4,\"bevelRotation\":30,\"bevelRed\":255,\"bevelGreen\":238,\"bevelBlue\":224} -next -target=素世1 -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 1.1,
+       "saturation": 0.8,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.5,
+       "bloomBrightness": 1,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.6,
+       "contrast": 1.1,
+       "saturation": 0.9,
+       "gamma": 0.9,
+       "colorRed": 255,
+       "colorGreen": 234,
+       "colorBlue": 217,
+       "bloom": 0.7,
+       "bloomBrightness": 1,
+       "bloomBlur": 2,
+       "bevel": 1,
+       "bevelThickness": 4,
+       "bevelRotation": 30,
+       "bevelRed": 255,
+       "bevelGreen": 238,
+       "bevelBlue": 224
+      }
+     },
+     "notes": [
+      "人物行原文 -target=素世1（占位名），按 fig-center 处理"
+     ]
+    },
+    {
+     "id": "film_014",
+     "no": 14,
+     "name": "夜晚室内白光",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.7,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":1,\"bloomBrightness\":1,\"bloomBlur\":2} -next -target=bg-main -duration=500;",
+     "fig": "setTransform:{\"brightness\":0.6,\"contrast\":1.1,\"saturation\":0.9,\"gamma\":0.9,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.5,\"bloomBrightness\":1,\"bloomBlur\":2,\"bevel\":1,\"bevelThickness\":8,\"bevelRotation\":30,\"bevelRed\":204,\"bevelGreen\":204,\"bevelBlue\":204} -next -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 500,
+      "next": false,
+      "params": {
+       "brightness": 0.7,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 1,
+       "bloomBrightness": 1,
+       "bloomBlur": 2
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.6,
+       "contrast": 1.1,
+       "saturation": 0.9,
+       "gamma": 0.9,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.5,
+       "bloomBrightness": 1,
+       "bloomBlur": 2,
+       "bevel": 1,
+       "bevelThickness": 8,
+       "bevelRotation": 30,
+       "bevelRed": 204,
+       "bevelGreen": 204,
+       "bevelBlue": 204
+      }
+     },
+     "notes": [
+      "人物行原文省略 -target，按默认补 fig-center"
+     ]
+    },
+    {
+     "id": "film_015",
+     "no": 15,
+     "name": "白天室外晴天",
+     "cmd": "setTransform",
+     "bg": "setTransform:{\"brightness\":0.8,\"contrast\":0.8,\"saturation\":0.7,\"gamma\":0.5,\"colorRed\":227,\"colorGreen\":227,\"colorBlue\":227,\"bloom\":0.7,\"bloomBrightness\":1,\"bloomBlur\":10} -next -target=bg-main -duration=500;",
+     "fig": "setTransform:{\"brightness\":0.75,\"contrast\":1,\"saturation\":0.8,\"gamma\":0.7,\"colorRed\":255,\"colorGreen\":255,\"colorBlue\":255,\"bloom\":0.5,\"bloomBrightness\":0.85,\"bloomBlur\":4,\"bevel\":0.5,\"bevelThickness\":8,\"bevelRotation\":30,\"bevelRed\":196,\"bevelGreen\":185,\"bevelBlue\":185} -next -duration=0;",
+     "bg_meta": {
+      "target": "bg-main",
+      "duration": 500,
+      "next": false,
+      "params": {
+       "brightness": 0.8,
+       "contrast": 0.8,
+       "saturation": 0.7,
+       "gamma": 0.5,
+       "colorRed": 227,
+       "colorGreen": 227,
+       "colorBlue": 227,
+       "bloom": 0.7,
+       "bloomBrightness": 1,
+       "bloomBlur": 10
+      }
+     },
+     "fig_meta": {
+      "target": "fig-center",
+      "duration": 0,
+      "next": false,
+      "params": {
+       "brightness": 0.75,
+       "contrast": 1,
+       "saturation": 0.8,
+       "gamma": 0.7,
+       "colorRed": 255,
+       "colorGreen": 255,
+       "colorBlue": 255,
+       "bloom": 0.5,
+       "bloomBrightness": 0.85,
+       "bloomBlur": 4,
+       "bevel": 0.5,
+       "bevelThickness": 8,
+       "bevelRotation": 30,
+       "bevelRed": 196,
+       "bevelGreen": 185,
+       "bevelBlue": 185
+      }
+     },
+     "notes": [
+      "人物行原文省略 -target，按默认补 fig-center"
+     ]
+    }
+   ]
+  }
+ ]
+}
