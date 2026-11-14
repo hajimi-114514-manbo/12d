@@ -814,19 +814,22 @@ def _l2d_valid(d):
 
 
 def _asset_lib_core_dir():
-    """素材库里的 core 目录（**v3.4.2 起的主依赖位**）：assets_library/lib/。
-    定位口径与 webgal_import.asset_index_path 对齐：env MUPPET_ASSET_INDEX
-    覆盖（指 json 或 asset_library 目录都行），否则默认同级 webgal_games
-    部署位。返回路径，不保证存在（调用方查 _l2d_valid）。"""
-    env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
-    if env:
-        p = os.path.normpath(env)
-        root = p if os.path.isdir(p) else os.path.dirname(p)
-    else:
-        here = os.path.dirname(os.path.abspath(__file__))
-        root = os.path.normpath(os.path.join(
-            here, "..", "webgal_games", "asset_library"))
-    return os.path.join(root, "lib")
+    """素材库里的 core 目录（v3.4.2 起的主依赖位）：asset_library/lib/。
+    定位统一委托 asset_paths（程序目录/asset_library > 开发机布局 > 注册表，
+    env MUPPET_ASSET_INDEX 硬限定）。返回路径，不保证存在。"""
+    try:
+        import asset_paths as _AP
+        return _AP.core_dir()
+    except Exception:
+        env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
+        if env:
+            p = os.path.normpath(env)
+            root = p if os.path.isdir(p) else os.path.dirname(p)
+        else:
+            here = os.path.dirname(os.path.abspath(__file__))
+            root = os.path.normpath(os.path.join(
+                here, "..", "webgal_games", "asset_library"))
+        return os.path.join(root, "lib")
 
 
 def _find_live2d_core(rt_dir=None):

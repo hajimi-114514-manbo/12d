@@ -127,17 +127,23 @@ _LIB_CACHE = {"path": None, "mtime": -1.0, "size": -1,
 
 
 def asset_index_path():
-    """asset_index.json 绝对路径（env 覆盖 > 默认同级 webgal_games 部署位）。
-    只给路径，不保证存在。"""
-    env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
-    here = os.path.dirname(os.path.abspath(__file__))
-    if env:
-        p = os.path.normpath(env)
-        if os.path.isdir(p):
-            p = os.path.join(p, "asset_index.json")
-        return p
-    return os.path.normpath(os.path.join(
-        here, "..", "webgal_games", "asset_library", "asset_index.json"))
+    """asset_index.json 绝对路径。定位统一委托 asset_paths（v3.4.2 起）：
+    env 覆盖 > 程序目录/asset_library > 开发机 ../webgal_games/asset_library
+    > 注册表手工指定。只给路径，不保证存在。"""
+    try:
+        import asset_paths as _AP
+        return _AP.asset_index_path()
+    except Exception:
+        # 兜底（asset_paths 缺失也不炸）：保持旧行为
+        env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
+        here = os.path.dirname(os.path.abspath(__file__))
+        if env:
+            p = os.path.normpath(env)
+            if os.path.isdir(p):
+                p = os.path.join(p, "asset_index.json")
+            return p
+        return os.path.normpath(os.path.join(
+            here, "..", "webgal_games", "asset_library", "asset_index.json"))
 
 
 def load_asset_index():

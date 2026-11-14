@@ -5,6 +5,48 @@
 
 ---
 
+## v3.4.3（2026-11-14 21:0x）素材库定位修复：装到任意目录也能找到
+
+> 打包安装包时实测发现的**真 bug**，不是理论风险：v3.4.2 把 core 放进素材库
+> 后，各模块仍按 `程序目录/../webgal_games/asset_library` 推断素材库位置——
+> 那是**开发机布局**（`D:\work\puppet\muppet_studio` 与 `D:\work\puppet\
+> webgal_games` 平级）。真实用户把程序装到安装器让其自选的任意目录时，
+> 这个推断必然落空 → core 找不到、素材索引 1471 条全丢。
+> 实测复现：装到 `D:\scripts\temp\install_test_v342` 后
+> `_find_live2d_core()` 返回 None、`load_asset_index()` 报素材库未构建。
+
+- 新增 **`asset_paths.py`**（唯一口径，import 零副作用），候选链：
+  ①env `MUPPET_ASSET_INDEX`（**硬限定**，测试隔离用，设了就只认它）
+  ②`<程序目录>/asset_library`（**推荐部署位**：解压到程序目录旁即可）
+  ③`<程序目录>/../webgal_games/asset_library`（开发机布局，兼容源码树）
+  ④`<程序目录>/../asset_library`
+  ⑤注册表 `HKCU\Software\MuppetStudio\AssetLibraryDir`（用户手工指定）
+  判定"是素材库"的唯一标准：目录里有 `asset_index.json`。
+  全不命中时返回 ②，由调用方按"缺失"降级（不崩）。
+- `webgal_import.asset_index_path` / `webgal_export._asset_lib_core_dir` /
+  `webgal_preview._asset_lib_core_dir` 三处全部改为委托 `asset_paths`，
+  并各自保留 try/except 兜底（`asset_paths` 缺失也不炸，回退旧行为）。
+  这消掉了"三处各写一套相对路径、各自可能算错"的隐患。
+- `asset_paths.describe()` 提供诊断（候选列表 + 各自是否命中），
+  排查"为什么找不到素材库"时直接看这个。
+
+验收（真实安装 + 真实部署，整合包物理移走）：
+装 `--fresh D:\scripts\temp\final_install_test` → 素材库解压到程序目录旁 →
+`asset_library_dir()` 命中程序目录下那份、`core_dir()` 存在、
+`load_asset_index()` **1471 条**、非 playable 导出
+`live2d_core=True` 零警告、core 两文件落地 `lib/`、
+`start.txt` 内含 core 补丁注释、水印 v3.4.2→**v3.4.3**。
+
+安装包重打（含 `asset_paths.py`，条目 406→407）：
+`MuppetStudio-Setup.exe` 419.23 MB；`installer_verify.py` **28/28**；
+`--fresh` 实测 20,454 文件 / 1246.2 MB。
+测试：selfcontained 22/0、webgal_export 0 退出、webgal_import 0 退出、
+asset_library 0 退出、stage_view 0 FAIL。
+
+---
+
+
+
 ## v3.4.2（2026-11-14 20:4x）完全独立：Live2D core 随素材库交付
 
 > 用户诉求原话："用户电脑里没有'整合包-B站北风的猫5306教学整合版'怎么办，

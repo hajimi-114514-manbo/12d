@@ -112,17 +112,20 @@ def _find_runtime_es(runtime_dir):
 
 
 def _asset_lib_core_dir():
-    """素材库 core 目录（v3.4.2 起的主依赖位，与 webgal_export 同口径）：
-    env MUPPET_ASSET_INDEX 覆盖（json 或 asset_library 目录皆可），否则默认
-    同级 webgal_games 部署位。返回路径，不保证存在。"""
-    env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
-    if env:
-        p = os.path.normpath(env)
-        root = p if os.path.isdir(p) else os.path.dirname(p)
-    else:
-        root = os.path.normpath(os.path.join(
-            _V_DIR, "..", "webgal_games", "asset_library"))
-    return os.path.join(root, "lib")
+    """素材库 core 目录（v3.4.2 起主位，定位统一委托 asset_paths：程序目录/
+    asset_library > 开发机布局 > 注册表；env MUPPET_ASSET_INDEX 硬限定）。"""
+    try:
+        import asset_paths as _AP
+        return _AP.core_dir()
+    except Exception:
+        env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
+        if env:
+            p = os.path.normpath(env)
+            root = p if os.path.isdir(p) else os.path.dirname(p)
+        else:
+            root = os.path.normpath(os.path.join(
+                _V_DIR, "..", "webgal_games", "asset_library"))
+        return os.path.join(root, "lib")
 
 
 def _find_lib_dir(lib_dir=None):
