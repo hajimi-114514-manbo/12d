@@ -43,6 +43,58 @@ from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
 import anim as A          # v2.11.0 关键帧动画数据层
 from timeline_panel import TimelinePanel   # v2.11.0 时间轴面板
 
+# task-27 / A4：DSH 联动远程控制。remote_control 是纯 stdlib 模块，import 容错
+# （万一缺失，菜单只显示状态、点击给提示，不影响主程序）。
+try:
+    import remote_control as RC
+except Exception:            # pragma: no cover - 环境缺模块时退化
+    RC = None
+
+# 当前打开的视频窗登记表（win, wb），DSH 联动据此找要接管的工作台
+_VIDEO_WINS = []
+
+
+def _register_video_win(win, wb):
+    """登记一个视频窗；窗口销毁时自动注销（防泄漏）。"""
+    _VIDEO_WINS.append((win, wb))
+    try:
+        win.destroyed.connect(lambda *a, w=win: _unregister_video_win(w))
+    except Exception:
+        pass
+
+
+def _unregister_video_win(win):
+    for i, (w, _wb) in enumerate(list(_VIDEO_WINS)):
+        if w is win:
+            _VIDEO_WINS.pop(i)
+            return
+
+
+def _dsh_running():
+    """DSH 联动是否已开启（remote_control 未装/未启动都返回 False）。"""
+    if RC is None:
+        return False
+    try:
+        return bool(RC.is_running())
+    except Exception:
+        return False
+
+
+def _dsh_port():
+    try:
+        import remote_control as _rc
+        return _rc._port()
+    except Exception:
+        return 8765
+
+
+def _current_video_wb():
+    """最近打开的视频窗工作台（DSH 联动的接管对象）。"""
+    for _win, wb in reversed(_VIDEO_WINS):
+        if wb is not None:
+            return wb
+    return None
+
 class ToggleDropDownButton(TransparentDropDownPushButton):
     """下拉按钮自管理开合状态，不依赖 isVisible() 时机：
     - Popup 抓取失效（frameless 常见）：第二次点击的 release 会到达按钮 -> 按 _open 标志 close
@@ -109,7 +161,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.3.0"
+VERSION = "3.4.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -273,6 +325,7 @@ class History:
         self.limit = limit
         self.undo_stack = []
         self.redo_stack = []
+        self.changes = 0        # 单调变更计数（v3.4.0 未保存退出守卫用；seed 清零）
 
     def snapshot(self, studio):
         if studio.rig is None:
@@ -299,6 +352,7 @@ class History:
         """载入后播基线：undo_stack=[当前]"""
         self.undo_stack.clear()
         self.redo_stack.clear()
+        self.changes = 0        # 载入/新建 = 干净基线
         snap = self.snapshot(studio)
         if snap is not None:
             self.undo_stack.append(snap)
@@ -316,6 +370,7 @@ class History:
            snap.get("keyframes") == prev.get("keyframes"):
             return                               # 无变化不压栈
         self.undo_stack.append(snap)
+        self.changes += 1       # 真实入栈才算一次变更（无变化早退不加）
         if len(self.undo_stack) > self.limit:
             self.undo_stack.pop(0)
         self.redo_stack.clear()
@@ -1855,16 +1910,19 @@ class AssetMenuMixin:
         except Exception:
             pass
 
-        # 运行环境（最影响"装完能不能打开"）
+        # 运行环境（最影响"装完能不能打开"；runtime_pack=WebGAL 官方运行时，
+        # E1 条目 kind 用的是 runtime_pack，匹配必须带上，否则菜单不露出
+        # 且会漏进下面"模型"组）
         self.asset_menu.addAction(Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
         for a in AC.ASSETS:
-            if (a.get("kind") or "") == "runtime":
+            if (a.get("kind") or "") in ("runtime", "runtime_pack"):
                 self._add_asset_action(a, a.get("id") not in miss)
         self.asset_menu.addSeparator()
         # 模型
         self.asset_menu.addAction(Action(FluentIcon.FOLDER, "— 模型 —"))
         for a in AC.ASSETS:
-            if (a.get("kind") or "model") not in ("runtime", "accel"):
+            if (a.get("kind") or "model") not in ("runtime", "runtime_pack",
+                                                  "accel"):
                 self._add_asset_action(a, a.get("id") not in miss)
         # 推理加速（CUDA 分卷包，N 卡用户提速）
         accel = [a for a in AC.ASSETS if (a.get("kind") or "") == "accel"]
@@ -1874,10 +1932,42 @@ class AssetMenuMixin:
                 Action(FluentIcon.UP, "— 推理加速 —"))
             for a in accel:
                 self._add_asset_action(a, a.get("id") not in miss)
+        # task-27 / A4：DSH 联动开关（远程命令通道，两窗口共享）
+        self.asset_menu.addSeparator()
+        self.asset_menu.addAction(Action(
+            FluentIcon.LINK,
+            "DSH 联动：%s（端口 %d）" % (
+                "开启" if _dsh_running() else "关闭", _dsh_port()),
+            triggered=self._dsh_link_toggle))
         self.asset_menu.addSeparator()
         self.asset_menu.addAction(Action(
             FluentIcon.SYNC, "刷新状态",
             triggered=self._rebuild_asset_menu))
+
+    def _dsh_link_toggle(self):
+        """切换 DSH 联动：开启则接管当前视频窗工作台，关闭则停服务。"""
+        if RC is None:
+            InfoBar.warning("DSH 联动", "remote_control 模块缺失，无法开启",
+                            parent=self, position=InfoBarPosition.TOP, duration=3500)
+            return
+        if _dsh_running():
+            RC.stop()
+            InfoBar.info("DSH 联动", "已关闭远程命令通道",
+                         parent=self, position=InfoBarPosition.TOP, duration=2000)
+            return
+        wb = _current_video_wb()
+        if wb is None:
+            InfoBar.warning("DSH 联动", "请先打开视频工程",
+                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            return
+        try:
+            port = RC.start(wb)
+            InfoBar.success("DSH 联动",
+                            "远程命令通道已开启：127.0.0.1:%d（POST /cmd，仅本机）" % port,
+                            parent=self, position=InfoBarPosition.TOP, duration=3500)
+        except Exception as e:
+            InfoBar.error("DSH 联动", "启动失败：%s" % e,
+                          parent=self, position=InfoBarPosition.TOP, duration=4000)
 
     def _add_asset_action(self, a, done, menu=None):
         """往指定菜单加一条资产项：已装显示 ✔+占用，未装显示 ⬇+体积并可点击下载；
@@ -4029,6 +4119,8 @@ class Workbench(AssetMenuMixin, QWidget):
                     shutil.copy2(src, dst)
             InfoBar.success("已保存", os.path.join(d, "rig_project.json"),
                             parent=self, position=InfoBarPosition.TOP, duration=2500)
+            # v3.4.0 未保存退出守卫：写盘成功才刷新干净基线（save/saveas 都走这）
+            self._saved_changes = getattr(self.history, "changes", 0)
         except Exception as e:
             InfoBar.error("保存失败", str(e)[:200], parent=self,
                           position=InfoBarPosition.TOP, duration=4000)
@@ -4584,6 +4676,27 @@ class MainWindow(FluentWindow):
         QShortcut(QKeySequence("Ctrl+="), self, activated=lambda: cv.zoom_step(True))
         QShortcut(QKeySequence("Ctrl+-"), self, activated=lambda: cv.zoom_step(False))
 
+    def _wb_save_for_exit(self):
+        """closeEvent 专用 do_save：act_save（可能转另存为）后，
+        以「基线是否已追平变更」判定保存成功。返回 bool。"""
+        wb = self.wb
+        wb.act_save()
+        return wb.history.changes == getattr(wb, "_saved_changes", None)
+
+    def closeEvent(self, ev):
+        """v3.4.0（task-30/B2）：未保存改动退出守卫。
+        脏判据 = history.changes 与最近一次写盘基线不一致（保守：撤销回原状
+        仍算脏，与主流编辑器一致）。三态：保存并退出 / 直接退出 / 取消。"""
+        wb = getattr(self, "wb", None)
+        if wb is not None and getattr(wb, "rig", None) is not None:
+            if wb.history.changes != getattr(wb, "_saved_changes", 0):
+                import close_guard as CG
+                choice = CG.decide(self, lambda: True, self._wb_save_for_exit)
+                if choice == "cancel":
+                    ev.ignore()
+                    return
+        super().closeEvent(ev)
+
     def _toggle_nav(self):
         """折叠/展开最左导航栏：直接隐藏，布局自动把空间让给内容区"""
         self.nav_collapsed = not self.nav_collapsed
@@ -4753,6 +4866,24 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
                 pass
         self.navigationInterface.setVisible(False)
 
+    def closeEvent(self, ev):
+        """v3.4.0（task-30/B2）：视频窗未保存退出守卫（wb.project_dirty 直读）。"""
+        wb = getattr(self, "_wb", None)
+        if wb is not None:
+            try:
+                dirty = bool(wb.project_dirty())
+            except Exception:
+                dirty = False
+            if dirty:
+                import close_guard as CG
+                choice = CG.decide(
+                    self, lambda: True,
+                    lambda: wb.save_project(ask=True))
+                if choice == "cancel":
+                    ev.ignore()
+                    return
+        super().closeEvent(ev)
+
     def setCentralInterface(self, w, text="视频工程"):
         w.setObjectName("centralIface")
         self.addSubInterface(w, FluentIcon.VIDEO, text)
@@ -4817,6 +4948,132 @@ def _video_open_recent(win, wb, d, set_proj):
         set_proj(os.path.basename(d))
 
 
+def _video_import_script(win, wb):
+    """文件 → 导入脚本…：选 WebGAL 场景脚本 -> 解析 -> 载入工程。
+
+    只视频窗有（欢迎窗/主工作台不加）。后台线程跑解析，完成后用
+    QTimer.singleShot(0, wb, done) 回主线程落工程（本机 PySide6 无
+    QObject.after，见 remote_control._schedule 的同款处理）。
+    """
+    if getattr(wb, "_script_busy", False):
+        InfoBar.info("导入中", "请等待当前导入完成", parent=win,
+                     position=InfoBarPosition.TOP, duration=1800)
+        return
+    script, _ = QFileDialog.getOpenFileName(
+        win, "选择 WebGAL 场景脚本", "", "WebGAL 场景脚本 (*.txt)")
+    if not script:
+        return
+    # 资源根目录推断：脚本所在目录名 == "game" 即用之，否则手选
+    game_dir = None
+    d = os.path.dirname(os.path.abspath(script))
+    if os.path.basename(d) == "game":
+        game_dir = d
+    else:
+        game_dir = QFileDialog.getExistingDirectory(
+            win, "选择 WebGAL 游戏目录（含 game/ 资源）", "")
+    if not game_dir:
+        return
+    wb._script_busy = True
+    pg = getattr(wb, "prog", None)        # 视频窗无 prog 控件时静默
+    if pg is not None:
+        pg.setText("导入脚本：解析中…")
+
+    def work():
+        try:
+            import webgal_import as WI
+            ok, msg, proj = WI.import_script(
+                script, game_dir,
+                width=int(wb.proj.get("width", 1920)),
+                height=int(wb.proj.get("height", 1080)),
+                fps=float(wb.proj.get("fps", 30)))
+        except Exception as e:
+            ok, msg, proj = False, "导入异常 %s: %s" % (type(e).__name__, e), None
+
+        def done():
+            wb._script_busy = False
+            if ok and proj:
+                wb._sources.close_all()
+                wb.proj = proj
+                wb._loading = True
+                try:
+                    wb._apply_project(None)
+                finally:
+                    wb._loading = False
+                wb.push_history()
+                wb.seek(0.0)
+                InfoBar.success("导入脚本", msg, parent=win,
+                                position=InfoBarPosition.TOP, duration=4000)
+            else:
+                pg = getattr(wb, "prog", None)
+                if pg is not None:
+                    pg.setText("导入脚本失败")
+                InfoBar.warning("导入脚本", msg or "导入失败", parent=win,
+                                position=InfoBarPosition.TOP, duration=5000)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, wb, done)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
+def _video_export_webgal(win, wb):
+    """文件 → 导出 WebGAL 工程…：选目录 -> 可选含运行时 -> 后台导出。
+
+    小确认框带 CheckBox「包含运行时(可双击直接玩)」默认不勾；后台线程跑
+    export_game，完成后 QTimer 回主线程 InfoBar 报 stats + 开目录。
+    """
+    if getattr(wb, "_webgal_busy", False):
+        InfoBar.info("导出中", "请等待当前导出完成", parent=win,
+                     position=InfoBarPosition.TOP, duration=1800)
+        return
+    out_dir = QFileDialog.getExistingDirectory(win, "导出 WebGAL 工程", "")
+    if not out_dir:
+        return
+    from PySide6.QtWidgets import (QDialog, QVBoxLayout, QCheckBox,
+                                   QDialogButtonBox)
+    dlg = QDialog(win)
+    dlg.setWindowTitle("导出 WebGAL 工程")
+    lay = QVBoxLayout(dlg)
+    cb = QCheckBox("包含运行时(可双击直接玩)")
+    cb.setChecked(False)
+    lay.addWidget(cb)
+    bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    bb.accepted.connect(dlg.accept)
+    bb.rejected.connect(dlg.reject)
+    lay.addWidget(bb)
+    if dlg.exec() != QDialog.Accepted:
+        return
+    playable = cb.isChecked()
+    wb._webgal_busy = True
+
+    def work():
+        try:
+            import webgal_export as WX
+            ok, msg, stats = WX.export_game(
+                wb.proj, out_dir,
+                proj_dir=getattr(wb, "proj_dir", None), playable=playable)
+        except Exception as e:
+            ok, msg, stats = False, "导出异常 %s: %s" % (type(e).__name__, e), None
+
+        def done():
+            wb._webgal_busy = False
+            if ok:
+                InfoBar.success("WebGAL 导出", msg, parent=win,
+                                position=InfoBarPosition.TOP, duration=4000)
+                try:
+                    from PySide6.QtGui import QDesktopServices
+                    from PySide6.QtCore import QUrl
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(out_dir))
+                except Exception:
+                    pass
+            else:
+                InfoBar.warning("WebGAL 导出", msg or "导出失败", parent=win,
+                                position=InfoBarPosition.TOP, duration=5000)
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, wb, done)
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def _build_video_menus(win, wb, set_proj):
     """视频窗口顶部三菜单（文件/编辑/资产管理），挂 shell 标题栏左上横排。
 
@@ -4834,8 +5091,12 @@ def _build_video_menus(win, wb, set_proj):
                         triggered=lambda: _video_save(wb, set_proj)))
     mf.addAction(Action(FluentIcon.SAVE_AS, "另存为",
                         triggered=lambda: _video_save_as(win, wb, set_proj)))
+    mf.addAction(Action(FluentIcon.FOLDER_ADD, "导入脚本…",
+                        triggered=lambda: _video_import_script(win, wb)))
     mf.addAction(Action(FluentIcon.PLAY, "导出视频",
                         triggered=wb._open_export_dialog))
+    mf.addAction(Action(FluentIcon.SEND, "导出 WebGAL 工程…",
+                        triggered=lambda: _video_export_webgal(win, wb)))
     mf.addSeparator()
     # 最近工程：只列 type=video 的工程，点击=打开工程同款流程
     recent = RoundMenu("最近工程", parent=win)
@@ -4882,12 +5143,27 @@ def _build_video_menus(win, wb, set_proj):
     return fb, eb, win.asset_btn
 
 
+def _show_maximized(win):
+    """v3.4.0：进工作台默认最大化（showMaximized 而非 showFullScreen，保留标题栏）。
+
+    offscreen/CI 平台上 qframelesswindow 的 Win32 句柄查询会抛
+    「无效的窗口句柄」，这里吞掉降级为普通尺寸窗口——测试不因平台崩，
+    真 Windows 桌面正常最大化。"""
+    win.show()
+    try:
+        win.showMaximized()
+    except Exception:
+        pass
+
+
 def _open_video_window(proj_dir=None):
     """新建/打开视频工程。返回 (win, wb)；打开失败返回 None（留在欢迎页）。"""
     import video_workbench as VW
     win = FluentShellWindow()
     wb = VW.VideoWorkbench(None)
     win.setCentralInterface(wb)
+    _register_video_win(win, wb)      # task-27：登记供 DSH 联动接管（销毁自动注销）
+    win._wb = wb                       # task-30：closeEvent 未保存守卫取 wb
     # 标题闭包：打开 / 另存为 / 改脏都走它（抽出可复用，避免散落）
     title = {"name": "未命名视频工程"}
 
@@ -4925,7 +5201,7 @@ def _welcome_gate():
         否则 quitOnLastWindowClosed 会在两窗间隙里把应用退掉）"""
         win = MainWindow()
         holder["main"] = win
-        win.show()
+        _show_maximized(win)
         wel.close()
         try:
             fn(win)
@@ -4938,7 +5214,7 @@ def _welcome_gate():
             return False
         win, _wb = r
         holder["main"] = win
-        win.show()
+        _show_maximized(win)
         wel.close()
         return True
 
@@ -5006,6 +5282,8 @@ def run_app():
     # 时退出会卡死，py-spy 实锤）；并在启动 1.5s 后就预热——用户点资产
     # 菜单时缓存已就绪，且预热窗口远离正常退出时刻。
     app.aboutToQuit.connect(lambda: _APP_EXITING.__setitem__(0, True))
+    # task-27 / A4：退出前停掉 DSH 联动远程命令通道（RC 缺失时容错）
+    app.aboutToQuit.connect(lambda: (RC.stop() if RC is not None else None))
     QTimer.singleShot(1500, _start_tier_warmup)
     sys.exit(app.exec())
 

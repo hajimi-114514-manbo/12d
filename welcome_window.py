@@ -17,7 +17,7 @@ import json
 import os
 import time
 
-from PySide6.QtCore import Qt, Signal, QSize, QTimer
+from PySide6.QtCore import Qt, Signal, QSize, QTimer, QThread
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QFrame,
                                QAbstractItemView, QHeaderView, QSizePolicy,
@@ -30,6 +30,13 @@ from qfluentwidgets import (PrimaryPushButton, PushButton, LineEdit,
 
 # 更新检查（task-13）：只依赖它自己的 QtCore，方向单向，无循环 import
 import update_checker as _UC
+
+# git 源码同步（task-71）：**仅在用户点击检查更新时才被 import/调用**，
+# 模块 import 本体零网络零 git（见 git_sync 模块 docstring 第 3 条）。
+try:
+    import git_sync as _GS
+except Exception:                    # 环境缺 git 等极端情况：功能降级但不影响启动
+    _GS = None
 
 # 本文件与 l2d_rig_qt.py 同级（V2 根目录）；不 import 它（__main__ 双实例坑）
 _V2 = os.path.dirname(os.path.abspath(__file__))
@@ -547,6 +554,127 @@ class WelcomeWindow(QWidget):
                             parent=self, position=InfoBarPosition.TOP,
                             duration=6000)
             return
+        # task-71：点更新按钮时，**先**比 git 源码版本（本地 VERSION vs 远端），
+        # 远端更新才提示拉取；这一层是纯本地+一次 fetch，失败自动静默跳过，
+        # 不影响下面的安装包更新检查（两层可并存）。
+        self._try_git_sync_then_package_update()
+
+    # ---------------- git 源码同步（task-71，仅在点击后触发） ----------------
+    def _try_git_sync_then_package_update(self):
+        """先跑 git 版本比对（后台线程），再决定是否继续安装包检查。
+
+        - git_sync 不可用 / 非仓库 / 网络失败 -> 静默跳过，直接走安装包检查
+        - 本地已是最新/更新 -> 仅在状态栏提示，继续安装包检查
+        - 远端更新 + 工作区干净 -> 弹确认框，确认后后台覆盖；取消则走安装包检查
+        - 远端更新 + 工作区有未提交改动 -> 明确提示先提交，**不提供强制覆盖**
+        """
+        if _GS is None:
+            self._start_package_update()
+            return
+
+        self.btn_update.setEnabled(False)
+        self.update_lbl.setText("检查源码版本…")
+
+        class _GitCheckThread(QThread):
+            done = Signal(object)
+
+            def run(self):
+                try:
+                    st = _GS.state()
+                except Exception as e:
+                    st = {"ok": False, "msg": "检测异常：%s" % e}
+                self.done.emit(st)
+
+        def on_done(st):
+            self.btn_update.setEnabled(True)
+            self.update_lbl.setText("")
+            try:
+                self._handle_git_state(st)
+            except Exception:
+                self._start_package_update()
+
+        th = _GitCheckThread(self)
+        th.done.connect(on_done)
+        self._git_thread = th
+        th.start()
+
+    def _handle_git_state(self, st):
+        """处理 git 检测结果，必要时弹确认框，最后接续安装包更新。"""
+        rel = st.get("relation")
+        lv, rv = st.get("local_version"), st.get("remote_version")
+        dirty = st.get("dirty_files") or []
+        if not st.get("ok"):
+            # 非仓库/无网/git 缺失：静默降级，不打扰用户
+            self._start_package_update()
+            return
+        if rel in ("same", "local_newer"):
+            self.update_lbl.setText("源码已是 v%s" % (lv or "?"))
+            QTimer.singleShot(4000, lambda: self.update_lbl.setText(""))
+            self._start_package_update()
+            return
+        if rel != "remote_newer":
+            self._start_package_update()
+            return
+        # ---- 远端更新 ----
+        if dirty:
+            names = "、".join(os.path.basename(x) for x in dirty[:5])
+            more = " 等 %d 个文件" % len(dirty) if len(dirty) > 5 else ""
+            InfoBar.warning(
+                "源码有新版本 v%s，但本地有未提交改动" % (rv or "?"),
+                "检测到 %d 个未提交改动（%s%s）。\n"
+                "为保护在途工作，未做任何覆盖。请先提交或暂存后再更新。"
+                % (len(dirty), names, more),
+                parent=self, position=InfoBarPosition.TOP, duration=10000)
+            self.update_lbl.setText("源码有新版本，本地有未提交改动")
+            QTimer.singleShot(6000, lambda: self.update_lbl.setText(""))
+            self._start_package_update()
+            return
+        box = MessageBoxBase(self)
+        box.titleLabel.setText("源码有新版本")
+        box.contentLabel.setText(
+            "本地 v%s → 远端 v%s\n\n"
+            "将备份后覆盖 %s 等改动文件（只动有差异的文件）。\n"
+            "备份目录：%%TEMP%%\\muppet_gitsync\\，覆盖后重启应用生效。\n\n"
+            "是否现在更新源码？" % (lv or "?", rv or "?",
+                                  (st.get("_first_file") or "远端改动文件")))
+        box.yesButton.setText("更新源码")
+        box.cancelButton.setText("暂不更新")
+        if not box.exec():
+            self._start_package_update()
+            return
+        # 确认更新：后台执行覆盖
+        self.update_lbl.setText("正在更新源码…")
+
+        class _GitPullThread(QThread):
+            done = Signal(bool, str, object)
+
+            def run(self):
+                try:
+                    ok, msg, rep = _GS.pull_overwrite()
+                except Exception as e:
+                    ok, msg, rep = False, "更新异常：%s" % e, {}
+                self.done.emit(ok, msg, rep)
+
+        def on_pulled(ok, msg, rep):
+            self.update_lbl.setText("")
+            if ok:
+                InfoBar.success(
+                    "源码已更新到 v%s" % (rv or "?"), msg + "\n重启应用后生效",
+                    parent=self, position=InfoBarPosition.TOP, duration=10000)
+            else:
+                InfoBar.error("源码更新未完成", msg,
+                              parent=self, position=InfoBarPosition.TOP,
+                              duration=10000)
+            # 源码更新与安装包更新互不冲突，继续走安装包检查
+            self._start_package_update()
+
+        th = _GitPullThread(self)
+        th.done.connect(on_pulled)
+        self._git_pull_thread = th
+        th.start()
+
+    def _start_package_update(self):
+        """原有安装包更新链路（task-13），从 _on_check_update 抽出来复用。"""
         self.btn_update.setEnabled(False)
         self.update_lbl.setText("检查中…")
         self._reset_upd_bar()              # 上一轮 ready 的 100% 残留/定时器作废

@@ -10,6 +10,7 @@
 
 约定：第一阶段预览**无声**（QTimer 逐帧合成画面），声音在导出里体现。
 """
+import math
 import os
 import subprocess
 import sys
@@ -50,32 +51,164 @@ def fit_paste(canvas, img):
     return canvas
 
 
+def _track_clip_at(tr, t):
+    """该轨在 t 时刻生效的 clip（同轨不重叠 => 至多一个）。"""
+    for c in tr["clips"]:
+        if c["start"] - V.EPS <= t < c["start"] + c["dur"] - V.EPS:
+            return c
+    return None
+
+
+def _over_rgba(dst3, rgb, a2f):
+    """把 rgb(同 dst3 区域大小) 按逐像素 alpha a2f(float32 HxWx1, 0..1)
+    混合进 dst3（就地 uint8）。out = fg*a + dst*(1-a)，四舍五入。"""
+    fg = rgb.astype(np.float32)
+    out = fg * a2f + dst3.astype(np.float32) * (1.0 - a2f)
+    np.add(out, 0.5, out=out)
+    dst3[...] = out.astype(np.uint8)
+
+
+def layer_rect(w, h, W, H, lay):
+    """按 layout 计算素材在画布上的外接矩形（StageView 命中/画框与
+    paste_layer 共用同一数学，取整一致）。
+
+    - fit 基准 s0=min(W/w,H/h)，实际缩放 = s0*lay["scale"]
+    - 中心放 (x*W, y*H)
+    - rot==0：精确矩形；rot!=0：旋转后的外接矩形（与 paste_layer 同式）
+    返回 (px, py, pw, ph) 画布像素坐标。
+    """
+    try:
+        x, y = lay["x"], lay["y"]
+        sc, rot = lay["scale"], lay["rot"]
+    except Exception:
+        return (0, 0, 0, 0)
+    if w <= 0 or h <= 0 or W <= 0 or H <= 0:
+        return (0, 0, 0, 0)
+    s0 = min(W / w, H / h)
+    s = s0 * sc
+    nw = max(1, int(round(w * s)))
+    nh = max(1, int(round(h * s)))
+    cx, cy = x * W, y * H
+    if rot == 0.0:
+        return (int(round(cx - nw / 2.0)), int(round(cy - nh / 2.0)), nw, nh)
+    rad = math.radians(rot)
+    ca, sa = abs(math.cos(rad)), abs(math.sin(rad))
+    rw = int(math.ceil(nw * ca + nh * sa))
+    rh = int(math.ceil(nh * ca + nw * sa))
+    return (int(round(cx - rw / 2.0)), int(round(cy - rh / 2.0)), rw, rh)
+
+
+def paste_layer(canvas, img, lay):
+    """按 layout（video_model.layout_at 产物）把素材帧 img 叠进 RGB canvas。
+
+    - 素材 3ch=恒不透明，4ch=带 alpha（out=fg*a+dst*(1-a)）
+    - fit 基准 s0=min(W/w,H/h)，实际缩放 = s0*lay["scale"]
+    - 中心放 (x*W, y*H)，允许越界（裁剪）
+    - rot==0 快路径：resize + 平移贴；rot!=0 才上 warpAffine
+    - 默认布局(0.5,0.5,1.0,0.0)+无 alpha 走**旧代码原路径**
+      （整幅直贴 / fit_paste），保证旧工程逐像素一致。"""
+    import cv2
+    H, W = canvas.shape[:2]
+    x, y, sc, rot = lay["x"], lay["y"], lay["scale"], lay["rot"]
+    # ---- 旧行为精确保持 ----
+    is_default = (x == 0.5 and y == 0.5 and sc == 1.0 and rot == 0.0)
+    if is_default and img.ndim == 2:
+        img = np.dstack([img] * 3)
+    if is_default and img.ndim == 3 and img.shape[2] == 3:
+        if img.shape[0] == H and img.shape[1] == W:
+            canvas[...] = img
+        else:
+            fit_paste(canvas, img)
+        return canvas
+    # ---- 通用路径 ----
+    if img.ndim == 2:
+        img = np.dstack([img] * 3)
+    if img.shape[2] >= 4:
+        rgb, alpha = img[:, :, :3], img[:, :, 3]
+    else:
+        rgb, alpha = img[:, :, :3], None
+    h, w = rgb.shape[:2]
+    if h == 0 or w == 0:
+        return canvas
+    s0 = min(W / w, H / h)
+    s = s0 * sc
+    nw = max(1, int(round(w * s)))
+    nh = max(1, int(round(h * s)))
+    interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
+    rgb = cv2.resize(rgb, (nw, nh), interpolation=interp)
+    alpha = cv2.resize(alpha, (nw, nh), interpolation=interp) \
+        if alpha is not None else None
+    ox, oy, rw, rh = layer_rect(w, h, W, H, lay)
+    if rot == 0.0:
+        dx0, dy0 = max(0, ox), max(0, oy)
+        dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
+        if dx1 <= dx0 or dy1 <= dy0:
+            return canvas
+        sx0, sy0 = dx0 - ox, dy0 - oy
+        sub_rgb = rgb[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
+        dst = canvas[dy0:dy1, dx0:dx1]
+        if alpha is None:
+            dst[...] = sub_rgb                  # 全不透明：直贴
+        else:
+            a2 = alpha[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)] \
+                    .astype(np.float32)[:, :, None] * (1.0 / 255.0)
+            _over_rgba(dst, sub_rgb, a2)
+        return canvas
+    # rot!=0：绕素材中心旋转到扩充画幅（透明边界），再平移贴
+    rad = math.radians(rot)
+    ca, sa = abs(math.cos(rad)), abs(math.sin(rad))
+    M = cv2.getRotationMatrix2D((nw / 2.0, nh / 2.0), rot, 1.0)
+    M[0, 2] += rw / 2.0 - nw / 2.0
+    M[1, 2] += rh / 2.0 - nh / 2.0
+    rgb = cv2.warpAffine(rgb, M, (rw, rh), flags=cv2.INTER_LINEAR,
+                         borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+    if alpha is not None:
+        # 旋转会把透明边界的 rgb 混进不透明边缘：alpha 同 warp 后必须再
+        # 乘回（warp 后的 rgb 边缘已被 0 污染），混合才正确
+        a2 = cv2.warpAffine(alpha, M, (rw, rh), flags=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_CONSTANT,
+                            borderValue=0).astype(np.float32)
+    else:
+        a2 = cv2.warpAffine(np.full((nh, nw), 255, np.uint8), M, (rw, rh),
+                            flags=cv2.INTER_LINEAR,
+                            borderMode=cv2.BORDER_CONSTANT,
+                            borderValue=0).astype(np.float32)
+    dx0, dy0 = max(0, ox), max(0, oy)
+    dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
+    if dx1 <= dx0 or dy1 <= dy0:
+        return canvas
+    sx0, sy0 = dx0 - ox, dy0 - oy
+    sl = (slice(sy0, sy0 + (dy1 - dy0)), slice(sx0, sx0 + (dx1 - dx0)))
+    a2f = a2[sl][:, :, None] * (1.0 / 255.0)
+    _over_rgba(canvas[dy0:dy1, dx0:dx1], rgb[sl], a2f)
+    return canvas
+
+
 def compose_frame(proj, t, src_get, canvas=None):
-    """t 时刻一帧 RGB uint8。src_get(source_dict)->FrameSource（外层做缓存）。
-    视频素材缺失/解码失败 -> 黑帧（不中断导出）。"""
+    """t 时刻一帧 RGB uint8（v3.4.0 起：**自底向上逐可见视频轨 RGBA 叠加**，
+    不再只取最上层 clip；上层无 alpha 素材自然覆盖=旧语义，
+    带 alpha 素材按 out=fg*a+dst*(1-a) 混合）。
+    src_get(source_dict)->FrameSource（外层做缓存）。
+    某轨素材缺失/解码失败 -> 跳过该轨继续合成（不中断导出/预览）。"""
     H, W = int(proj["height"]), int(proj["width"])
     if canvas is None:
         canvas = np.zeros((H, W, 3), np.uint8)
     else:
         canvas[...] = 0
-    clip = V.top_video_clip_at(proj, t)
-    if clip is None:
-        return canvas
-    try:
-        src = src_get(clip["source"])
-        img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
-    except Exception:
-        return canvas
-    if img is None or img.size == 0:
-        return canvas
-    if img.ndim == 2:
-        img = np.dstack([img] * 3)
-    if img.shape[2] == 4:
-        img = img[:, :, :3]
-    if img.shape[0] != H or img.shape[1] != W:
-        img = fit_paste(canvas, img)
-        return img
-    canvas[...] = img
+    for tr in proj["tracks"]:                   # 列表序 = 底→顶（后加的在上）
+        if tr.get("kind") != "video" or tr.get("hidden"):
+            continue
+        clip = _track_clip_at(tr, t)
+        if clip is None:
+            continue
+        try:
+            src = src_get(clip["source"])
+            img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
+        except Exception:
+            continue
+        if img is None or img.size == 0:
+            continue
+        paste_layer(canvas, img, V.layout_at(clip))
     return canvas
 
 

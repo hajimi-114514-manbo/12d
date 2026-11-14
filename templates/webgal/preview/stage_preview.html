@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<!-- H3a 产品化宿主页（MuppetStudio 自写胶水；WebGAL 官方 DOM 骨架按 MIT 出处引用）。
+     本文件**不含任何第三方 js**：__MUPPET_*__ token 由 webgal_preview.py 在
+     运行时经 muppet:// scheme 注入（runtime 哈希文件名、lib SDK 路径全部
+     运行时解析；lib 缺失注入 null，页面报 error 降级）。
+     页面职责：boot 引擎模块图（index.es -> 主包，#root/live2dPromise 三前提）
+     -> 自建 PIXI.Application -> puppetAPI 五命令（loadModel/setTransform/
+     playMotion/setExpression/clearModel）按 modelId 槽位串行化 -> 事件经
+     __muppetSend 回桥。协议：docs/H3桥接协议设计.md。 -->
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8" />
+<title>Muppet Stage Preview</title>
+<style>
+  html, body { margin: 0; background: #0d0f13; width: 100%; height: 100%;
+               overflow: hidden; }
+  #stagebox { position: absolute; inset: 0; }
+  #stagebox canvas { width: 100%; height: 100%; display: block; }
+  #errline { position: absolute; left: 10px; bottom: 8px; z-index: 30;
+             color: #ff9b9b; font: 12px/1.5 "Microsoft YaHei", sans-serif;
+             text-shadow: 0 1px 2px #000; pointer-events: none; }
+</style>
+<script>
+  // 官方 index.html「加载IIFE插件」等价物：lib 路径由 Python 注入（可为 null）。
+  window.__WEBGAL_DEVICE_INFO__ = { isIOS: false, isIOSPhone: false, isIPad: false };
+  function muppetLoadLib(u) {
+    if (!u) return Promise.resolve(false);
+    return new Promise(function (res) {
+      const s = document.createElement("script");
+      s.src = u; s.onload = function () { res(true); };
+      s.onerror = function () { res(false); };
+      document.head.appendChild(s);
+    });
+  }
+  // 主包构造期 Rte.initLive2D await 它——三前提之一（J2 README 关键事实 3）。
+  window.live2dPromise = Promise.all([
+    muppetLoadLib(__MUPPET_LIB2__),
+    muppetLoadLib(__MUPPET_LIB4__),
+  ]);
+</script>
+</head>
+<body>
+<div id="stagebox"></div>
+<div id="errline"></div>
+<!-- 引擎主包求值期强依赖的 DOM 骨架（J2 关键事实 3；官方 index.html 同构） -->
+<div id="ebg" class="html-body__effect-background">
+  <div id="ebgOverlay" class="html-body__effect-background-overlay"></div>
+</div>
+<div class="html-body__title-enter" style="display:none"></div>
+<div id="html-body__panic-overlay"></div>
+<div id="root" style="position:absolute;left:-99999px;top:0;width:1px;height:1px;overflow:hidden"></div>
+
+<script type="module">
+const STAGE_W = 1280, STAGE_H = 720;
+const ES_URL = __MUPPET_ES__;
+const sendEvt = (evt, data, ref) =>
+  window.__muppetSend(JSON.stringify({ v: 1, ref: ref || 0, evt, data: data || {} }));
+const showErr = (m) => { document.getElementById("errline").textContent = m; };
+
+let es = null, app = null, booted = false;
+const slots = new Map();          // modelId -> {queue, model, ref, fit}
+const last = { motion: {}, expression: {}, transform: {} };
+
+async function boot() {
+  if (booted) return true;
+  if (!ES_URL) { sendEvt("error", { code: "no_runtime", msg: "runtime 未注入" }); return false; }
+  try {
+    es = await import(ES_URL);                    // 依赖闭合：主包随之求值
+    if (!window.PIXI || !window.PIXI.Application) {
+      sendEvt("error", { code: "boot_failed", msg: "window.PIXI 未暴露" });
+      return false;
+    }
+    app = new window.PIXI.Application({
+      width: STAGE_W, height: STAGE_H,
+      backgroundAlpha: 0, antialias: true, autoStart: true,
+      preserveDrawingBuffer: true,               // grab 截图需要
+    });
+    const box = document.getElementById("stagebox");
+    box.appendChild(app.view);
+    booted = true;
+    sendEvt("boot", { pixi: true, es: true });
+    return true;
+  } catch (e) {
+    sendEvt("error", { code: "boot_failed", msg: String((e && e.message) || e).slice(0, 200) });
+    showErr("预览引擎启动失败: " + ((e && e.message) || e));
+    return false;
+  }
+}
+
+function fitOf(model) {
+  const mw = model.internalModel && model.internalModel.width ? model.internalModel.width : model.width;
+  const mh = model.internalModel && model.internalModel.height ? model.internalModel.height : model.height;
+  return Math.min(STAGE_W / mw, STAGE_H / mh);
+}
+
+function slot(id) {
+  let s = slots.get(id);
+  if (!s) { s = { queue: Promise.resolve(), model: null, ref: "", fit: 1 }; slots.set(id, s); }
+  return s;
+}
+function enqueue(id, fn) {
+  const s = slot(id);
+  s.queue = s.queue.then(fn).catch((e) => {
+    sendEvt("error", { code: "cmd_failed", msg: String((e && e.message) || e).slice(0, 200) });
+  });
+}
+
+const puppetAPI = {
+  async loadModel(ref, modelId) {
+    if (!(await boot())) return;
+    const s = slot(modelId);
+    const url = new URL(ref, location.href).href;
+    if (s.model && s.ref === url) return;                 // 幂等：同 ref 无操作
+    if (!window.Live2DModelWebGL && !window.Live2DCubismCore) {
+      sendEvt("error", { code: "no_live2d_sdk", modelId });
+      showErr("Live2D SDK 未加载（lib/live2d.min.js 缺失）");
+      return;
+    }
+    if (s.model) { app.stage.removeChild(s.model); s.model.destroy(); s.model = null; }
+    const model = await es.Live2DModel.from(url, { autoInteract: false });
+    if (model.anchor && model.anchor.set) model.anchor.set(0.5, 0.5);
+    else model.pivot.set(model.width / 2, model.height / 2);
+    s.model = model; s.ref = url; s.fit = fitOf(model);
+    app.stage.addChild(model);
+    sendEvt("ready", { modelId });
+  },
+  async setTransform(modelId, x, y, scale, rot) {
+    const s = slot(modelId);
+    if (!s.model) return;
+    s.model.x = x * STAGE_W; s.model.y = y * STAGE_H;
+    s.model.scale.set(Math.max(0.01, s.fit * scale));
+    s.model.rotation = (rot || 0) * Math.PI / 180;
+    last.transform[modelId] = [x, y, scale, rot];
+  },
+  async playMotion(modelId, name, fadeMs) {
+    const s = slot(modelId);
+    if (!s.model) return;
+    const groups = Object.keys(s.model.internalModel.settings.motions || {});
+    const want = String(name || "").toLowerCase();
+    const g = groups.find(k => k.toLowerCase() === want) ||
+              groups.find(k => k.toLowerCase().includes(want));
+    if (!g) { sendEvt("error", { code: "unknownMotion", name }); return; }
+    const ok = s.model.motion(g);
+    if (!ok) { sendEvt("error", { code: "unknownMotion", name }); return; }
+    last.motion[modelId] = g;
+  },
+  async setExpression(modelId, name) {
+    const s = slot(modelId);
+    if (!s.model) return;
+    const list = (s.model.internalModel.settings.expressions || []).map(e => e.name);
+    const want = String(name || "").toLowerCase();
+    const e = list.find(k => k.toLowerCase() === want) ||
+              list.find(k => k.toLowerCase().includes(want));
+    if (!e) { sendEvt("error", { code: "unknownExpression", name }); return; }
+    s.model.expression(e);
+    last.expression[modelId] = e;
+  },
+  async clear(modelId) {
+    if (!modelId) {
+      for (const [id, s] of slots) {
+        if (s.model) { app.stage.removeChild(s.model); s.model.destroy(); }
+      }
+      slots.clear();
+      return;
+    }
+    const s = slots.get(modelId);
+    if (s && s.model) { app.stage.removeChild(s.model); s.model.destroy(); }
+    slots.delete(modelId);
+  },
+  async setPaused(paused) {
+    if (app) app.ticker.paused = !!paused;
+  },
+};
+
+window.__muppetOnCmd = function (j) {
+  let e;
+  try { e = JSON.parse(j); } catch (err) { return; }
+  const a = e.args || {};
+  switch (e.cmd) {
+    case "loadModel": enqueue(a.modelId, () => puppetAPI.loadModel(a.modelRef, a.modelId)); break;
+    case "setTransform": enqueue(a.modelId, () => puppetAPI.setTransform(a.modelId, a.x, a.y, a.scale, a.rot)); break;
+    case "playMotion": enqueue(a.modelId, () => puppetAPI.playMotion(a.modelId, a.name, a.fadeMs)); break;
+    case "setExpression": enqueue(a.modelId, () => puppetAPI.setExpression(a.modelId, a.name, a.fadeMs)); break;
+    case "clearModel": enqueue(a.modelId || "__all__", () => puppetAPI.clear(a.modelId || "")); break;
+    case "setPaused": puppetAPI.setPaused(a.paused); break;
+    default: sendEvt("error", { code: "cmdUnsupported", cmd: e.cmd, ref: e.id });
+  }
+};
+
+// 测试/上层观测面（截图与断言都走这里，不依赖内部私有结构）
+window.__muppetState = function () {
+  const models = [];
+  slots.forEach((s, id) => { if (s.model) models.push(id); });
+  const one = slots.get(models[0]);
+  const m = one && one.model;
+  return {
+    booted, pixi: !!window.PIXI, sdk2: !!window.Live2DModelWebGL,
+    stageChildren: app ? app.stage.children.length : -1,
+    models, lastMotion: last.motion, lastExpression: last.expression,
+    transform: last.transform,
+    rendererType: app ? app.renderer.type : -1,
+    contextLost: app && app.renderer.view ? !!app.renderer.contextLost : null,
+    modelInfo: m ? { x: m.x, y: m.y, sx: m.scale.x, visible: m.visible,
+                     alpha: m.alpha, w: m.width, h: m.height } : null,
+  };
+};
+</script>
+</body>
+</html>

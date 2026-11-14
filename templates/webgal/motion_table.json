@@ -1,0 +1,7464 @@
+{
+ "version": 2,
+ "motions": [
+  {
+   "id": "idle",
+   "name": "待机呼吸",
+   "dur": 4.0,
+   "loop": true,
+   "channels": {
+    "body": "dy",
+    "head": "rot"
+   },
+   "curves": {
+    "body": [
+     [
+      0.0,
+      0.0,
+      "linear"
+     ],
+     [
+      1.0,
+      0.02,
+      "inout"
+     ],
+     [
+      2.0,
+      0.0,
+      "inout"
+     ],
+     [
+      3.0,
+      -0.02,
+      "inout"
+     ],
+     [
+      4.0,
+      0.0,
+      "linear"
+     ]
+    ],
+    "head": [
+     [
+      0.0,
+      0.0,
+      "linear"
+     ],
+     [
+      1.0,
+      1.0,
+      "inout"
+     ],
+     [
+      2.0,
+      0.0,
+      "inout"
+     ],
+     [
+      3.0,
+      -1.0,
+      "inout"
+     ],
+     [
+      4.0,
+      0.0,
+      "linear"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "blink",
+   "name": "眨眼",
+   "dur": 2.0,
+   "loop": true,
+   "channels": {
+    "head": "dy"
+   },
+   "curves": {
+    "head": [
+     [
+      0.0,
+      0.0,
+      "linear"
+     ],
+     [
+      0.1,
+      -0.008,
+      "hold"
+     ],
+     [
+      0.25,
+      0.0,
+      "linear"
+     ],
+     [
+      2.0,
+      0.0,
+      "linear"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "nod",
+   "name": "点头",
+   "dur": 2.0,
+   "loop": true,
+   "channels": {
+    "head": "rot"
+   },
+   "curves": {
+    "head": [
+     [
+      0.0,
+      0.0,
+      "inout"
+     ],
+     [
+      0.5,
+      8.0,
+      "inout"
+     ],
+     [
+      1.0,
+      0.0,
+      "inout"
+     ],
+     [
+      1.5,
+      8.0,
+      "inout"
+     ],
+     [
+      2.0,
+      0.0,
+      "inout"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "shake_head",
+   "name": "摇头",
+   "dur": 2.0,
+   "loop": true,
+   "channels": {
+    "head": "rot"
+   },
+   "curves": {
+    "head": [
+     [
+      0.0,
+      0.0,
+      "linear"
+     ],
+     [
+      0.5,
+      6.0,
+      "linear"
+     ],
+     [
+      1.0,
+      -6.0,
+      "linear"
+     ],
+     [
+      1.5,
+      6.0,
+      "linear"
+     ],
+     [
+      2.0,
+      0.0,
+      "linear"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "wave",
+   "name": "挥手",
+   "dur": 2.0,
+   "loop": true,
+   "channels": {
+    "arm": "rot"
+   },
+   "curves": {
+    "arm": [
+     [
+      0.0,
+      0.0,
+      "inout"
+     ],
+     [
+      0.5,
+      22.0,
+      "inout"
+     ],
+     [
+      1.0,
+      0.0,
+      "inout"
+     ],
+     [
+      1.5,
+      -22.0,
+      "inout"
+     ],
+     [
+      2.0,
+      0.0,
+      "inout"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "shrug",
+   "name": "耸肩",
+   "dur": 2.0,
+   "loop": true,
+   "channels": {
+    "body": "dy",
+    "arm": "dy"
+   },
+   "curves": {
+    "body": [
+     [
+      0.0,
+      0.0,
+      "inout"
+     ],
+     [
+      1.0,
+      0.02,
+      "inout"
+     ],
+     [
+      2.0,
+      0.0,
+      "inout"
+     ]
+    ],
+    "arm": [
+     [
+      0.0,
+      0.0,
+      "inout"
+     ],
+     [
+      1.0,
+      0.015,
+      "inout"
+     ],
+     [
+      2.0,
+      0.0,
+      "inout"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "bow",
+   "name": "鞠躬",
+   "dur": 3.0,
+   "loop": true,
+   "channels": {
+    "head": "rot",
+    "body": "rot"
+   },
+   "curves": {
+    "head": [
+     [
+      0.0,
+      0.0,
+      "inout"
+     ],
+     [
+      1.5,
+      18.0,
+      "inout"
+     ],
+     [
+      3.0,
+      0.0,
+      "inout"
+     ]
+    ],
+    "body": [
+     [
+      0.0,
+      0.0,
+      "inout"
+     ],
+     [
+      1.5,
+      25.0,
+      "inout"
+     ],
+     [
+      3.0,
+      0.0,
+      "inout"
+     ]
+    ]
+   }
+  },
+  {
+   "id": "anon/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/angry02",
+   "name": "生气02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/angry03",
+   "name": "生气03",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/angry04",
+   "name": "生气04",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/cry02",
+   "name": "哭泣02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/gacha_b2024_01",
+   "name": "gacha_b2024_01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/gacha_c_a_01",
+   "name": "gacha_c_a_01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/gacha_df3_01",
+   "name": "gacha_df3_01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/gacha_e235_01",
+   "name": "gacha_e235_01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/gacha_e253_01",
+   "name": "gacha_e253_01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/kandou01",
+   "name": "kandou01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/kandou02",
+   "name": "kandou02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/kime02",
+   "name": "决意02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/sad02",
+   "name": "难过02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/serious02",
+   "name": "严肃02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/shame02",
+   "name": "shame02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/smile01_ingameV2_01",
+   "name": "smile01_ingameV2_01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/smile01_ingameV2_02",
+   "name": "smile01_ingameV2_02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/thinking02",
+   "name": "思考02",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false,
+   "common": true
+  },
+  {
+   "id": "anon/thinking03",
+   "name": "思考03",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "anon/wink01",
+   "name": "眨眼示意01",
+   "kind": "cubism",
+   "ns": "anon",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/eeto01",
+   "name": "犹豫01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/gattsu01",
+   "name": "gattsu01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/jaan01",
+   "name": "jaan01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nnf02",
+   "name": "nnf02",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nnf_left01",
+   "name": "nnf_left01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/nnf_right01",
+   "name": "nnf_right01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mana/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "mana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/bow",
+   "name": "鞠躬",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/angry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/bow",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/bye01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/idle01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/kime01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nnf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nnf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nnf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nnf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nnf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nnf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/nnf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/odoodo01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/sad01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/sad02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/sad03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/sad04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/smile01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/smile02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/smile04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/surprised01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/maskon/thinking01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/angry01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/angry02",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/angry03",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/angry04",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/cry01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/idle01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nf01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nf02",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nf03",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nf04",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nf05",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nf_left01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nf_right01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nnf01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nnf02",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nnf03",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nnf04",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nnf05",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nnf_left01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/nnf_right01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/sad01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/sad02",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/sad03",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/smile01",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/smile02",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/mts/smile03",
+   "name": "mts",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nnf02",
+   "name": "nnf02",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nnf_left01",
+   "name": "nnf_left01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/nnf_right01",
+   "name": "nnf_right01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/odoodo01",
+   "name": "odoodo01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/sad02",
+   "name": "难过02",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/sad03",
+   "name": "难过03",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/sad04",
+   "name": "难过04",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/surprised02",
+   "name": "惊讶02",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "mutsumi/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "mutsumi",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/bored",
+   "name": "无聊",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/bow",
+   "name": "鞠躬",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/kime02",
+   "name": "决意02",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskoff",
+   "name": "maskoff",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/angry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/bored",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/bow",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/bye01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/cry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/idle01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/kime01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/kime02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/niyake",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nnf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nnf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nnf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nnf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nnf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nnf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/nnf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/sad01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/serious01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/smile01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/smile02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/smile03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/surprised01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/maskon/surprised02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/niyake",
+   "name": "niyake",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nnf02",
+   "name": "nnf02",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nnf_left01",
+   "name": "nnf_left01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/nnf_right01",
+   "name": "nnf_right01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "nyamu/surprised02",
+   "name": "惊讶02",
+   "kind": "cubism",
+   "ns": "nyamu",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/angry02",
+   "name": "生气02",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/angry03",
+   "name": "生气03",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/gacha_b2024_01",
+   "name": "gacha_b2024_01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/gacha_c_a_01",
+   "name": "gacha_c_a_01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/gacha_df3_01",
+   "name": "gacha_df3_01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/gacha_e240_01",
+   "name": "gacha_e240_01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/gacha_e286_01",
+   "name": "gacha_e286_01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/gacha_e287_01",
+   "name": "gacha_e287_01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf01_ingameV2",
+   "name": "nf01_ingameV2",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/niya01",
+   "name": "niya01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/serious02",
+   "name": "严肃02",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/sigh01",
+   "name": "叹息01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/smile01_ingameV2",
+   "name": "smile01_ingameV2",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "rana/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "rana",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/angry02",
+   "name": "生气02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/angry03",
+   "name": "生气03",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/angry04",
+   "name": "生气04",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/angry05",
+   "name": "生气05",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/angry06",
+   "name": "生气06",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/angry07",
+   "name": "生气07",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/bow",
+   "name": "鞠躬",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/bye02",
+   "name": "再见02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/cry02",
+   "name": "哭泣02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/cry03",
+   "name": "哭泣03",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/cry04",
+   "name": "哭泣04",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/cry05",
+   "name": "哭泣05",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/cry06",
+   "name": "哭泣06",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskoff",
+   "name": "maskoff",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/angry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/angry02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/angry03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/angry04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/angry05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/angry06",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/angry07",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/bow",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/bye01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/bye02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/cry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/cry02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/cry03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/cry04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/cry05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/cry06",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/idle01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/kime01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nnf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nnf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nnf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nnf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nnf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nnf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nnf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/nod01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/odoodo01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/sad01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/sad02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/serious01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/serious02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/shame01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/shame02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/sigh01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/sigh02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/smile01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/smile02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/smile03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/smile04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/smile05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/smile06",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/smile07",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/surprised01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/surprised02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/thinking01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/maskon/thinking02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nnf02",
+   "name": "nnf02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nnf_left01",
+   "name": "nnf_left01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nnf_right01",
+   "name": "nnf_right01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/nod01",
+   "name": "点头01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/odoodo01",
+   "name": "odoodo01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/sad02",
+   "name": "难过02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/serious02",
+   "name": "严肃02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/shame02",
+   "name": "shame02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/sigh01",
+   "name": "叹息01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/sigh02",
+   "name": "叹息02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/smile05",
+   "name": "微笑05",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/smile06",
+   "name": "微笑06",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/smile07",
+   "name": "微笑07",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/surprised02",
+   "name": "惊讶02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "sakiko/thinking02",
+   "name": "思考02",
+   "kind": "cubism",
+   "ns": "sakiko",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/ando01",
+   "name": "ando01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/angry02",
+   "name": "生气02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/angry03",
+   "name": "生气03",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/angry04",
+   "name": "生气04",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/angry05",
+   "name": "生气05",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/angry06",
+   "name": "生气06",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/bye02",
+   "name": "再见02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/cry02",
+   "name": "哭泣02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/gacha_b2024_01",
+   "name": "gacha_b2024_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/gacha_c_a_01",
+   "name": "gacha_c_a_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/gacha_df3_01",
+   "name": "gacha_df3_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/gacha_e235_01",
+   "name": "gacha_e235_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/gacha_e250_01",
+   "name": "gacha_e250_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/gacha_e289_01",
+   "name": "gacha_e289_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/gacha_e297_01",
+   "name": "gacha_e297_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/kandou01",
+   "name": "kandou01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nnf02",
+   "name": "nnf02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nnf_left01",
+   "name": "nnf_left01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/nnf_right01",
+   "name": "nnf_right01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/odoodo01",
+   "name": "odoodo01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/sad02",
+   "name": "难过02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/sad03",
+   "name": "难过03",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/scared01",
+   "name": "scared01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/serious02",
+   "name": "严肃02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/serious03",
+   "name": "严肃03",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/serious04",
+   "name": "严肃04",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/shame02",
+   "name": "shame02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/smile01_ingameV2",
+   "name": "smile01_ingameV2",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/smile05",
+   "name": "微笑05",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/smile06",
+   "name": "微笑06",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/thinking02_01",
+   "name": "thinking02_01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/thinking02_02",
+   "name": "thinking02_02",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/thinking02_ingameV2",
+   "name": "thinking02_ingameV2",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "soyo/wink01",
+   "name": "眨眼示意01",
+   "kind": "cubism",
+   "ns": "soyo",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/ando01",
+   "name": "ando01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/angry02",
+   "name": "生气02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/angry03",
+   "name": "生气03",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/angry04",
+   "name": "生气04",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/bye02",
+   "name": "再见02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/cry02",
+   "name": "哭泣02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/gacha_b2024_01",
+   "name": "gacha_b2024_01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/gacha_c_a_01",
+   "name": "gacha_c_a_01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/gacha_df3_01",
+   "name": "gacha_df3_01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/gacha_e240_01",
+   "name": "gacha_e240_01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/gacha_e277_01",
+   "name": "gacha_e277_01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/gacha_e297_01",
+   "name": "gacha_e297_01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/kandou01",
+   "name": "kandou01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf02_ingameV2",
+   "name": "nf02_ingameV2",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf04_ingameV2",
+   "name": "nf04_ingameV2",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/pui01",
+   "name": "pui01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/sad02",
+   "name": "难过02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/sad03",
+   "name": "难过03",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/serious02",
+   "name": "严肃02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/shame02",
+   "name": "shame02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/sigh01",
+   "name": "叹息01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/sigh02",
+   "name": "叹息02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/surprised02",
+   "name": "惊讶02",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "taki/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "taki",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/angry02",
+   "name": "生气02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/angry01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/angry02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/bye01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/cry01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/cry02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/gacha01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/idle01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/kandou01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/kandou02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/kandou03",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/kime01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/kime02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nf01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nf02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nf03",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nf04",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nf05",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nf_left01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nf_right01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nnf01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nnf02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nnf03",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nnf04",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nnf05",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nnf_left01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/nnf_right01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/sad01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/sad02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/sad03",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/sad04",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/serious01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/serious02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/shame01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/shame02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/sing01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/sing02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/smile01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/smile02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/smile03",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/smile04",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/surprised01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/thinking01",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/c_d3/thinking02",
+   "name": "c_d3",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/cry02",
+   "name": "哭泣02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/cry03",
+   "name": "哭泣03",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/cry04",
+   "name": "哭泣04",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/cry05",
+   "name": "哭泣05",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_b2024_01",
+   "name": "gacha_b2024_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_c_a_01",
+   "name": "gacha_c_a_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_df3_01",
+   "name": "gacha_df3_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_e235_01",
+   "name": "gacha_e235_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_e250_01",
+   "name": "gacha_e250_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_e286_01",
+   "name": "gacha_e286_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_e289_01",
+   "name": "gacha_e289_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/gacha_e297_01",
+   "name": "gacha_e297_01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/kandou01",
+   "name": "kandou01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/kandou02",
+   "name": "kandou02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/kandou03",
+   "name": "kandou03",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/kime02",
+   "name": "决意02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf02_ingameV2",
+   "name": "nf02_ingameV2",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf03_ingameV2",
+   "name": "nf03_ingameV2",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nnf02",
+   "name": "nnf02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nnf_left01",
+   "name": "nnf_left01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/nnf_right01",
+   "name": "nnf_right01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/sad02",
+   "name": "难过02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/sad03",
+   "name": "难过03",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/sad04",
+   "name": "难过04",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/serious02",
+   "name": "严肃02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/shame02",
+   "name": "shame02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/sing01",
+   "name": "sing01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/sing02",
+   "name": "sing02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/smile01_e289",
+   "name": "smile01_e289",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/smile01_e297",
+   "name": "smile01_e297",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "tomori/thinking02",
+   "name": "思考02",
+   "kind": "cubism",
+   "ns": "tomori",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/bow",
+   "name": "鞠躬",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/cry01",
+   "name": "哭泣01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskoff",
+   "name": "maskoff",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/angry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/bow",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/cry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/idle01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/kime01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/mitore01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nnf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nnf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nnf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nnf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nnf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nnf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/nnf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/sad01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/serious01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/shame01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/smile01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/smile02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/smile03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/maskon/surprised01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/mitore01",
+   "name": "mitore01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nnf01",
+   "name": "nnf01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nnf02",
+   "name": "nnf02",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nnf03",
+   "name": "nnf03",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nnf04",
+   "name": "nnf04",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nnf05",
+   "name": "nnf05",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nnf_left01",
+   "name": "nnf_left01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/nnf_right01",
+   "name": "nnf_right01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/shame01",
+   "name": "shame01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "uika/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "uika",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/angry01",
+   "name": "生气01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/angry02",
+   "name": "生气02",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/bow",
+   "name": "鞠躬",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/bye01",
+   "name": "再见01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/idle01",
+   "name": "待机01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/kime01",
+   "name": "决意01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/angry01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/angry02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/bow",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/bye01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/idle01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/kime01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/nf01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/nf02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/nf03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/nf04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/nf05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/nf_left01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/nf_right01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/sad01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/serious01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/sigh01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/smile01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/smile02",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/smile03",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/smile04",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/smile05",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/surprised01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/maskon/thinking01",
+   "name": "maskon",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/nf01",
+   "name": "nf01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/nf02",
+   "name": "nf02",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/nf03",
+   "name": "nf03",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/nf04",
+   "name": "nf04",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/nf05",
+   "name": "nf05",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/nf_left01",
+   "name": "nf_left01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/nf_right01",
+   "name": "nf_right01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/sad01",
+   "name": "难过01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/serious01",
+   "name": "严肃01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/sigh01",
+   "name": "叹息01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/smile01",
+   "name": "微笑01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/smile02",
+   "name": "微笑02",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/smile03",
+   "name": "微笑03",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/smile04",
+   "name": "微笑04",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/smile05",
+   "name": "微笑05",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  },
+  {
+   "id": "umiri/thinking01",
+   "name": "思考01",
+   "kind": "cubism",
+   "ns": "umiri",
+   "dur": 0.0,
+   "loop": false
+  }
+ ],
+ "expressions": [
+  {
+   "id": "smile",
+   "name": "微笑",
+   "fade": 0.4,
+   "pose": {
+    "head": {
+     "rot": 3.0,
+     "dy": -0.01,
+     "dscale": 0.02
+    },
+    "body": {
+     "rot": 0.0,
+     "dy": 0.0,
+     "dscale": 0.02
+    }
+   }
+  },
+  {
+   "id": "sad",
+   "name": "难过",
+   "fade": 0.5,
+   "pose": {
+    "head": {
+     "rot": -4.0,
+     "dy": 0.02,
+     "dscale": -0.02
+    },
+    "body": {
+     "rot": 0.0,
+     "dy": 0.01,
+     "dscale": -0.01
+    }
+   }
+  },
+  {
+   "id": "angry",
+   "name": "生气",
+   "fade": 0.3,
+   "pose": {
+    "head": {
+     "rot": 6.0,
+     "dy": -0.02,
+     "dscale": 0.0
+    },
+    "body": {
+     "rot": 3.0,
+     "dy": 0.0,
+     "dscale": 0.0
+    }
+   }
+  },
+  {
+   "id": "surprised",
+   "name": "惊讶",
+   "fade": 0.25,
+   "pose": {
+    "head": {
+     "rot": -8.0,
+     "dy": -0.03,
+     "dscale": 0.05
+    },
+    "body": {
+     "rot": 0.0,
+     "dy": 0.0,
+     "dscale": 0.03
+    }
+   }
+  },
+  {
+   "id": "shy",
+   "name": "害羞",
+   "fade": 0.4,
+   "pose": {
+    "head": {
+     "rot": -5.0,
+     "dy": 0.01,
+     "dscale": -0.02
+    },
+    "body": {
+     "rot": 0.0,
+     "dy": 0.0,
+     "dscale": -0.01
+    }
+   }
+  },
+  {
+   "id": "anon/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/angry02",
+   "name": "生气02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/angry03",
+   "name": "生气03",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/angry04",
+   "name": "生气04",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/bye01",
+   "name": "再见01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/cry02",
+   "name": "哭泣02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/kandou01",
+   "name": "kandou01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/kandou02",
+   "name": "kandou02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/kime01",
+   "name": "决意01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/kime02",
+   "name": "决意02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/sad02",
+   "name": "难过02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/serious02",
+   "name": "严肃02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/shame01",
+   "name": "shame01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/shame02",
+   "name": "shame02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/thinking01",
+   "name": "思考01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/thinking02",
+   "name": "思考02",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0,
+   "common": true
+  },
+  {
+   "id": "anon/thinking03",
+   "name": "思考03",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "anon/wink01",
+   "name": "眨眼示意01",
+   "kind": "cubism_exp",
+   "ns": "anon",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mana/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "mana",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/angry01",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/angry02",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/cry01",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/default",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/sad01",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/sad02",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/sad03",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/smile01",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/mts/smile02",
+   "name": "mts",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/sad04",
+   "name": "难过04",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "mutsumi/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "mutsumi",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/bored",
+   "name": "无聊",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/niyake",
+   "name": "niyake",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/nyamu_bored",
+   "name": "nyamu_bored",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "nyamu/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "nyamu",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/angry02",
+   "name": "生气02",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/angry03",
+   "name": "生气03",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/bye01",
+   "name": "再见01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/kime01",
+   "name": "决意01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/niya01",
+   "name": "niya01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/serious02",
+   "name": "严肃02",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/shame01",
+   "name": "shame01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/sigh01",
+   "name": "叹息01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "rana/thinking01",
+   "name": "思考01",
+   "kind": "cubism_exp",
+   "ns": "rana",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/angry02",
+   "name": "生气02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/angry07",
+   "name": "生气07",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/cry02",
+   "name": "哭泣02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/cry03",
+   "name": "哭泣03",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/cry04",
+   "name": "哭泣04",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/kime01",
+   "name": "决意01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/odoodo01",
+   "name": "odoodo01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/sad02",
+   "name": "难过02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/serious02",
+   "name": "严肃02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/shame01",
+   "name": "shame01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/shame02",
+   "name": "shame02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/sigh01",
+   "name": "叹息01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/sigh02",
+   "name": "叹息02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/smile05",
+   "name": "微笑05",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/smile06",
+   "name": "微笑06",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/surprised02",
+   "name": "惊讶02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/thinking01",
+   "name": "思考01",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "sakiko/thinking02",
+   "name": "思考02",
+   "kind": "cubism_exp",
+   "ns": "sakiko",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/ando01",
+   "name": "ando01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/angry02",
+   "name": "生气02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/angry03",
+   "name": "生气03",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/angry04",
+   "name": "生气04",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/bye01",
+   "name": "再见01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/bye02",
+   "name": "再见02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/cry02",
+   "name": "哭泣02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/kandou01",
+   "name": "kandou01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/kime01",
+   "name": "决意01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/odoodo01",
+   "name": "odoodo01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/sad02",
+   "name": "难过02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/sad03",
+   "name": "难过03",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/serious02",
+   "name": "严肃02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/serious03",
+   "name": "严肃03",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/serious04",
+   "name": "严肃04",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/shame01",
+   "name": "shame01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/shame02",
+   "name": "shame02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/smile05",
+   "name": "微笑05",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/smile06",
+   "name": "微笑06",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/thinking01",
+   "name": "思考01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/thinking02",
+   "name": "思考02",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "soyo/wink01",
+   "name": "眨眼示意01",
+   "kind": "cubism_exp",
+   "ns": "soyo",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/ando01",
+   "name": "ando01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/angry02",
+   "name": "生气02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/angry03",
+   "name": "生气03",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/angry04",
+   "name": "生气04",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/bye01",
+   "name": "再见01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/bye02",
+   "name": "再见02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/cry02",
+   "name": "哭泣02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/kandou01",
+   "name": "kandou01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/kime01",
+   "name": "决意01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/pui01",
+   "name": "pui01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/sad02",
+   "name": "难过02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/sad03",
+   "name": "难过03",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/serious02",
+   "name": "严肃02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/shame01",
+   "name": "shame01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/shame02",
+   "name": "shame02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/sigh01",
+   "name": "叹息01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/sigh02",
+   "name": "叹息02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/surprised02",
+   "name": "惊讶02",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "taki/thinking01",
+   "name": "思考01",
+   "kind": "cubism_exp",
+   "ns": "taki",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/angry02",
+   "name": "生气02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/bye01",
+   "name": "再见01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/cry02",
+   "name": "哭泣02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/cry04",
+   "name": "哭泣04",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/idle",
+   "name": "待机",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/kandou01",
+   "name": "kandou01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/kandou02",
+   "name": "kandou02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/kandou03",
+   "name": "kandou03",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/kime01",
+   "name": "决意01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/kime02",
+   "name": "决意02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/sad02",
+   "name": "难过02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/sad03",
+   "name": "难过03",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/sad04",
+   "name": "难过04",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/serious02",
+   "name": "严肃02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/shame01",
+   "name": "shame01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/shame02",
+   "name": "shame02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/sing01",
+   "name": "sing01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/sing02",
+   "name": "sing02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/thinking01",
+   "name": "思考01",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "tomori/thinking02",
+   "name": "思考02",
+   "kind": "cubism_exp",
+   "ns": "tomori",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/cry01",
+   "name": "哭泣01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/kime01",
+   "name": "决意01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/shame01",
+   "name": "shame01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "uika/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "uika",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/angry01",
+   "name": "生气01",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/default",
+   "name": "default",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/idle01",
+   "name": "待机01",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/sad01",
+   "name": "难过01",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/serious01",
+   "name": "严肃01",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/sigh01",
+   "name": "叹息01",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/smile01",
+   "name": "微笑01",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/smile02",
+   "name": "微笑02",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/smile03",
+   "name": "微笑03",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/smile04",
+   "name": "微笑04",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/smile05",
+   "name": "微笑05",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  },
+  {
+   "id": "umiri/surprised01",
+   "name": "惊讶01",
+   "kind": "cubism_exp",
+   "ns": "umiri",
+   "fade": 0.0
+  }
+ ],
+ "namespaces": {
+  "anon": {
+   "role": "千早爱音",
+   "motions": 44,
+   "expressions": 28,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "mana": {
+   "role": "纯田真奈",
+   "motions": 27,
+   "expressions": 9,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "mutsumi": {
+   "role": "若叶睦",
+   "motions": 85,
+   "expressions": 18,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "nyamu": {
+   "role": "祐天寺若麦",
+   "motions": 61,
+   "expressions": 13,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "rana": {
+   "role": "要乐奈",
+   "motions": 36,
+   "expressions": 19,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "sakiko": {
+   "role": "丰川祥子",
+   "motions": 107,
+   "expressions": 29,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "soyo": {
+   "role": "长崎素世",
+   "motions": 59,
+   "expressions": 33,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "taki": {
+   "role": "椎名立希",
+   "motions": 44,
+   "expressions": 30,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "tomori": {
+   "role": "高松灯",
+   "motions": 100,
+   "expressions": 30,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "uika": {
+   "role": "三角初华",
+   "motions": 55,
+   "expressions": 11,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  },
+  "umiri": {
+   "role": "八幡海铃",
+   "motions": 46,
+   "expressions": 12,
+   "note": "本族键名文件随每个模型的 .mtn_exp 打包；任意模型均可调用（跨角色通用）"
+  }
+ },
+ "recommended": [
+  "anon/idle01",
+  "anon/angry01",
+  "anon/angry02",
+  "anon/angry03",
+  "anon/angry04",
+  "anon/smile01",
+  "anon/smile02",
+  "anon/smile03",
+  "anon/smile04",
+  "anon/sad01",
+  "anon/sad02",
+  "anon/surprised01",
+  "anon/serious01",
+  "anon/serious02",
+  "anon/thinking01",
+  "anon/thinking02",
+  "anon/bye01",
+  "anon/kime01",
+  "anon/cry01",
+  "anon/nf01",
+  "anon/nnf03"
+ ]
+}

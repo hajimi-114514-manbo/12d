@@ -10,6 +10,7 @@
   - dest 用 "/" 分隔，函数内部转 os.sep
   - check.type == "exe"   -> base_dir/check.path 是文件且 > 1MB
   - check.type == "files" -> base_dir/dest/check.marker 存在且 >= min_bytes
+  - 显式 url 资产可加 mirrors=[前缀...]：URL 候选 = 官方直连 + 前缀镜像（task-35）
 """
 import os
 import sys
@@ -157,6 +158,59 @@ ASSETS = [
         "done_marker": {"dir": "torch/lib", "prefix": "cudnn64_"},
         "check": {"type": "parts"},
     },
+    {
+        # H3-c（task-64）：PySide6-WebEngine 可选资产（J1 路线 b）。
+        # 官方 pypi wheel 单包（wheel 本身就是 zip，解压即安装）；
+        # sha256 钉死 pypi files.pythonhosted 官方 digest（2026-11-14 实测）。
+        # 落地 = runtime_root\Lib\site-packages（与 cuda_pack 同款 target 语义）；
+        # 已装判定 = site-packages\PySide6\Qt6WebEngineCore.dll 纯文件探测
+        # （绝不 import QtWebEngineWidgets——那会在资产查询路径上拉起 Chromium）。
+        # 注意：wheel 版本必须与整合包内 PySide6 严格同源（6.12.0.140 ↔ 6.12.0），
+        # 升级 PySide6 时本条目必须同步换版重钉 sha256。
+        "id": "webengine_pack",
+        "name": "实时预览能力包（WebEngine，约130MB）",
+        "desc": "「实时预览」需要的 PySide6-WebEngine 6.12.0.140 官方组件"
+                "（Chromium 内核）。只做 Live2D 实时预览，不装不影响其他功能。",
+        "kind": "python_pack",
+        "mode": "wheel",
+        "size": 131697708,
+        "url": ("https://files.pythonhosted.org/packages/21/0d/260c7c286f2d4e8a"
+                "49c099152a385414a872f022117f937824ca0a3f38e5/"
+                "pyside6_webengine-6.12.0.140-cp310-abi3-win_amd64.whl"),
+        # files.pythonhosted 直连在国内偶慢；tsinghua 镜像同 sha（pypi 同源），
+        # 前缀式镜像：官方直连在前、镜像兜底在后
+        "mirrors": ["https://pypi.tuna.tsinghua.edu.cn/"],
+        "zip_sha256": ("f9b61b1d457a591ee590a6b80515f25a3e61e2576a2a0a70566380"
+                       "f9d9de4ab0"),
+        "target": "site-packages",
+        # wheel 无 pre_delete（PySide6 已装 Essentials，WebEngine 是纯增量；
+        # 重复安装 = 解压覆盖同版本文件，幂等安全）
+        "pre_delete": [],
+        # 已装判定：site-packages\PySide6\Qt6WebEngineCore.dll 在场
+        # （wheel 内顶层 PySide6/ 解开即落 site-packages\PySide6\）
+        "done_marker": {"dir": "PySide6", "prefix": "Qt6WebEngineCore"},
+        "check": {"type": "parts"},
+    },
+    {
+        "id": "webgal_runtime",
+        "name": "WebGAL 引擎运行时（可选，约50MB）",
+        "desc": "「导出可玩游戏」需要的 WebGAL 官方播放引擎（v4.6.6，网页版）。"
+                "不进安装包，按需下载一次后离线可用；不用导出功能就不用装。",
+        "kind": "runtime_pack",
+        # 实测 Content-Length（2026-11-13，官方 release 直连）
+        "size": 52837011,
+        # 官方 release 原始包（web = 纯静态前端 zip）；sha256 钉死官方 digest，
+        # 下载器单包模式解压前校验（fail-closed，坏包删除报错）
+        "url": ("https://github.com/OpenWebGAL/WebGAL/releases/"
+                "download/4.6.6/WebGAL-4.6.6-web.zip"),
+        "zip_sha256": ("d8011933005f62397b3d1ea6cd14b8a7f58ce34a390000"
+                       "afa48f12a2d8f0349a"),
+        # 官方 web 包解包常见单顶层目录；asset_downloader._extract_zip
+        # 的"单顶层自动剥离"保证 index.html 直接落在 dest 根
+        "dest": "templates/webgal_runtime",
+        "mirrors": [GH_MIRROR],   # 前缀式镜像：镜像不通自动回落官方直连
+        "check": {"type": "files", "marker": "index.html", "min_bytes": 1},
+    },
 ]
 
 
@@ -255,7 +309,9 @@ def is_installed(asset, base_dir):
     try:
         if not isinstance(asset, dict) or not base_dir:
             return False
-        if asset.get("mode") == "parts":
+        # parts/wheel 两种模式共用 done_marker 纯文件探测
+        # （parts=CUDA 分卷，wheel=python_pack 单包；都是解压进 site-packages）
+        if asset.get("mode") in ("parts", "wheel"):
             return _parts_installed(asset, base_dir)
         chk = asset.get("check") or {}
         ctype = chk.get("type")
@@ -277,11 +333,14 @@ def installed_size(asset, base_dir):
     try:
         if not isinstance(asset, dict) or not base_dir:
             return 0
-        if asset.get("mode") == "parts":
+        if asset.get("mode") in ("parts", "wheel"):
             if not _parts_installed(asset, base_dir):
                 return 0
-            # 只统计 torch 目录（site-packages 全量 walk 太慢）
-            d = os.path.join(parts_target_dir(asset, base_dir), "torch")
+            # 统计标志目录（避免 site-packages 全量 walk 太慢）：
+            # parts=CUDA -> torch\；wheel=WebEngine -> PySide6\
+            d = os.path.join(parts_target_dir(asset, base_dir),
+                             _norm((asset.get("done_marker") or {})
+                                   .get("dir", "")))
             total = 0
             for root, _dirs, files in os.walk(d):
                 for f in files:
@@ -360,7 +419,19 @@ def asset_urls(asset):
             return out
         url = (asset.get("url") or "").strip()
         if url:
-            return [("", [url])]
+            urls = [url]
+            # 显式单包资产的镜像（task-35 最小扩展）："mirrors" 列表元素
+            # 以 "/" 结尾视为加速前缀（拼在完整 URL 前，同 cuda_pack parts 的
+            # [url, GH_MIRROR+url] 语义），否则视为完整备用 URL。
+            # 顺序：官方直连在前、镜像兜底在后；未声明 mirrors 的资产行为不变。
+            for m in (asset.get("mirrors") or []):
+                m = str(m or "").strip()
+                if not m:
+                    continue
+                cand = m + url if m.endswith("/") else m
+                if cand not in urls:
+                    urls.append(cand)
+            return [("", urls)]
         return []
     except Exception:
         return []

@@ -5,6 +5,108 @@
 
 ---
 
+## v3.4.0（2026-11-14 凌晨）舞台布置 × DSH 联动 × WebGAL 双向
+
+> 成体系新功能集中版（用户规矩 minor+1）：文字→自动布置→WebGAL 可玩导出全链路，
+> 以及素材库、Live2D 模型直导出、同屏三人规约。发布形态：tag 入库，
+> Release/安装包上传挂到 v3.5.0（用户拍板"v3.4 不用上传，直接冲 v3.5"）。
+
+### 舞台布置（方案A，C 余量）
+- `stage_view.py` StageView 预览：拖拽摆位/滚轮缩放/命中，`layout_at(clip,t)`
+  唯一读取入口；layout 契约 {x,y,scale,rot}+sanitize 保留未知键（opacity/crop/
+  keyframes 预留，v3.5 C 类关键帧只改其内部）。
+- `video_export.py` 多轨自底向上 RGBA 合成 + `layer_rect` 共享几何（paste 与
+  命中同源）；`video_source.py` ImageSource 保 alpha（修复立绘变实心紫块事故）。
+- 工作台属性面板：布局组+六向对齐；右栏暗色对比度修复。
+
+### DSH 联动（`remote_control.py`，127.0.0.1:8765）
+- 本地 HTTP 命令通道：project.new / scene.set_bg / figure.add·move·remove /
+  motion·expression.set / say / timeline.seek / snapshot / webgal.export /
+  script.import / assets.query / runtime.status·import / state.get。
+- 安全：Origin 403 / 非 JSON 415 / >2MB 413 / sha fail-closed；HTTP 线程零 Qt，
+  QTimer.singleShot(0, receiver) 主线程派发（本机 PySide6 无 QWidget.after）。
+- 「DSH 联动」菜单开关；退出时 aboutToQuit 停服。
+
+### WebGAL 双向
+- `webgal_export.py` 规则 1-11：多轨→scene 脚本、台词行、**playable 可玩包**
+  （运行时树拷贝双击即玩）；**H1 Cubism2 模型目录直导**（整角色根含
+  .chara/.mtn_exp，运行时原生支持无需 .moc3；动作三级匹配写真实键名）、
+  H1b 顶层扁平 model.json 兼容、H2a 台词带动作自动插 changeFigure -motion 行。
+- `webgal_import.py`：时间游标算法、命令白名单、素材库回退定位（orig 清理后
+  走包内副本）。E2E 实测用户剧本 39 语句→29 台词 0 警告。
+- `runtime_pack.py`：运行时 zip 导入/官方下载（sha256 钉版 MPL-2.0），
+  不进安装包；模板页状态卡 + 资产管理下载。
+
+### 素材库（AI 选素材的数据底座）
+- `asset_library`（仓库外，版权红线）：整合包扫描打标 1471 条
+  （bg 1053/bgm 286/sfx 35/model 97 引用型），MyGO 原版 BGM 收编、
+  Mujica OST flac 引用登记；`assets.query` 命令 + 导入回退 + 投喂包
+  （D:\work\puppet\AI投喂包，make_ds_pack.py 生成）。
+- 用户清理整合包已利用原件（1.10GB）后，index 由副本重建；builder 加
+  REFUSE 防呆（原件缺失拒覆盖）。
+
+### Live2D 数据与规约
+- `motion_table.py` 数据文件化（templates/webgal/motion_table.json，mtime 热重载）；
+  G5 Cubism 键名形态放行（taki/angry01 全程存活）；规范 5.2 每句配动作。
+- ~~同屏最多 3 人~~ **已于 2026-11-14 下午按用户新规撤销**（见下「立绘行为重做」）。
+- 剧情编辑器（文本页）：时刻/名字/内容/时长/动作/表情表格，点行跳转、
+  当前句高亮、undo 全覆盖。
+
+### 立绘行为重做（2026-11-14 下午，用户实测反馈驱动）
+用户三条新规：①**角色数量不设上限**（撤销同屏 3 人）②**任何人说话都不得隐藏
+其他在场立绘**，立绘默认持续在场、只有脚本显式声明退场才移除 ③**立绘可任意
+平移**（不再钉死 left/center/right）。
+- **根因修复（用户亲自诊断）**：`webgal_import` 分轨键取 `os.path.basename(path)`，
+  导致所有角色挤进同一条 `FIG-model.json` 轨（单轨单活跃 clip → 后来者挤掉
+  前人），这才是"一人说话另一人消失"的真正根因。改为 `_who_of(path)` 按**角色
+  粒度**分轨（`figure/<角色>/…` → `FIG-<角色>`），同角色换装才复用同轨。
+- `remote_control` 同步改为按角色复用轨（`_fig_track_for`），杜绝同角色双轨叠影。
+- **驻场语义**（`webgal_export`）：立绘 clip 终点==工程终点属脚本自然收尾，
+  **不 emit `changeFigure:none`**；只有中途显式退场/换装才在该刻出 none 且必带
+  槽位。修复"话说到一半人没了"。
+- 撤上限全链：`FIGURE_LIMIT = None`（助手函数保留供信息展示）、RC 不再拒绝、
+  工作台不再拦截、导入导出不再报"上限 3"警告；测试断言全部翻转为"放行"。
+
+### 动作表扩容（DS 反馈「表里给的动作太少了」）
+- 实测素材库：97 个模型**每个都有 664 动作 + 232 表情，且动作集完全相同**；
+  664 键 = 11 个角色命名空间合集（anon/mana/mutsumi/nyamu/rana/sakiko/soyo/
+  taki/tomori/uika/umiri），**动作跨角色通用**——任何模型都能播任何命名空间的
+  动作（用户点破："每个模型都可以用别人的动作"）。
+- `templates/webgal/motion_table.json` v2：保留 7 个程序化动作 + 5 表情，
+  新增 664 cubism 动作 + 232 cubism 表情，附 11 组 namespaces 说明与 21 条
+  recommended 推荐层（避免 664 条裸键名稀释 AI 注意力）。
+- 投喂包新增 `motion_keys.json`（21KB 键名清单），规范新增 5.3 节「动作/表情
+  键名：跨角色共享库」。索引只记 40 个的根因（build_asset_library `[:40]` 截断）
+  已定位。
+- `webgal_export` 修一个**真 bug**：`_proj_end` 计算遇非 dict 台词条目直接
+  AttributeError 崩溃（脏数据一条就炸整个导出），已加类型防护。
+
+### git 源码同步（新功能，用户需求）
+- `git_sync.py`：比对本地 `VERSION` vs 远端 `origin/main`，远端新则**备份后**
+  只覆盖差异文件（`git checkout <remote> -- <diff 清单>`，不 reset --hard，
+  保住 HEAD 可回滚）。用户三条硬约束：只比版本号 / **工作区有未提交改动一律
+  拒绝**（保护在途工作）/ **仅在用户点击更新按钮时才比对**（零自动检测：不
+  轮询、不启动检查、不加角标）。
+- 接线：欢迎页「检查更新」按钮 → 先比源码版本 → 再走原安装包更新链。
+
+### 体验与安全
+- 未保存退出守卫三态（保存并退出/确认退出/取消，History.changes 基线）。
+- 进工作台默认最大化（offscreen 容错降级）。
+- E2E 定版链抓修 4 个真 bug：RC figure.add 不识别 model.json 目录、
+  motion 校验丢 G5 键名、export 不传 game_name、4:3 导入背景被几何误判成立绘。
+- 应用内预览/MP4 字幕同步 MyGO 风（无底框 + 8 方向黑描边白字 + 蓝胶囊名牌）。
+
+### 测试
+新增/大改 22 套件：stage_view 41 · webgal_export 152 · webgal_import 41 ·
+remote_control 57 · motion_table 58 · video_preset 26 · close_guard 24 ·
+close_wiring 12 · wb_template 14 · asset_library 86 · asset_consume 47 ·
+cubism_key 33 · dialogue_action 18 · figure_limit 22 · figure_limit_wb 6 ·
+script_editor 34 · video_source 116(+H2/H2r) · video_layout 63 ·
+update_checker 71 · **git_sync 46 + git_sync_ui 18** · runtime_e2e_smoke + E2E 16。
+全量回归 **19/19 套件全绿**（2026-11-14 下午）。
+
+---
+
 ## v3.3.0（2026-11-13 15:50）L2D 适配启动 + 下载进度可视化 + 加速包 P0 修复
 
 > 版本说明：原计划 3.2.2（模板占位/installer 清理），因 L2D 导出属成体系新功能

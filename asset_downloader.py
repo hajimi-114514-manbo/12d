@@ -221,16 +221,21 @@ class AssetDownloadThread(QThread):
         return True
 
     def run(self):
-        """执行下载。三种形态：
+        """执行下载。四种形态：
            逐文件（模型）：asset 有 "files" -> 按相对路径逐个下（支持逐文件续传）
            zip   （运行时/sam）：asset 有 "url" -> 下整包再解压
            分卷  （CUDA 包）：asset mode=="parts" -> 多卷下载拼接解压覆盖
+           wheel （python_pack）：asset mode=="wheel" -> 下载官方 wheel
+                 （zip 格式）-> sha256 校验 -> 解压到 parts_target_dir
         """
         self._register_active()          # task-20：登记活跃下载（菜单显示进度用）
         try:
             import asset_catalog as AC
             if self.asset.get("mode") == "parts":
                 self._run_parts()
+                return
+            if self.asset.get("mode") == "wheel":
+                self._run_wheel()
                 return
             plan = AC.asset_urls(self.asset)
             if not plan:
@@ -451,6 +456,29 @@ class AssetDownloadThread(QThread):
             self.failed.emit("所有镜像都失败；已下载部分保留，可重试续传")
             return
         zpath = os.path.join(parent, base_name + ".zip")
+        # v3.4.0 安全加固：清单声明了 zip_sha256 就必须先校验再解压（fail-closed）
+        want = str(self.asset.get("zip_sha256") or "").strip().lower()
+        if want:
+            import hashlib
+            self.status.emit("校验整包 sha256…")
+            h = hashlib.sha256()
+            try:
+                with open(zpath, "rb") as f:
+                    while True:
+                        blk = f.read(1024 * 1024)
+                        if not blk:
+                            break
+                        h.update(blk)
+            except OSError as e:
+                self.failed.emit("校验读取失败：%s" % str(e)[:80])
+                return
+            if h.hexdigest().lower() != want:
+                try:
+                    os.remove(zpath)
+                except OSError:
+                    pass
+                self.failed.emit("sha256 校验不符，坏包已删除（镜像内容可能被篡改）")
+                return
         if zipfile.is_zipfile(zpath):
             if not self._extract_zip(zpath, dest_dir):
                 self.failed.emit("解压失败")
@@ -469,6 +497,109 @@ class AssetDownloadThread(QThread):
             self.failed.emit("校验失败：%s" % e)
             return
         self.finished_ok.emit(dest_dir)
+
+    # ---------- wheel 模式（python_pack，H3-c WebEngine）----------
+    def _run_wheel(self):
+        """官方 wheel（zip 格式）单包下载 -> sha256 fail-closed 校验 ->
+        解压到 parts_target_dir（runtime_root\\Lib\\site-packages）。
+
+        与 _run_parts 共享的安全闸语义（各自按需收紧）：
+          1. sha256 未声明 -> 拒装（python_pack 直接进 site-packages，
+             宁可不装不可装坏）
+          2. sha256 不符 -> 删坏包报错
+          3. 解压后 done_marker 探测失败 -> 报错（防"验证不过就 finished"）
+        与 cuda_pack 的差异：wheel 无分卷（单包断点续传），无 pre_delete
+        （PySide6 已装 Essentials，WebEngine 是纯增量，重复解压幂等）。
+        """
+        import hashlib
+        import asset_catalog as AC
+        asset = self.asset
+        plan = AC.asset_urls(asset)
+        urls = (plan[0][1] or []) if plan else []
+        if not urls:
+            self.failed.emit("该资产没有配置下载地址")
+            return
+        target = AC.parts_target_dir(asset, self.base_dir)
+        if not target:
+            self.failed.emit("找不到运行时目录（runtime\\Lib\\site-packages）")
+            return
+        # 磁盘预检：size 已知按 1.2x 估，未知按 300MB 兜底（WebEngine wheel 量级）
+        need = int(asset.get("size") or 300 * 2 ** 20)
+        try:
+            drive = os.path.splitdrive(os.path.abspath(target))[0] + os.sep
+            free = shutil.disk_usage(drive).free
+            if free < need * 1.2:
+                self.failed.emit("磁盘空间不足：约需 %s，%s 仅剩 %s"
+                                 % (human_mb(need * 1.2), drive, human_mb(free)))
+                return
+        except Exception:
+            pass
+        # 下载（单包断点续传；.part 落临时工作目录，与 cuda_pack 同款隔离）
+        work = os.path.join(os.environ.get("TEMP") or target,
+                            "muppet_wheel_dl")
+        try:
+            os.makedirs(work, exist_ok=True)
+        except Exception as e:
+            self.failed.emit("无法创建下载目录：%s" % e)
+            return
+        fname = os.path.basename(urls[0].split("?")[0]) or "pack.whl"
+        dl_path = os.path.join(work, fname)
+        size = None
+        for u in urls:
+            if self._cancel:
+                self.failed.emit("已取消")
+                return
+            self.status.emit("连接 %s" % u.split("/")[2])
+            try:
+                sz = self._download_file(u, dl_path, 0,
+                                         int(asset.get("size") or 0))
+            except Exception as e:
+                self.status.emit("镜像失败：%s" % str(e)[:60])
+                sz = None
+            if sz is not None:
+                size = sz
+                break
+        if size is None:
+            self.failed.emit("所有镜像都失败；已下载部分保留，可重试续传")
+            return
+        # sha256 fail-closed（python_pack 直接进 site-packages，同 parts 安全策略）
+        want = (asset.get("zip_sha256") or "").strip()
+        if not want:
+            self.failed.emit("python_pack 清单未声明 zip_sha256，拒绝安装"
+                             "（安全策略）")
+            return
+        self.status.emit("校验 sha256…")
+        h = hashlib.sha256()
+        with open(dl_path, "rb") as f:
+            while True:
+                b = f.read(4 * 1024 * 1024)
+                if not b:
+                    break
+                h.update(b)
+        if h.hexdigest().lower() != want.lower():
+            try:
+                os.remove(dl_path)      # 坏包删除（.part 保留续传语义不受影响）
+            except OSError:
+                pass
+            self.failed.emit("校验失败（sha256 不符，坏包已删除）——重试将"
+                             "从断点重新校验下载")
+            return
+        if not zipfile.is_zipfile(dl_path):
+            self.failed.emit("下载结果不是有效 wheel/zip（包可能损坏），请重试")
+            return
+        # 解压到 site-packages（wheel 顶层多目录：PySide6/ + dist-info/，
+        # 单顶层剥离逻辑不会误触发；重复安装 = 覆盖同版本文件，幂等）
+        self.status.emit("解压到运行环境…")
+        if not self._extract_zip(dl_path, target):
+            self.failed.emit("解压失败（可重试）")
+            return
+        shutil.rmtree(work, ignore_errors=True)
+        # 落地校验：done_marker 必须出现（PySide6\Qt6WebEngineCore.dll）
+        if not AC.is_installed(asset, self.base_dir):
+            self.failed.emit("解压后校验未通过：未找到 WebEngine 标志文件"
+                             "（%s）。包内容可能与预期不符" % target)
+            return
+        self.finished_ok.emit(target)
 
     # ---------- 分卷模式（CUDA 加速包）----------
     def _run_parts(self):
@@ -556,38 +687,43 @@ class AssetDownloadThread(QThread):
         except Exception as e:
             self.failed.emit("分卷合并失败：%r" % e)
             return
-        # 整包校验
+        # 整包校验（v3.4.0 fail-closed：分卷包直接替换 torch DLL，
+        # 清单未声明 sha256 一律拒装，宁缺毋滥）
         want = (asset.get("zip_sha256") or "").strip()
         note = ""
-        if want:
-            self.status.emit("校验整包 sha256…")
-            h = hashlib.sha256()
-            with open(zip_path, "rb") as f:
-                while True:
-                    b = f.read(4 * 1024 * 1024)
-                    if not b:
-                        break
-                    h.update(b)
-            if h.hexdigest().lower() != want.lower():
-                try:
-                    os.remove(zip_path)
-                except OSError:
-                    pass
-                # 坏包必须连分卷一起删：只删 zip 留着错卷，下次拼接还是坏的
-                for p in parts:
-                    fn = os.path.basename(
-                        (p.get("url") or "").split("?")[0]) or "part"
-                    for cand in (os.path.join(work, fn),
-                                 os.path.join(work, fn + ".part")):
-                        try:
-                            os.remove(cand)
-                        except OSError:
-                            pass
-                self.failed.emit("校验失败（sha256 不符，坏包与分卷已删除）——"
-                                 "重试将完整重新下载")
-                return
-        else:
-            note = "（未校验 sha256）"
+        if not want:
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
+            self.failed.emit("加速包清单未声明 zip_sha256，拒绝安装（安全策略）")
+            return
+        self.status.emit("校验整包 sha256…")
+        h = hashlib.sha256()
+        with open(zip_path, "rb") as f:
+            while True:
+                b = f.read(4 * 1024 * 1024)
+                if not b:
+                    break
+                h.update(b)
+        if h.hexdigest().lower() != want.lower():
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
+            # 坏包必须连分卷一起删：只删 zip 留着错卷，下次拼接还是坏的
+            for p in parts:
+                fn = os.path.basename(
+                    (p.get("url") or "").split("?")[0]) or "part"
+                for cand in (os.path.join(work, fn),
+                             os.path.join(work, fn + ".part")):
+                    try:
+                        os.remove(cand)
+                    except OSError:
+                        pass
+            self.failed.emit("校验失败（sha256 不符，坏包与分卷已删除）——"
+                             "重试将完整重新下载")
+            return
         if not zipfile.is_zipfile(zip_path):
             self.failed.emit("合并结果不是有效 zip（某卷可能损坏），请重试")
             return

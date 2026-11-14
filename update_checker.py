@@ -85,7 +85,8 @@ def is_newer(remote, local):
 
 def fetch_version_json(timeout=None):
     """按 REPO_VERSION_URLS 顺序取 version.json；全挂/超时 -> None。
-    timeout 是三源共享的**总预算**（默认 FETCH_BUDGET=30s）。"""
+    timeout 是三源共享的**总预算**（默认 FETCH_BUDGET=30s）。
+    成功时把命中源记入 last_source（供 sha 交叉校验排除自身）。"""
     budget = float(timeout) if timeout else FETCH_BUDGET
     deadline = time.monotonic() + budget
     for url in REPO_VERSION_URLS:
@@ -100,10 +101,57 @@ def fetch_version_json(timeout=None):
                     continue
                 obj = json.loads(resp.read().decode("utf-8-sig", "ignore"))
             if isinstance(obj, dict):
+                global last_source
+                last_source = url
                 return obj
         except Exception:
             continue                      # 单镜像失败静默换下一个
     return None
+
+
+# 命中 fetch_version_json 的源 URL（模块级，测试可重置）。
+last_source = None
+
+
+def cross_check_sha(expected_sha, budget=15.0):
+    """安全加固（v3.4.0 联网审计）：ghfast/jsdelivr 属第三方代理，单一源可被
+    整体伪造（假 version + 假 sha 配套）。下载校验通过后**换一个源**再取一次
+    version.json 比对 installer_sha256。
+    返回 (verdict, sha_or_None)：
+      "agree"       另一源声明的 sha 与 expected 一致
+      "conflict"    另一源声明的 sha 不一致 -> 调用方必须删包拒装
+      "unreachable" 其余源都不可达/未声明 sha -> 宽容通过（离线优先）
+    """
+    want = str(expected_sha or "").strip().lower()
+    if not want:
+        return "unreachable", None
+    deadline = time.monotonic() + max(1.0, float(budget))
+    checked = False
+    for url in REPO_VERSION_URLS:
+        if url == last_source:
+            continue
+        left = deadline - time.monotonic()
+        if left <= 0:
+            break
+        try:
+            req = urllib.request.Request(url, headers=UA)
+            with urllib.request.urlopen(req, timeout=left) as resp:
+                code = getattr(resp, "status", 200)
+                if code != 200:
+                    continue
+                obj = json.loads(resp.read().decode("utf-8-sig", "ignore"))
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        other = str(obj.get("installer_sha256") or "").strip().lower()
+        if not other:
+            continue                      # 该源未声明 sha：换下一个源
+        checked = True
+        if other == want:
+            return "agree", other
+        return "conflict", other
+    return ("agree" if checked else "unreachable"), None
 
 
 # ---------------- 安装包下载（.part 断点续传，独立实现） ----------------
@@ -301,7 +349,7 @@ class UpdateThread(QThread):
         # 上一轮已下好且仍是要的版本：直接复用
         if os.path.isfile(target) and os.path.getsize(target) > 0:
             try:
-                if self._verify(target, meta):
+                if self._verify(target, meta) and self._cross_ok(meta):
                     set_pending_installer(target)
                     self.ready.emit(target)
                     return
@@ -325,6 +373,10 @@ class UpdateThread(QThread):
                 os.remove(target)
                 self.failed.emit("sha256 校验不符，坏包已删除")
                 return
+            if not self._cross_ok(meta):
+                os.remove(target)
+                self.failed.emit("多源 sha256 交叉校验不一致（镜像可能被篡改），包已删除")
+                return
         except OSError as e:
             self.failed.emit("校验读写失败：%s" % str(e)[:80])
             return
@@ -332,12 +384,22 @@ class UpdateThread(QThread):
         self.status.emit("下载完成")
         self.ready.emit(target)
 
+    def _cross_ok(self, meta):
+        """换源交叉校验 installer_sha256；conflict 拒绝，其余放行（离线宽容）。"""
+        want = str(meta.get("installer_sha256") or "").strip().lower()
+        verdict, _ = cross_check_sha(want)
+        if verdict == "unreachable":
+            self.status.emit("其余版本源不可达，未做交叉校验")
+            return True
+        return verdict == "agree"
+
     def _verify(self, target, meta):
-        """sha256 校验；version.json 未声明则跳过（status 注明）。"""
+        """sha256 校验（fail-closed，v3.4.0 安全加固）：version.json 未声明
+        installer_sha256 一律拒绝——镜像代理可整体伪造清单，缺声明视为不可信。"""
         want = str(meta.get("installer_sha256") or "").strip().lower()
         if not want:
-            self.status.emit("清单未声明 sha256，跳过校验")
-            return True
+            self.status.emit("清单未声明 sha256，拒绝安装（fail-closed）")
+            return False
         try:
             got = _sha256(target)
         except OSError:

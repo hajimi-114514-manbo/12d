@@ -19,6 +19,7 @@
 """
 import json
 import os
+import threading
 import time
 
 import numpy as np
@@ -26,7 +27,8 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer, QSize, QSettings
 from PySide6.QtGui import QImage, QPixmap, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-                               QFileDialog, QStackedLayout, QFrame, QSplitter)
+                               QFileDialog, QStackedLayout, QFrame, QSplitter,
+                               QMessageBox)
 from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
                             ToolButton, ComboBox, SpinBox, DoubleSpinBox,
                             StrongBodyLabel, BodyLabel, CaptionLabel,
@@ -36,6 +38,8 @@ from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
 
 import video_model as V
 import video_export as VE
+from stage_view import StageView
+from script_editor import ScriptEditor
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ_BASE = os.path.join(_HERE, "projects")
@@ -123,6 +127,83 @@ class _AssetCard(CardWidget):
         super().mouseDoubleClickEvent(ev)
 
 
+class _TemplateCard(CardWidget):
+    """模板页卡片：标题 + 说明 + 点击触发（A4 模板页）。"""
+
+    def __init__(self, title, desc, on_click, parent=None):
+        super().__init__(parent)
+        self.on_click = on_click
+        self.setFixedSize(168, 148)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        t = BodyLabel(title, self)
+        t.setStyleSheet("color:#e8ecf4; font-size:13px;")
+        lay.addWidget(t)
+        d = CaptionLabel(desc, self)
+        d.setWordWrap(True)
+        d.setStyleSheet("color:#8a93a2; font-size:11px;")
+        lay.addWidget(d, 1)
+        b = PushButton("应用", self)
+        b.setFixedHeight(26)
+        b.clicked.connect(self._click)
+        lay.addWidget(b)
+
+    def _click(self):
+        if self.on_click:
+            self.on_click()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self._click()
+        super().mousePressEvent(e)
+
+
+class _RuntimeCard(CardWidget):
+    """E2 模板页「WebGAL 运行时」状态卡：状态行 + 在线获取 / 导入压缩包。"""
+
+    def __init__(self, on_online, on_import, parent=None):
+        super().__init__(parent)
+        self.on_online = on_online
+        self.on_import = on_import
+        self.setFixedSize(168, 196)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        t = BodyLabel("WebGAL 运行时", self)
+        t.setStyleSheet("color:#e8ecf4; font-size:13px;")
+        lay.addWidget(t)
+        self.status_lbl = CaptionLabel("检测中…", self)
+        self.status_lbl.setWordWrap(True)
+        self.status_lbl.setStyleSheet("color:#8a93a2; font-size:11px;")
+        lay.addWidget(self.status_lbl, 1)
+        b1 = PushButton("在线获取", self)
+        b1.setFixedHeight(26)
+        b1.clicked.connect(self.on_online)
+        lay.addWidget(b1)
+        b2 = PushButton("导入压缩包…", self)
+        b2.setFixedHeight(26)
+        b2.clicked.connect(self.on_import)
+        lay.addWidget(b2)
+        self.refresh()
+
+    def refresh(self):
+        """读 runtime_pack.status() 刷新状态文案（未安装/已装 vX.Y.Z+文件数）。"""
+        try:
+            import runtime_pack as RP
+            st = RP.status()
+        except Exception:
+            self.status_lbl.setText("运行时不可用")
+            return
+        if st.get("installed"):
+            self.status_lbl.setText("已装 %s\n%d 文件" % (
+                st.get("version") or "未知版本", st.get("files", 0)))
+        else:
+            self.status_lbl.setText("未安装\n导入 zip 即用")
+
+
 class VideoWorkbench(QWidget):
     """视频编辑工作台。project_dirty_changed(str) 通知外层改标题。"""
 
@@ -188,7 +269,8 @@ class VideoWorkbench(QWidget):
         ll.setContentsMargins(10, 10, 10, 10)
         ll.setSpacing(8)
         lh = QHBoxLayout()
-        lh.addWidget(StrongBodyLabel("素材库", left))
+        self.asset_header = StrongBodyLabel("素材库", left)
+        lh.addWidget(self.asset_header)
         lh.addStretch(1)
         ll.addLayout(lh)
         ab = QHBoxLayout()
@@ -210,6 +292,9 @@ class VideoWorkbench(QWidget):
                                         left)
         self.asset_empty.setAlignment(Qt.AlignCenter)
         ll.addWidget(self.asset_empty)
+        # F1：文本页剧情编辑器常驻（tab 切换只 show/hide，表单内容不丢）
+        self.script_editor = ScriptEditor(self, left)
+        ll.addWidget(self.script_editor, 1)
         hsplit.addWidget(left)
 
         # 中：预览
@@ -217,13 +302,14 @@ class VideoWorkbench(QWidget):
         cl = QVBoxLayout(center)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(6)
-        self.preview = QLabel(center)
-        self.preview.setAlignment(Qt.AlignCenter)
-        self.preview.setMinimumSize(320, 180)
-        self.preview.setStyleSheet("background:#0d0f13;border-radius:6px;"
-                                   "color:#5a6272;")
-        self.preview.setText("预览")
-        cl.addWidget(self.preview, 1)
+        # A2：预览画布换成 StageView（可拖拽布置 + 选中联动），最小尺寸不变
+        self.stage = StageView(center)
+        self.stage.setMinimumSize(320, 180)
+        self.stage.setStyleSheet("background:#0d0f13;border-radius:6px;")
+        self.stage.clip_selected.connect(self._on_stage_select)
+        self.stage.layout_changed.connect(self._on_stage_layout_changed)
+        self.preview = self.stage          # 兼容旧引用
+        cl.addWidget(self.stage, 1)
         pb = QHBoxLayout()
         self.btn_play = ToolButton(center)
         self.btn_play.setIcon(FluentIcon.PLAY.icon())
@@ -245,8 +331,16 @@ class VideoWorkbench(QWidget):
         right = QFrame(self)
         right.setObjectName("propPanel")
         right.setMinimumWidth(SPLIT_H_MIN[2])
-        right.setStyleSheet("#propPanel{background:#20232a;border-radius:8px;}")
-        rl = QVBoxLayout(right)
+        # F1 修复：内层 host 裸 QWidget 无背景 -> 暗主题下近白底浅灰字对比崩。
+        # 给 host 定 objectName + 深色背景，ScrollArea viewport 同色，标签才可见。
+        right.setStyleSheet(
+            "#propPanel{background:#20232a;border-radius:8px;}"
+            "#propHost{background:#20232a;}"
+            "QScrollArea::viewport{background:#20232a;}")
+        # 属性内容放进滚动容器：内容多时面板可被压缩，不把时间轴饿死
+        host = QWidget(right)
+        host.setObjectName("propHost")
+        rl = QVBoxLayout(host)
         rl.setContentsMargins(12, 12, 12, 12)
         rl.setSpacing(8)
         rl.addWidget(StrongBodyLabel("工程属性", right))
@@ -288,10 +382,73 @@ class VideoWorkbench(QWidget):
             setattr(self, "spin_" + lab, sp)
             row.addWidget(sp, 1)
             rl.addLayout(row)
+
+        # ---- 布局组：X/Y/Scale/Rot + 六向对齐（A2 StageView）----
+        self.lay_group = StrongBodyLabel("布局（舞台）", right)
+        self.lay_group.setVisible(False)
+        rl.addWidget(self.lay_group)
+        for lab, key, rng in (("X", "x", (-0.5, 1.5)), ("Y", "y", (-0.5, 1.5)),
+                              ("Scale", "scale", (0.1, 10.0)),
+                              ("Rot", "rot", (-180.0, 180.0))):
+            row = QHBoxLayout()
+            row.addWidget(CaptionLabel(lab, right))
+            sp = DoubleSpinBox(right)
+            sp.setRange(rng[0], rng[1])
+            sp.setSingleStep(1.0 if key == "rot" else 0.01)
+            sp.setDecimals(1 if key == "rot" else 3)
+            sp.setSuffix(" °" if key == "rot" else "")
+            sp.valueChanged.connect(lambda _v, k=key: self._layout_spin_changed(k))
+            setattr(self, "spin_lay_" + key, sp)
+            row.addWidget(sp, 1)
+            rl.addLayout(row)
+        al = QHBoxLayout()
+        for label, (nx, ny) in (("左上", (0.0, 0.0)), ("上", (0.5, 0.0)),
+                                ("右上", (1.0, 0.0)), ("左下", (0.0, 1.0)),
+                                ("下", (0.5, 1.0)), ("右下", (1.0, 1.0))):
+            btn = PushButton(label, right)
+            btn.setFixedHeight(28)
+            btn.clicked.connect(lambda _=False, a=nx, b=ny: self._align_clip(a, b))
+            al.addWidget(btn)
+        rl.addLayout(al)
+
+        # ---- puppet 预置动作/表情：下拉 + 预览按钮（C2）----
+        self.act_group = StrongBodyLabel("预置动作 / 表情", right)
+        self.act_group.setVisible(False)
+        rl.addWidget(self.act_group)
+        ar = QHBoxLayout()
+        self._motion_ids = [mid for mid, _ in self._preset_choices("motion")]
+        self.cmb_motion = ComboBox(right)
+        for _mid, name in self._preset_choices("motion"):
+            self.cmb_motion.addItem(name)
+        self.cmb_motion.currentIndexChanged.connect(self._motion_changed)
+        ar.addWidget(self.cmb_motion, 1)
+        self._expression_ids = [eid for eid, _ in self._preset_choices("expression")]
+        self.cmb_expr = ComboBox(right)
+        for _eid, name in self._preset_choices("expression"):
+            self.cmb_expr.addItem(name)
+        self.cmb_expr.currentIndexChanged.connect(self._expression_changed)
+        ar.addWidget(self.cmb_expr, 1)
+        self.btn_play_clip = ToolButton(right)
+        self.btn_play_clip.setIcon(FluentIcon.PLAY.icon())
+        self.btn_play_clip.setToolTip("在该片段起点预览")
+        self.btn_play_clip.clicked.connect(self._play_clip_preview)
+        ar.addWidget(self.btn_play_clip)
+        rl.addLayout(ar)
+
         self.btn_del_clip = PushButton("删除选中片段", right)
         self.btn_del_clip.clicked.connect(self._delete_selected)
         rl.addWidget(self.btn_del_clip)
         rl.addStretch(1)
+        pscroll = ScrollArea(right)
+        pscroll.setWidgetResizable(True)
+        # viewport 与内层 host 同色，避免滚动区露出白底
+        pscroll.setStyleSheet(
+            "QScrollArea::viewport{background:#20232a;}"
+            "QScrollArea > QWidget > QWidget{background:#20232a;}")
+        pscroll.setWidget(host)
+        rlay = QVBoxLayout(right)
+        rlay.setContentsMargins(0, 0, 0, 0)
+        rlay.addWidget(pscroll)
         hsplit.addWidget(right)
         hsplit.setStretchFactor(0, 0)
         hsplit.setStretchFactor(1, 2)      # 预览列 stretch 最大
@@ -476,6 +633,9 @@ class VideoWorkbench(QWidget):
         self._apply_project(None)
         self._loading = False
         self._refresh_all()
+        _se = getattr(self, "script_editor", None)
+        if _se is not None:      # F1：撤销/重做后台词表刷新
+            _se.refresh()
 
     def project_dirty(self):
         self.project_dirty_changed()
@@ -601,6 +761,15 @@ class VideoWorkbench(QWidget):
             s = VS.open_source(src)
             try:
                 arr = s.frame(0.0)
+                if arr.ndim == 3 and arr.shape[2] == 4:
+                    # v3.4.0：ImageSource 可返回 RGBA（透明底立绘）；
+                    # 缩略图把 alpha 合成到中性灰底再走 RGB888
+                    a = arr[:, :, 3:4].astype(np.float32) * (1.0 / 255.0)
+                    bg = np.full(arr[:, :, :3].shape, 60.0, np.float32)
+                    arr = (arr[:, :, :3].astype(np.float32) * a +
+                           bg * (1.0 - a)).astype(np.uint8)
+                elif arr.ndim == 2:
+                    arr = np.dstack([arr] * 3)
                 qimg = QImage(np.ascontiguousarray(arr).data, arr.shape[1],
                               arr.shape[0], 3 * arr.shape[1],
                               QImage.Format_RGB888).copy()
@@ -618,14 +787,28 @@ class VideoWorkbench(QWidget):
             if isinstance(wi, QWidget):
                 wi.deleteLater()
         filt = self._asset_tab
+        if filt == "text":
+            # F1：文本页 = 剧情编辑器
+            self._show_script_editor(True)
+            return
+        self._show_script_editor(False)
         if filt == "template":
-            # v3.2.2：模板页占位——目前没有任何模板，只内置一个「导入模板」
-            # 入口按钮（功能未实现，点击提示敬请期待）。后续接模板列表时替换本分支。
-            btn = PrimaryPushButton("导入模板", self.asset_host)
-            btn.clicked.connect(lambda: InfoBar.warning(
-                "模板", "模板功能敬请期待", parent=self,
-                position=InfoBarPosition.TOP, duration=2500))
-            self.asset_flow.addWidget(btn)
+            # A4/E2 模板页：三张工程卡片 + 一张 WebGAL 运行时状态卡
+            cards = [
+                ("空白 WebGAL 工程", "新建空工程并清空台词，拖素材即可开始。",
+                 self._load_template_blank),
+                ("单背景+双立绘演示", "内置生成的渐变背景与两个剪影立绘，含示例台词。",
+                 self._load_template_demo),
+                ("导入 WebGAL 目录…", "选 WebGAL game 目录，反向导入背景与立绘。",
+                 self._import_webgal_dir),
+            ]
+            for title, desc, fn in cards:
+                self.asset_flow.addWidget(
+                    _TemplateCard(title, desc, fn, self.asset_host))
+            self._runtime_card = _RuntimeCard(self._runtime_online,
+                                              self._runtime_import_zip,
+                                              self.asset_host)
+            self.asset_flow.addWidget(self._runtime_card)
             self.asset_empty.setVisible(False)
             return
         for src in self.assets:
@@ -644,6 +827,281 @@ class VideoWorkbench(QWidget):
         self.asset_empty.setVisible(
             not any((self.pivot.currentItem() == "media") == (s["kind"] != "audio")
                     for s in self.assets))
+
+    # ---------- A4 模板页（三张卡片背后的动作） ----------
+    @staticmethod
+    def _templates_dir():
+        _base = os.environ.get("APPDATA") or os.path.expanduser("~")
+        return os.path.join(_base, "MuppetStudio", "templates")
+
+    def _ensure_demo_assets(self):
+        """生成/复用内置演示素材（渐变背景 + 两个半透明人形剪影），零外部版权素材。"""
+        d = self._templates_dir()
+        os.makedirs(d, exist_ok=True)
+        bg = os.path.join(d, "demo_bg.png")
+        fig_l = os.path.join(d, "demo_fig_left.png")
+        fig_r = os.path.join(d, "demo_fig_right.png")
+        if all(os.path.isfile(p) for p in (bg, fig_l, fig_r)):
+            return bg, fig_l, fig_r
+        from PIL import Image, ImageDraw
+        W, H = 1920, 1080
+        bg_img = Image.new("RGB", (W, H))
+        px = bg_img.load()
+        top = (38, 46, 78)
+        bot = (120, 86, 96)
+        for y in range(H):
+            r = y / max(1, H - 1)
+            row = tuple(int(top[i] + (bot[i] - top[i]) * r) for i in range(3))
+            for x in range(W):
+                px[x, y] = row
+        bg_img.save(bg)
+
+        def _silhouette(path, cx):
+            canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            dr = ImageDraw.Draw(canvas)
+            col = (24, 28, 40, 170)
+            head_r = 74
+            head_y = 300
+            body_top = head_y + head_r - 6
+            body_bot = 820
+            half_top, half_bot = 96, 168
+            dr.ellipse([cx - head_r, head_y - head_r, cx + head_r, head_y + head_r],
+                       fill=col)
+            dr.polygon([(cx - half_top, body_top), (cx + half_top, body_top),
+                        (cx + half_bot, body_bot), (cx - half_bot, body_bot)],
+                       fill=col)
+            canvas.save(path)
+
+        _silhouette(fig_l, int(W * 0.30))
+        _silhouette(fig_r, int(W * 0.70))
+        return bg, fig_l, fig_r
+
+    def _src_for(self, path, kind="image"):
+        """构造 source dict（尽量探测真实尺寸，探测不到用 0 兜底）。"""
+        try:
+            import video_source as VS
+            src = VS.probe_source(path)
+            if isinstance(src, dict) and src.get("path"):
+                src["kind"] = kind
+                return src
+        except Exception:
+            pass
+        return V.new_source(kind, path)
+
+    def _load_template_blank(self):
+        """空白 WebGAL 工程：project.new 语义 + 清空台词。"""
+        self._sources.close_all()
+        self.proj = V.new_project()
+        self.proj["dialogue"] = []
+        self._loading = True
+        self._apply_project(None)
+        self._loading = False
+        self._seed_history()
+        self.seek(0.0)
+        self.push_history()
+
+    def _load_template_demo(self):
+        """单背景+双立绘演示：BG 轨 + 两 FIG 轨 + 两条示例台词。"""
+        bg, fig_l, fig_r = self._ensure_demo_assets()
+        self._sources.close_all()
+        proj = V.new_project()
+        proj["tracks"] = []
+        proj["dialogue"] = []
+        ok, _m, tid = V.add_track(proj, "video", "BG")
+        if ok:
+            V.add_clip(proj, tid, V.new_clip(self._src_for(bg), 0.0, 10.0))
+        for path, name, x in ((fig_l, "FIG-1", 0.30), (fig_r, "FIG-2", 0.70)):
+            ok, _m, tid = V.add_track(proj, "video", name)
+            if not ok:
+                continue
+            clip = V.new_clip(self._src_for(path), 0.0, 10.0)
+            lay = clip["layout"]
+            lay["x"], lay["y"], lay["scale"] = x, 0.70, 0.6
+            V.add_clip(proj, tid, clip)
+        proj["dialogue"] = [
+            {"t": 0.5, "dur": 3.0, "who": "旁白",
+             "text": "这是一个内置的演示模板。"},
+            {"t": 4.0, "dur": 3.0, "who": "角色",
+             "text": "背景与立绘均为程序生成，可自由编辑。"},
+        ]
+        self.proj = proj
+        self.proj_dir = None
+        self._loading = True
+        self._apply_project(None)
+        self._loading = False
+        self._seed_history()
+        self.seek(0.0)
+        self.push_history()
+        InfoBar.success("模板", "已载入「单背景+双立绘演示」", parent=self,
+                       position=InfoBarPosition.TOP, duration=2500)
+
+    def _import_webgal_dir(self):
+        """导入 WebGAL game 目录：background→底轨，figure→上层轨（尽力而为）。"""
+        d = QFileDialog.getExistingDirectory(self, "选择 WebGAL 游戏目录（含 game\\）")
+        if not d:
+            return
+        game = os.path.join(d, "game")
+        if not os.path.isdir(game):
+            game = d
+        bg_dir = os.path.join(game, "background")
+        fig_dir = os.path.join(game, "figure")
+        img_ext = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+        bg_files = sorted(f for f in os.listdir(bg_dir)
+                          if os.path.isdir(bg_dir) and f.lower().endswith(img_ext)) \
+            if os.path.isdir(bg_dir) else []
+        fig_files = sorted(f for f in os.listdir(fig_dir)
+                           if os.path.isdir(fig_dir) and f.lower().endswith(img_ext)) \
+            if os.path.isdir(fig_dir) else []
+        self._sources.close_all()
+        proj = V.new_project()
+        proj["tracks"] = []
+        proj["dialogue"] = []
+        n = 0
+        if bg_files:
+            ok, _m, tid = V.add_track(proj, "video", "BG")
+            if ok:
+                t0 = 0.0
+                for fn in bg_files[:8]:
+                    # 同轨不允许重叠：背景图依次首尾相接
+                    V.add_clip(proj, tid,
+                               V.new_clip(self._src_for(os.path.join(bg_dir, fn)),
+                                          t0, 10.0))
+                    n += 1
+                    t0 += 10.0
+        fig_idx = 1
+        for fn in fig_files[:12]:
+            ok, _m, tid = V.add_track(proj, "video", "FIG-%d" % fig_idx)
+            if not ok:
+                continue
+            clip = V.new_clip(self._src_for(os.path.join(fig_dir, fn)), 0.0, 10.0)
+            lay = clip["layout"]
+            lay["x"], lay["y"], lay["scale"] = 0.5, 0.70, 0.6
+            V.add_clip(proj, tid, clip)
+            n += 1
+            fig_idx += 1
+        gname = ""
+        cfg = os.path.join(game, "config.txt")
+        if os.path.isfile(cfg):
+            try:
+                for line in open(cfg, encoding="utf8", errors="ignore"):
+                    if line.startswith("Game_name:"):
+                        gname = line.split(":", 1)[1].strip().rstrip(";")
+                        break
+            except Exception:
+                pass
+        self.proj = proj
+        self.proj_dir = d
+        self._loading = True
+        self._apply_project(None)
+        self._loading = False
+        self._seed_history()
+        self.seek(0.0)
+        self.push_history()
+        InfoBar.success("导入 WebGAL", "已导入 %d 个素材%s" % (
+            n, ("（%s）" % gname) if gname else ""),
+            parent=self, position=InfoBarPosition.TOP, duration=3000)
+
+    # ---------- E2：WebGAL 运行时状态卡动作 ----------
+    def _runtime_online(self):
+        """在线获取 -> 指引到资产管理「WebGAL 引擎运行时」条目（E1 已注册）。"""
+        InfoBar.info("WebGAL 运行时",
+                     "请到「资产管理」菜单的「WebGAL 引擎运行时」条目下载",
+                     parent=self, position=InfoBarPosition.TOP, duration=4000)
+
+    def _runtime_import_confirm(self, zip_path, msg):
+        """覆盖确认通过后，带 confirm=True 重跑 import_zip（后台线程）。"""
+        self._runtime_busy = True
+
+        def work():
+            try:
+                import runtime_pack as RP
+                ok, msg2, _data = RP.import_zip(zip_path, confirm_overwrite=True)
+            except Exception as e:
+                ok, msg2 = False, "导入异常 %s: %s" % (type(e).__name__, e)
+
+            def done():
+                self._runtime_busy = False
+                if ok:
+                    self._refresh_runtime_cards()
+                    InfoBar.success("运行时导入", msg2, parent=self,
+                                    position=InfoBarPosition.TOP, duration=4000)
+                else:
+                    InfoBar.warning("运行时导入", msg2, parent=self,
+                                    position=InfoBarPosition.TOP, duration=5000)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self, done)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _runtime_import_zip(self):
+        """选 zip -> 后台导入；已装需确认覆盖 -> 主线程确认框后 confirm=True。"""
+        if getattr(self, "_runtime_busy", False):
+            InfoBar.info("导入中", "请等待当前导入完成", parent=self,
+                         position=InfoBarPosition.TOP, duration=1800)
+            return
+        zip_path, _ = QFileDialog.getOpenFileName(
+            self, "选择 WebGAL 运行时压缩包", "", "WebGAL 运行时压缩包 (*.zip)")
+        if not zip_path:
+            return
+        self._runtime_busy = True
+
+        def work():
+            try:
+                import runtime_pack as RP
+                ok, msg, data = RP.import_zip(zip_path, confirm_overwrite=False)
+            except Exception as e:
+                ok, msg, data = False, "导入异常 %s: %s" % (type(e).__name__, e), None
+            need_confirm = bool(data and data.get("needs_confirm"))
+
+            def done():
+                self._runtime_busy = False
+                if need_confirm:
+                    ret = QMessageBox.question(
+                        self, "覆盖确认", "WebGAL 运行时已安装，是否覆盖？",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                    if ret == QMessageBox.Yes:
+                        self._runtime_import_confirm(zip_path, msg)
+                    else:
+                        InfoBar.info("覆盖确认", "已取消覆盖", parent=self,
+                                    position=InfoBarPosition.TOP, duration=2000)
+                    return
+                if ok:
+                    self._refresh_runtime_cards()
+                    InfoBar.success("运行时导入", msg, parent=self,
+                                    position=InfoBarPosition.TOP, duration=4000)
+                else:
+                    InfoBar.warning("运行时导入", msg, parent=self,
+                                    position=InfoBarPosition.TOP, duration=5000)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, self, done)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _refresh_runtime_cards(self):
+        """刷新运行时状态卡（未在模板页则忽略）。"""
+        card = getattr(self, "_runtime_card", None)
+        if card is not None:
+            try:
+                card.refresh()
+            except Exception:
+                pass
+
+    def _show_script_editor(self, show):
+        """文本 tab：显示剧情编辑器并隐藏素材库；其它 tab 反之。"""
+        se = getattr(self, "script_editor", None)
+        if se is None:
+            return
+        se.setVisible(bool(show))
+        try:
+            self.asset_scroll.setVisible(not show)
+            self.asset_empty.setVisible(not show)
+            self.btn_add_file.setVisible(not show)
+            self.btn_add_puppet.setVisible(not show)
+            self.asset_header.setText("剧情" if show else "素材库")
+        except Exception:
+            pass
+        if show:
+            se.refresh()
 
     def _filter_assets(self, key):
         self._asset_tab = str(key) if key else "media"
@@ -665,6 +1123,7 @@ class VideoWorkbench(QWidget):
         dur = max(V.MIN_DUR, min(dur, src["src_dur"]) if src.get("src_dur")
                   and kind != "image" else dur)
         clip = V.new_clip(src, end, dur)
+        # K1（task-69）：同屏人数上限撤销——立绘上轨不再事前拦截。
         ok, cid = V.add_clip(self.proj, tid, clip)
         if not ok:
             InfoBar.warning("上轨失败", cid, parent=self,
@@ -678,18 +1137,45 @@ class VideoWorkbench(QWidget):
     def _preview_scale(self):
         return min(1.0, 720.0 / max(1, self.proj["height"]))
 
+    def _sync_preset_sources(self, t):
+        """把当前 t 时刻生效的 puppet clip 的 motion/expression 灌给其源。
+
+        preset 是 clip 级状态，SourceManager 按素材缓存；每次 render 前按
+        当前 clip 字段重算 -> seek/撤销/重做后不残留错值。
+        """
+        try:
+            for tr in self.proj.get("tracks", []):
+                if tr.get("kind") != "video" or tr.get("hidden"):
+                    continue
+                for c in (tr.get("clips") or []):
+                    if not isinstance(c, dict):
+                        continue
+                    s0 = float(c.get("start", 0.0))
+                    d = float(c.get("dur", 0.0))
+                    if t < s0 - 1e-6 or t >= s0 + d - 1e-6:
+                        continue
+                    if (c.get("source") or {}).get("kind") != "puppet":
+                        continue
+                    try:
+                        src = self._sources.get(c["source"])
+                        src.set_preset(c.get("motion", ""),
+                                       c.get("expression", ""))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     def render_frame(self, t):
+        self._sync_preset_sources(t)
         arr = VE.compose_frame(self.proj, t, self._sources.get)
-        sc = self._preview_scale()
-        if sc < 1.0:
-            import cv2
-            arr = cv2.resize(arr, (max(2, int(arr.shape[1] * sc)),
-                                   max(2, int(arr.shape[0] * sc))),
-                             interpolation=cv2.INTER_AREA)
-        qimg = QImage(np.ascontiguousarray(arr).data, arr.shape[1],
-                      arr.shape[0], 3 * arr.shape[1],
-                      QImage.Format_RGB888).copy()
-        self.preview.setPixmap(QPixmap.fromImage(qimg))
+        # 交互门控：播放/逐帧合成中 StageView 跳过鼠标，但照常刷新画面与框
+        self.stage.playing = bool(self._playing)
+        self.stage.tick_busy = bool(self._tick_busy)
+        self.stage.set_frame(arr, self.proj, t)
+        # F1：台词表当前时刻生效行高亮
+        _se = getattr(self, "script_editor", None)
+        if _se is not None:
+            _se.refresh_highlight()
 
     def seek(self, t):
         self._t = float(max(0.0, min(t, V.project_duration(self.proj))))
@@ -751,6 +1237,11 @@ class VideoWorkbench(QWidget):
         for sp in (self.spin_start, self.spin_in, self.spin_dur):
             sp.setEnabled(on)
         self.btn_del_clip.setEnabled(on)
+        # 布局组：有选中即显示
+        self.lay_group.setVisible(on)
+        # puppet 预置动作组：仅 puppet 片段显示
+        is_puppet = bool(on and (c.get("source") or {}).get("kind") == "puppet")
+        self.act_group.setVisible(is_puppet)
         self._loading = True
         if on:
             self.clip_info.setText("%s\n%s" % (
@@ -759,11 +1250,159 @@ class VideoWorkbench(QWidget):
             self.spin_start.setValue(c["start"])
             self.spin_in.setValue(c["src_in"])
             self.spin_dur.setValue(c["dur"])
+            lay = V.layout_at(c)          # 读布局只走 layout_at
+            self.spin_lay_x.setValue(lay["x"])
+            self.spin_lay_y.setValue(lay["y"])
+            self.spin_lay_scale.setValue(lay["scale"])
+            self.spin_lay_rot.setValue(lay["rot"])
+            self._set_combo_by_data(self.cmb_motion, c.get("motion", ""),
+                                   self._motion_ids)
+            self._set_combo_by_data(self.cmb_expr, c.get("expression", ""),
+                                   self._expression_ids)
         else:
             self.clip_info.setText("未选中")
             for sp in (self.spin_start, self.spin_in, self.spin_dur):
                 sp.setValue(0.0)
+            for sp in (self.spin_lay_x, self.spin_lay_y,
+                       self.spin_lay_scale, self.spin_lay_rot):
+                sp.setValue(0.0)
+            self._set_combo_by_data(self.cmb_motion, "", self._motion_ids)
+            self._set_combo_by_data(self.cmb_expr, "", self._expression_ids)
         self._loading = False
+
+    def _set_combo_by_data(self, combo, val, ids):
+        """按 id（并行列表）设置下拉当前项，不触发信号。"""
+        try:
+            combo.blockSignals(True)
+            if val and val in ids:
+                combo.setCurrentIndex(ids.index(val))
+            combo.blockSignals(False)
+        except Exception:
+            pass
+
+    # ---------- A2 StageView 联动 ----------
+    def _on_stage_select(self, clip_id):
+        """StageView 点选 -> 联动时间轴 + 刷新属性面板。"""
+        cid = clip_id or None
+        self._sel_clip = cid
+        setter = getattr(self.timeline, "_set_sel", None)
+        if setter is not None:
+            try:
+                setter(cid)
+            except Exception:
+                pass
+        self._fill_clip_props()
+        self.timeline.refresh()
+
+    def _on_stage_layout_changed(self):
+        """StageView 拖拽/手柄改布局后：压历史 + 重渲染 + 刷新时间轴。"""
+        self.push_history()
+        self.render_frame(self._t)
+        try:
+            self.timeline.refresh()
+        except Exception:
+            pass
+
+    def _layout_spin_changed(self, key):
+        """属性面板改布局：layout_at 读 -> 原地写 clip["layout"] -> 压历史。"""
+        if self._loading or not self._sel_clip:
+            return
+        tr, c = V.find_clip(self.proj, self._sel_clip)
+        if c is None:
+            return
+        lay = V.layout_at(c)
+        val = getattr(self, "spin_lay_" + key).value()
+        if key == "rot":
+            lay["rot"] = float(val)
+        else:
+            lay[key] = float(val)
+        if not isinstance(c.get("layout"), dict):
+            c["layout"] = V.default_layout()
+        c["layout"][key] = lay[key]
+        self.push_history()
+        self.render_frame(self._t)
+
+    def _align_clip(self, nx, ny):
+        """六向对齐：左上基准换算到中心归一化，写回 layout。"""
+        if not self._sel_clip:
+            return
+        tr, c = V.find_clip(self.proj, self._sel_clip)
+        if c is None:
+            return
+        if not isinstance(c.get("layout"), dict):
+            c["layout"] = V.default_layout()
+        c["layout"]["x"] = float(nx)
+        c["layout"]["y"] = float(ny)
+        self.push_history()
+        self.render_frame(self._t)
+        self._fill_clip_props()
+
+    @staticmethod
+    def _motion_names():
+        """预置动作展示名（来自 motion_table.catalog，C2 数据文件驱动）。"""
+        try:
+            import motion_table as MT
+            return [m["name"] for m in MT.catalog()["motions"]]
+        except Exception:
+            return ["idle"]
+
+    @staticmethod
+    def _expression_names():
+        """预置表情展示名（来自 motion_table.catalog）。"""
+        try:
+            import motion_table as MT
+            return [e["name"] for e in MT.catalog()["expressions"]]
+        except Exception:
+            return []
+
+    @staticmethod
+    def _preset_choices(kind):
+        """(id, name) 列表，供下拉 addItem(name, id) 写回 clip 字段。"""
+        try:
+            import motion_table as MT
+            cat = MT.catalog()
+            if kind == "motion":
+                return [(m["id"], m["name"]) for m in cat["motions"]]
+            return [(e["id"], e["name"]) for e in cat["expressions"]]
+        except Exception:
+            return []
+
+    def _motion_changed(self, _idx=0):
+        """预置动作下拉 -> 写 clip["motion"]（合法 id）+ 压历史 + 重渲染。"""
+        if self._loading or not self._sel_clip:
+            return
+        tr, c = V.find_clip(self.proj, self._sel_clip)
+        if c is None:
+            return
+        idx = self.cmb_motion.currentIndex()
+        if idx < 0 or idx >= len(self._motion_ids):
+            return
+        c["motion"] = self._motion_ids[idx]
+        self.push_history()
+        self.render_frame(self._t)
+
+    def _expression_changed(self, _idx=0):
+        """预置表情下拉 -> 写 clip["expression"] + 压历史 + 重渲染。"""
+        if self._loading or not self._sel_clip:
+            return
+        tr, c = V.find_clip(self.proj, self._sel_clip)
+        if c is None:
+            return
+        idx = self.cmb_expr.currentIndex()
+        if idx < 0 or idx >= len(self._expression_ids):
+            return
+        c["expression"] = self._expression_ids[idx]
+        self.push_history()
+        self.render_frame(self._t)
+
+    def _play_clip_preview(self):
+        """在选中片段起点 seek 预览（不做导出依赖）。"""
+        if not self._sel_clip:
+            return
+        tr, c = V.find_clip(self.proj, self._sel_clip)
+        if c is None:
+            return
+        self.seek(c["start"])
 
     def _clip_spin_changed(self, which):
         if self._loading or not self._sel_clip:
@@ -807,6 +1446,9 @@ class VideoWorkbench(QWidget):
         self._fill_clip_props()
         if not self._playing:
             self.render_frame(self._t)
+
+    # K1（task-69）：同屏人数上限撤销——原 I1u 事后超限提示整体移除
+    # （figure_* 助手保留在 video_model，供未来纯信息展示用）。
 
     # ================= 导出 =================
     def _open_export_dialog(self):

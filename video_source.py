@@ -60,6 +60,8 @@ class FrameSource(object):
     height = 0
     fps = 0.0
     src_dur = 0.0
+    placeholder = ""      # 非空 = 占位预览源（如 "cubism2_atlas"），UI 可提示
+                          # 「图集预览，导出后为真模型」；真素材恒 ""
 
     def frame(self, t):
         raise NotImplementedError
@@ -90,12 +92,37 @@ def _imread_rgb(path):
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
+def _imread_rgba(path):
+    """v3.4.0：保 alpha 读图。IMREAD_UNCHANGED + 中文路径 imdecode 兜底。
+    返回 RGB (H,W,3)（无 alpha 素材，行为同 _imread_rgb）或
+    RGBA (H,W,4)（素材带 alpha 通道；BGRA 已转 RGBA）。失败抛 ValueError。
+    消费端 video_export.paste_layer 已按通道数自动走混合/直贴。"""
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        try:
+            raw = np.fromfile(path, dtype=np.uint8)
+            img = cv2.imdecode(raw, cv2.IMREAD_UNCHANGED)
+        except Exception:
+            img = None
+    if img is None:
+        raise ValueError("无法解码图片: %s" % path)
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+    ch = img.shape[2]
+    if ch == 4:
+        return cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+    if ch == 3:
+        return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return cv2.cvtColor(img[:, :, 0], cv2.COLOR_GRAY2RGB)
+
+
 class ImageSource(FrameSource):
-    """静态图片：解码一次常驻缓存，frame(t) 恒返回同一帧（src_dur=0 表示无限长）。"""
+    """静态图片：解码一次常驻缓存，frame(t) 恒返回同一帧（src_dur=0 表示无限长）。
+    v3.4.0 起带 alpha 的素材返回 RGBA (H,W,4)——合成端自动走透明混合。"""
 
     def __init__(self, path):
         self.path = str(path)
-        self._img = _imread_rgb(self.path)
+        self._img = _imread_rgba(self.path)
         self.height, self.width = self._img.shape[:2]
         self.fps = 0.0
         self.src_dur = 0.0
@@ -236,13 +263,22 @@ class PuppetSource(FrameSource):
 
     def __init__(self, project_dir):
         self.path = str(project_dir)
+        self._atlas = None
+        meta = os.path.join(self.path, "layers_meta.json")
+        if not os.path.isfile(meta):
+            # H2r 回退：不是木偶工程但是 Cubism2 模型目录（model.json+.chara）
+            # -> 剪影占位卡常驻（图集内容不渲染，吓人）。挂在"缺 layers_meta"
+            # 分支上，真木偶工程路径逐字节不变；图集也缺/坏 -> 维持抛 ValueError。
+            mj = os.path.join(self.path, "model.json")
+            if os.path.isfile(mj):
+                self._cubism2_atlas(mj)
+                self._closed = False
+                return
+            raise ValueError("不是木偶工程目录（缺 layers_meta.json）: %s" % self.path)
         if V_DIR not in sys.path:
             sys.path.insert(0, V_DIR)
         import l2d_rig_core as C       # 无 UI 核心层，纯 numpy/cv2/PIL/scipy
         self._C = C
-        meta = os.path.join(self.path, "layers_meta.json")
-        if not os.path.isfile(meta):
-            raise ValueError("不是木偶工程目录（缺 layers_meta.json）: %s" % self.path)
         layers, W, H = C.load_layers(meta, self.path)
         self._rig = C.build_rig(layers, W, H)
         self.width, self.height = int(W), int(H)
@@ -267,18 +303,234 @@ class PuppetSource(FrameSource):
                     self.fps = float(f)
         self._rig["keyframes"] = self._keyframes
         self._closed = False
+        # C2：preset 是 clip 级状态，**不进 source_key**（SourceManager 按素材缓存）。
+        # 由调用方在 render 前 set_preset，frame 时叠加到渲染链路。
+        self._motion_id = ""
+        self._expression_id = ""
+        self._preset_role_warned = set()   # 匹配不到节点的 role，首次计一次警告
+
+    # C2 role -> 节点名关键词（匹配不到的 role 跳过，首次计一次警告）
+    _ROLE_KEYWORDS = {
+        "head": ("head", "脸", "顔"),
+        "arm": ("arm", "hand", "手", "臂"),
+        "body": ("body", "躯干", "身体"),
+        "hair": ("hair", "发"),
+    }
+
+    def set_preset(self, motion_id, expression_id):
+        """设置该 clip 的预置动作/表情（不进 source_key，不影响缓存键）。
+
+        调用方（video_workbench）在 render 前按当前 clip 字段灌入，因此
+        seek/撤销/重做后重设，不会残留错值。
+        """
+        self._motion_id = str(motion_id or "")
+        self._expression_id = str(expression_id or "")
+
+    def _role_nodes(self, role, nodes):
+        """role -> 匹配的节点名列表（按关键词子串匹配，全部命中）。"""
+        kws = self._ROLE_KEYWORDS.get(role)
+        if not kws:
+            return []
+        out = []
+        for name in nodes:
+            ln = str(name).lower()
+            if any(str(k).lower() in ln for k in kws):
+                out.append(name)
+        return out
+
+    def _to_params(self, d, role):
+        """增量 dict -> anim 参数增量：rot(度) / ty(像素=dy*H) / sc(倍率)。"""
+        out = {}
+        if "rot" in d:
+            out["rot"] = float(d["rot"])
+        if "dy" in d:
+            out["ty"] = float(d["dy"]) * float(self.height)
+        if "dscale" in d:
+            out["sc"] = float(d["dscale"])
+        return out
+
+    def _preset_tracks(self, t):
+        """把 motion/expression 折成 rig keyframes（沿用 animation_for 通路）。
+
+        增量应用：rot+=v、y+=dy*H、scale*=1+dscale。为让叠加发生在
+        现有「sin 基线 + 关键帧覆盖」之上，先取该节点的 base 值，再把
+        增量加到 base 上，作为一条 t 时刻的关键帧注入 rig 副本。
+        """
+        try:
+            import anim
+            import motion_table as MT
+        except Exception:
+            return None
+        rig = self._rig
+        nodes = {n["node"]: n for n in (rig.get("nodes") or [])}
+        base_kf = rig.get("keyframes") or {}
+        deltas = {}          # node -> {param: delta}
+        used_roles = set()
+        if self._motion_id:
+            try:
+                mv = MT.eval_motion(self._motion_id, t)
+            except Exception:
+                mv = {}
+            for role, d in mv.items():
+                used_roles.add(role)
+                for node in self._role_nodes(role, nodes):
+                    deltas.setdefault(node, {}).update(self._to_params(d, role))
+        if self._expression_id:
+            try:
+                e = MT.get_expression(self._expression_id)
+                fade = float(e.get("fade") or 0.0)
+                p = min(1.0, max(0.0, t / fade)) if fade > 0 else 1.0
+                ex = MT.eval_expression(self._expression_id, p)
+            except Exception:
+                ex = {}
+            for role, d in ex.items():
+                used_roles.add(role)
+                for node in self._role_nodes(role, nodes):
+                    deltas.setdefault(node, {}).update(self._to_params(d, role))
+        if not deltas:
+            # 有 role 但没匹配到节点 -> 首次计一次警告
+            for role in used_roles:
+                if not self._role_nodes(role, nodes) \
+                        and role not in self._preset_role_warned:
+                    self._preset_role_warned.add(role)
+            return None
+        merged = {}
+        for node, dd in deltas.items():
+            nd = nodes.get(node)
+            if nd is None:
+                continue
+            try:
+                base = self._C.animation_for(node, t, nd, base_kf)
+            except Exception:
+                continue
+            tracks = {}
+            for param, delta in dd.items():
+                b = base.get(param, anim.DEFAULTS.get(param, 0.0))
+                if b is None:
+                    continue
+                if param == "sc":
+                    val = float(b) * (1.0 + float(delta))
+                else:
+                    val = float(b) + float(delta)
+                tracks[param] = [anim.new_keyframe(t, val)]
+            if tracks:
+                merged[node] = tracks
+        return merged or None
+
+    def _silhouette_card(self, w, h, label):
+        """H2r 去吓人化：剪影占位卡（不渲染图集内容）。
+        圆头+圆肩躯干人形剪影，~55% 半透明浅灰、描边略深（同心椭圆模拟，
+        不依赖 PIL ellipse width 参数的版本差异）；底部模型目录名
+        （msyh.ttc，size≈h/18，加载失败静默跳过）。RGBA，尺寸=图集尺寸。"""
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGBA", (max(1, int(w)), max(1, int(h))), (0, 0, 0, 0))
+        dr = ImageDraw.Draw(img)
+        cx = w / 2.0
+        hr = max(2.0, h * 0.10)                    # 头半径
+        hy = h * 0.10 + hr                         # 头圆心 y
+        sw = max(2.0, h * 0.018)                   # 描边宽度
+        dome_bottom = h * 0.76
+        # 肩拱顶与头下缘重叠 0.3r（先画肩后画头）——消除头身缝隙
+        dome_h = max(hr, dome_bottom - (hy + hr * 0.70))
+        dome_w = max(hr * 2.6, w * 0.36)
+        fill = (212, 215, 220, 140)                # 浅灰 ~55% 半透明
+        edge = (148, 153, 162, 215)                # 描边略深
+        # 躯干（圆肩拱形：椭圆中心落在底线上，露出上半 = 经典人形图标肩）
+        dr.ellipse([cx - dome_w / 2 - sw, dome_bottom - dome_h - sw,
+                    cx + dome_w / 2 + sw, dome_bottom + dome_h + sw], fill=edge)
+        dr.ellipse([cx - dome_w / 2, dome_bottom - dome_h,
+                    cx + dome_w / 2, dome_bottom + dome_h], fill=fill)
+        # 头（后画压肩，同套描边）
+        dr.ellipse([cx - hr - sw, hy - hr - sw, cx + hr + sw, hy + hr + sw],
+                   fill=edge)
+        dr.ellipse([cx - hr, hy - hr, cx + hr, hy + hr], fill=fill)
+        try:                                       # 字体缺失/异常 -> 静默跳过文字
+            fnt = ImageFont.truetype(r"C:\Windows\Fonts\msyh.ttc",
+                                     max(10, int(h / 18)))
+            tb = dr.textbbox((0, 0), label, font=fnt)
+            dr.text((cx - (tb[2] - tb[0]) / 2 - tb[0],
+                     h * 0.88 - (tb[3] - tb[1]) / 2 - tb[1]),
+                    label, font=fnt, fill=(228, 231, 236, 235))
+        except Exception:
+            pass
+        return np.asarray(img)
+
+    def _cubism2_atlas(self, mj_path):
+        """Cubism2 模型目录 -> 剪影占位卡（H2r）。
+        解析 model.json 的 FileReferences.Textures[0]（v2 顶层 textures 兼容，
+        含嵌套 list 形态）——图集**只用于校验与取尺寸**（摆位缩放语义不变），
+        内容不渲染（atlas 直贴=碎尸拼贴，用户实机判吓人）。
+        坏 JSON / 无 textures / 图集文件读不出 -> ValueError（三态抛错不动）。"""
+        try:
+            d = json.load(open(mj_path, encoding="utf8"))
+        except Exception:
+            raise ValueError("model.json 解析失败: %s" % mj_path)
+        if not isinstance(d, dict):
+            raise ValueError("model.json 结构非法: %s" % mj_path)
+        fr = d.get("FileReferences")
+        holder = fr if isinstance(fr, dict) else d
+        tex = None
+        for key in ("Textures", "textures"):
+            for src in (holder, d):
+                v = src.get(key) if isinstance(src, dict) else None
+                if v:
+                    tex = v
+                    break
+            if tex:
+                break
+        first = None
+        if isinstance(tex, str):
+            first = tex
+        elif isinstance(tex, (list, tuple)):
+            for x in tex:
+                if isinstance(x, str):
+                    first = x
+                    break
+                if isinstance(x, (list, tuple)):
+                    for y in x:
+                        if isinstance(y, str):
+                            first = y
+                            break
+                if first:
+                    break
+        if not first:
+            raise ValueError("model.json 无可用图集: %s" % mj_path)
+        ap = os.path.join(self.path, first.replace("/", os.sep)
+                          .replace("\\", os.sep))
+        atlas = _imread_rgba(ap)      # 校验语义：缺文件/解不出 -> ValueError
+        self.height, self.width = atlas.shape[:2]
+        label = os.path.basename(os.path.normpath(self.path)) or "model"
+        self._atlas = self._silhouette_card(self.width, self.height, label)
+        self.fps = 0.0
+        self.src_dur = 0.0                  # 静态占位：无限长（image 语义）
+        self.placeholder = "cubism2_atlas"
 
     def frame(self, t=0.0):
         if self._closed:
             raise SourceClosed("PuppetSource 已关闭: %s" % self.path)
+        if self._atlas is not None:
+            return self._atlas              # H2r 回退：恒返回同一张剪影占位卡
         t = min(max(float(t), 0.0), self.src_dur)
-        rgb = self._C.render_frame(self._rig, t)   # 黑底 RGB uint8 (H,W,3)
-        return rgb
+        preset = self._preset_tracks(t)
+        if preset:
+            # 浅拷贝 rig，注入合并后的 keyframes；不改动原 rig 的用户关键帧
+            rig2 = dict(self._rig)
+            kf = dict(self._rig.get("keyframes") or {})
+            for node, tracks in preset.items():
+                node_tracks = dict(kf.get(node) or {})
+                node_tracks.update(tracks)
+                kf[node] = node_tracks
+            rig2["keyframes"] = kf
+            rgb = self._C.render_frame(rig2, t)
+        else:
+            rgb = self._C.render_frame(self._rig, t)
+        return rgb   # 黑底 RGB uint8 (H,W,3)
 
     def close(self):
         self._closed = True
         self._rig = None
         self._keyframes = None
+        self._atlas = None
 
 
 # ---------------- 统一入口 ----------------
@@ -376,7 +628,10 @@ def probe_source(path):
     目录且含 layers_meta.json -> puppet；视频/图片/音频按扩展名；未知 -> ValueError。"""
     path = str(path)
     if os.path.isdir(path):
-        if os.path.isfile(os.path.join(path, "layers_meta.json")):
+        # H2：木偶工程（layers_meta.json）或 Cubism2 模型目录（model.json）
+        # 都归 puppet kind——后者由 PuppetSource 内部走图集占位回退。
+        if (os.path.isfile(os.path.join(path, "layers_meta.json"))
+                or os.path.isfile(os.path.join(path, "model.json"))):
             s = PuppetSource(path)
             try:
                 src = {"kind": "puppet", "path": path, "w": s.width, "h": s.height,

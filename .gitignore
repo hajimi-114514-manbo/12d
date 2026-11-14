@@ -1,4 +1,4 @@
-﻿# 模型权重（5.4GB，8 个文件均 >100MB，GitHub 连 LFS 都拒收）
+# 模型权重（5.4GB，8 个文件均 >100MB，GitHub 连 LFS 都拒收）
 # 用户自行按 README 说明放置到 models/ 下
 # 注意前面的 / 只锚定根目录，避免误伤 see-through 内部的 models 代码目录
 /models/
@@ -23,3 +23,16 @@ dist/MuppetStudio-Setup.exe
 
 # 用户工程目录（测试/实际使用都会生成，不入库）
 /projects/
+
+# WebGAL 官方运行时（~70MB，E1b 本地下载物；装机时由资产管线/安装包提供，
+# 不进 git。注意：templates/webgal/ 是我们的产品模板，**必须**入库，
+# 所以这里精确锚定 webgal_runtime 目录，不能写成 templates/runtime）
+templates/webgal_runtime/
+
+# Live2D core（专有许可，绝不入库；用户本地拷贝进导出包）
+templates/**/live2d.min.js
+templates/**/live2dcubismcore.min.js
+
+# 资产库（1.1GB 素材，本地物）
+/asset_library/
+
