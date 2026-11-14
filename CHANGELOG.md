@@ -5,6 +5,48 @@
 
 ---
 
+## v3.4.6（2026-11-14 23:0x）资产管理按当前编辑页过滤：不再列无关资产
+
+> 用户要求原话："资产管理里面和当前编辑页无关的资产就不显示了"。
+
+### 问题
+`AssetMenuMixin` 被骨架工作室（`Workbench`）与视频编辑（`FluentShellWindow`）
+共用，两处都无条件列出全部 7 个资产，混着对方才用的项——骨架页看到
+「WebGAL 引擎运行时」「WebEngine 预览包」，视频页看到 3 个 AI 拆图模型
+和 CUDA 加速包，都不是当前页能用的东西。
+
+### 修法
+Mixin 新增 `ASSET_PAGE` 类属性 + `_asset_visible(a)` 判定：
+- `"skeleton"`（`Workbench`）→ 只显示 `runtime` / `model` / `accel`
+- `"video"`（`FluentShellWindow`）→ 只显示 `runtime` / `python_pack` /
+  `runtime_pack`
+- `None`（未声明）→ 全放行，保持旧行为（向后兼容旧调用方与既有测试）
+- 未知页面名同样全放行（未来加页不误杀）
+
+分组标题也按过滤结果决定：某组过滤后为空则**连标题一起不显示**，
+避免出现「— 模型 —」下面空荡荡。
+
+### 各页实际菜单（GUI 实测）
+| 页面 | 菜单内容 |
+|---|---|
+| 骨架工作室 | 运行环境（Python 运行时）/ 模型（LayerDiff3D、Marigold、MobileSAM）/ 推理加速（CUDA 包） |
+| 视频编辑 | 运行环境（Python 运行时 + WebEngine 预览包 + WebGAL 引擎运行时）；模型组与加速组整组不出现 |
+
+`runtime`（内置 Python 运行时）两页都保留——它是「装完能不能打开」的
+前提，与编辑内容无关但两页都必需。
+
+### 测试
+- 新增 `asset_page_filter_test.py`（**32 项全 PASS**）：宿主声明、
+  7 个资产逐项可见性、向后兼容（未声明/未知页面全放行）、分组模拟、
+  数据未被删改（ASSETS 仍 7 条，过滤只影响显示）、无资产被彻底隐藏。
+- 新增 `asset_menu_gui_test.py`（**18 项全 PASS**）：真实构造两个窗口、
+  点开菜单读回实际文字，验证骨架页无 WebGAL/WebEngine、视频页无
+  模型/CUDA、空分组标题不渲染、连续三次打开无残留累积（防蜈蚣效应）。
+- 回归：asset_catalog / asset_btn / asset_ui / asset_menu_pct /
+  asset_library / asset_consume / webgal_export 全 0 退出。
+
+---
+
 ## v3.4.5（2026-11-14 22:5x）演出特效扩展包：220 条滤镜/运镜/氛围特效入库
 
 > 用户提供了两份 docx（B 站 UP 主「北风的猫5306」制作），要求「提取出来

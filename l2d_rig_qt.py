@@ -161,7 +161,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.4.5"
+VERSION = "3.4.6"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -1821,7 +1821,37 @@ class AssetMenuMixin:
     一致（运行环境 / 模型 / 推理加速 / 刷新状态 / 当前拆图档位行）。
     宿主需提供 self.asset_menu（RoundMenu）与 self.asset_btn（按钮），
     由 _setup_asset_menu() 统一创建。
+
+    v3.4.6（用户要求「资产管理里面和当前编辑页无关的资产就不显示了」）：
+    按**当前编辑页**过滤。宿主通过 `ASSET_PAGE` 类属性声明自己是什么页：
+      - "skeleton"：骨架工作室（拆图/骨骼）。需要 Python 运行时、拆图模型
+        （LayerDiff3D / Marigold / MobileSAM）、CUDA 加速包。
+        **不需要** WebGAL 运行时、WebEngine 预览包（那是视频/网页预览的事）。
+      - "video"：视频编辑工作台。需要 Python 运行时、WebEngine 预览包、
+        WebGAL 运行时（导出可玩包用）。
+        **不需要**拆图模型与 CUDA 加速（视频编辑不做 AI 拆图）。
+      - None / 未声明：不过滤（保持旧行为，全列出来）——兼容旧调用方与测试。
     """
+
+    ASSET_PAGE = None                 # 子类覆盖："skeleton" / "video"
+
+    # 各页面关心的资产 kind。未声明的 kind 一律视为无关、不显示。
+    # python_pack 是 WebEngine 预览运行时（视频页有实时预览才需要）。
+    _PAGE_KINDS = {
+        "skeleton": {"runtime", "model", "accel"},
+        "video": {"runtime", "python_pack", "runtime_pack"},
+    }
+
+    def _asset_visible(self, a):
+        """该资产是否属于当前编辑页。页面未声明时全放行（旧行为）。"""
+        page = getattr(self, "ASSET_PAGE", None)
+        if not page:
+            return True
+        allow = self._PAGE_KINDS.get(page)
+        if allow is None:
+            return True
+        kind = a.get("kind") or "model"      # kind 缺省视为模型（同下方分组）
+        return kind in allow
 
     def _setup_asset_menu(self, parent=None):
         """创建「资产管理」按钮 + 菜单并挂好 clicked -> 重建（先填后弹）。
@@ -1913,19 +1943,34 @@ class AssetMenuMixin:
         # 运行环境（最影响"装完能不能打开"；runtime_pack=WebGAL 官方运行时，
         # E1 条目 kind 用的是 runtime_pack，匹配必须带上，否则菜单不露出
         # 且会漏进下面"模型"组）
-        self.asset_menu.addAction(Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
-        for a in AC.ASSETS:
-            if (a.get("kind") or "") in ("runtime", "runtime_pack"):
+        # v3.4.6：各组按当前页过滤；某组过滤后为空则**连标题一起不显示**，
+        # 避免出现「— 模型 —」下面空荡荡的分组标题。
+        env = [a for a in AC.ASSETS
+               if (a.get("kind") or "") in ("runtime", "runtime_pack",
+                                            "python_pack")
+               and self._asset_visible(a)]
+        if env:
+            self.asset_menu.addAction(
+                Action(FluentIcon.DEVELOPER_TOOLS, "— 运行环境 —"))
+            for a in env:
                 self._add_asset_action(a, a.get("id") not in miss)
-        self.asset_menu.addSeparator()
+            self.asset_menu.addSeparator()
         # 模型
-        self.asset_menu.addAction(Action(FluentIcon.FOLDER, "— 模型 —"))
-        for a in AC.ASSETS:
-            if (a.get("kind") or "model") not in ("runtime", "runtime_pack",
-                                                  "accel"):
+        models = [a for a in AC.ASSETS
+                  if (a.get("kind") or "model") not in ("runtime",
+                                                        "runtime_pack",
+                                                        "python_pack",
+                                                        "accel")
+                  and self._asset_visible(a)]
+        if models:
+            self.asset_menu.addAction(
+                Action(FluentIcon.FOLDER, "— 模型 —"))
+            for a in models:
                 self._add_asset_action(a, a.get("id") not in miss)
         # 推理加速（CUDA 分卷包，N 卡用户提速）
-        accel = [a for a in AC.ASSETS if (a.get("kind") or "") == "accel"]
+        accel = [a for a in AC.ASSETS
+                 if (a.get("kind") or "") == "accel"
+                 and self._asset_visible(a)]
         if accel:
             self.asset_menu.addSeparator()
             self.asset_menu.addAction(
@@ -2046,6 +2091,11 @@ class AssetMenuMixin:
 
 # ---------------- 工作台页 ----------------
 class Workbench(AssetMenuMixin, QWidget):
+    # v3.4.6：骨架工作室页 —— 资产管理只显示拆图相关资产
+    # （Python 运行时 / 拆图模型 / CUDA 加速），不显示 WebGAL 运行时
+    # 与 WebEngine 预览包（那是视频编辑页才用得到的）。
+    ASSET_PAGE = "skeleton"
+
     def __init__(self, win):
         super().__init__(win)
         self.win = win
@@ -4847,6 +4897,11 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
 
     混入 AssetMenuMixin，让视频窗口顶部也有同款「资产管理」菜单。
     """
+
+    # v3.4.6：视频编辑页 —— 资产管理只显示视频链需要的资产
+    # （Python 运行时 / WebEngine 预览包 / WebGAL 运行时），
+    # 不显示拆图模型与 CUDA 加速（视频编辑不做 AI 拆图）。
+    ASSET_PAGE = "video"
 
     def __init__(self):
         super().__init__()
