@@ -42,8 +42,8 @@ pushd "%TMPDIR%"
 if errorlevel 1 popd & goto :err
 popd
 copy /y "%TMPDIR%\%OUTEXE%" "%HERE%%OUTEXE%" >nul
-rem - also refresh the unversioned alias (update_checker/README may reference it)
-copy /y "%TMPDIR%\%OUTEXE%" "%HERE%MuppetStudio-Setup.exe" >nul
+rem - do NOT touch the old unversioned MuppetStudio-Setup.exe: user asked to keep
+rem   existing packages untouched. New builds only produce the versioned name.
 rmdir /s /q "%TMPDIR%"
 echo BUILD OK: %OUTEXE%
 endlocal
