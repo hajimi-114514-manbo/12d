@@ -512,10 +512,64 @@ SKIN_CSS += """
 """
 
 
-def _app_version():
+def _merge_missing(src_dir, dst_dir, warn):
+    """把 src_dir 里「dst_dir 还没有」的文件补进 dst_dir（**绝不覆盖已有文件**）。
+
+    用途：playable 导出拷贝运行时 game/ 时，只补引擎必需资源
+    （template/template.json、animation/animationTable.json、
+    userStyleSheet.css 等），保留我们生成的 scene/start.txt、config.txt、
+    background/、figure/ 等导出内容。返回补入文件数。
+    """
+    n = 0
     try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "version.json"), encoding="utf8") as f:
+        os.makedirs(dst_dir, exist_ok=True)
+    except OSError as e:
+        warn.append("补全目录失败 %s: %r" % (dst_dir, e))
+        return 0
+    for root, _dirs, files in os.walk(src_dir):
+        rel = os.path.relpath(root, src_dir)
+        target = dst_dir if rel == "." else os.path.join(dst_dir, rel)
+        for fn in files:
+            s = os.path.join(root, fn)
+            d = os.path.join(target, fn)
+            if os.path.exists(d):
+                continue                    # 已有（导出内容优先）
+            try:
+                os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
+                shutil.copy2(s, d)
+                n += 1
+            except OSError as e:
+                warn.append("补全文件失败 %s: %r" % (fn, e))
+    return n
+
+
+def _app_version():
+    """水印里的木偶工作室版本。
+
+    优先级：① l2d_rig_qt.py 的 VERSION 常量（**程序真实版本，唯一版本源**）
+            ② version.json 的 version 字段（**发布/更新检查用**，可能与
+               程序版本不同步——例如 v3.4.0 定版时用户拍板"不上传、保持
+               version.json=3.3.0"，此时不能拿它当程序版本）
+            ③ "?"
+
+    历史 bug：只读 version.json 导致 v3.4.0 导出的包水印仍显示 v3.3.0。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    # ① 程序 VERSION 常量（正则抽，避免 import l2d_rig_qt 拉起整个 Qt 应用）
+    try:
+        with open(os.path.join(here, "l2d_rig_qt.py"), encoding="utf8",
+                  errors="ignore") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("VERSION") and "=" in s:
+                    v = s.split("=", 1)[1].strip().strip("'\"")
+                    if v and v[0].isdigit():
+                        return v
+    except OSError:
+        pass
+    # ② version.json 兜底
+    try:
+        with open(os.path.join(here, "version.json"), encoding="utf8") as f:
             return str(json.load(f).get("version", "?"))
     except Exception:
         return "?"
@@ -1291,13 +1345,20 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         rt_dir = rt_st.get("path")
         if rt_dir and os.path.isdir(rt_dir):
             for entry in sorted(os.listdir(rt_dir)):
-                if entry == "game":        # 跳过运行时自带 game/，导出内容层占位
-                    continue
                 src = os.path.join(rt_dir, entry)
                 dst = os.path.join(out_dir, entry)
                 try:
                     if os.path.isdir(src):
-                        shutil.copytree(src, dst, dirs_exist_ok=True)
+                        if entry == "game":
+                            # game/ 特殊：运行时的 game/ 含引擎必需资源
+                            # （template/template.json、animation/animationTable.json、
+                            # userStyleSheet.css 等），之前整目录跳过导致引擎启动
+                            # 时三个 404。改为**只补缺失文件**（不覆盖导出
+                            # 内容：scene/start.txt、config.txt、background/
+                            # 等同名项必须保留我们的版本）。
+                            _merge_missing(src, dst, warn)
+                        else:
+                            shutil.copytree(src, dst, dirs_exist_ok=True)
                     else:
                         shutil.copy2(src, dst)
                     stats["files"] += 1

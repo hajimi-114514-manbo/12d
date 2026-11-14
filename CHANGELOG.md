@@ -96,6 +96,22 @@
   motion 校验丢 G5 键名、export 不传 game_name、4:3 导入背景被几何误判成立绘。
 - 应用内预览/MP4 字幕同步 MyGO 风（无底框 + 8 方向黑描边白字 + 蓝胶囊名牌）。
 
+### 可玩包黑屏测试（用户要求「测试运行 webgal 是否会黑屏」）
+用 DS 真实剧本（74 语句 / 4 角色）走完整产品链：导入 → 导出可玩包 →
+http.server 模拟启动器 → headless Chrome 自动点进游戏 + 推进 30 句对话。
+**结论：不黑屏，人物正常渲染**（实拍见 scripts/temp/bs_game_shot2.png——
+素世/灯/立希三人同屏、各自表情不同、字幕 MyGO 风、水印 v3.4.0）。
+测试过程中揪出并修掉 2 个**真 bug**：
+- **导出包缺引擎必需资源**：playable 导出把运行时 `game/` 整目录跳过，
+  导致 `template/template.json`、`animation/animationTable.json`、
+  `userStyleSheet.css` 全部缺失（引擎启动 3 个 404）。改为 `_merge_missing`
+  **只补缺失、绝不覆盖**导出内容（scene/start.txt、config.txt、background/
+  等一个字节不动）。
+- **水印版本号印错**：`_app_version()` 只读 version.json，而 v3.4.0 定版时
+  用户拍板"不上传、version.json 保持 3.3.0"，导致导出的包水印仍显示
+  v3.3.0。改为优先读 `l2d_rig_qt.py` 的 VERSION 常量（唯一版本源），
+  version.json 降为兜底。新增回归断言 20g2/20g3 锁死。
+
 ### 测试
 新增/大改 22 套件：stage_view 41 · webgal_export 152 · webgal_import 41 ·
 remote_control 57 · motion_table 58 · video_preset 26 · close_guard 24 ·
