@@ -5,6 +5,64 @@
 
 ---
 
+## v3.4.4（2026-11-14 22:2x）WebGAL 人物闪烁修复：立绘不再每次说话都重建
+
+> 用户报障原话："在webgal中每次对话人物会闪烁"（用户随后实测确认已修复）。
+
+### 根因（读 WebGAL 4.6.6 引擎 bundle 定位，非猜测）
+引擎 `index-Dcp3ZA1M.js` 的 changeFigure 处理函数 `H$`：
+```js
+let ee = true;
+if (n !== "") { /* 有 id：按 freeFigure 匹配 */ }
+else M[zd[r]] === e.content && !Y && (ee = false);   // 无 id：按槽位比内容
+ee && ( unmountPerform(...), removeEffectByTargetId(...),
+        removeAnimationSettingsByTarget(...) );      // ← 卸载旧模型实例
+```
+去重只在「同槽位 **同内容**」时成立（ee=false，仅换动作/表情，模型实例保留）。
+**一旦发出 `changeFigure:none`，槽位被清空**，后续同角色的 changeFigure
+必然 ee=true → 卸载旧实例 + 重建 + 200ms 淡入 = **人物闪烁**。
+
+而导出器此前把「同一角色换动作被拆成多个 clip」当成了「角色退场」：
+每个 clip 结束都发一次 `changeFigure:none`。工程里 FIG-<角色> 轨道的
+clip 是按动作切分的（soyo 9 段/taki 7 段/sakiko 7 段…），于是
+**每句台词前**都是 none + 重新载入 = 每说一句闪一次。
+这也违反用户 2026-11-14 定的「立绘默认持续在场，除非明确声明退场，
+否则永不移除」。
+
+### 修法（`webgal_export.py`）
+- `changeFigure:none` 改为「**先登记、后向判定**」：`_NONE_PENDING` 暂存，
+  全部事件收集完再统一裁决。
+- 判定口径：**按（槽位, 角色）配对**——问的是"清空这个槽位之后，这个角色
+  还会回到**这个槽位**吗？"：
+  - 同角色还会回同一槽位（含 clip 首尾相接、none 与新 changeFigure
+    **同一时刻**的边界）→ 不是退场，丢弃 none（换动作由新的 changeFigure
+    直接覆盖，引擎同 key setStage 自行替换实例）；
+  - 不会再回来 → 真退场，保留 none（角色交替/离场必须保留，否则旧模型
+    还占着槽位，新角色会重叠）。
+- 修复后本剧本 none 由 **21 处降到 2 处**（仅剩两处真退场：祥子离场、
+  素世追出去）。
+
+### 验证（新增 `flicker_test.py`，含对照实验）
+用 CDP 驱动真实 Chrome 推进 14 句对话，给每个 Live2D 模型实例打身份戳
+（WeakMap，Live2DModel 的 `tag` 字段保留可读名 `Live2DModel(模型名)`，
+挂在 `window.__PIXI_APP__.stage`），比对推进前后实例 id：
+
+| | 旧行为 | v3.4.4 |
+|---|---|---|
+| none 数量 | 21 | 2 |
+| 推进前实例 | id 1,2,3 | id 1,2,3 |
+| 推进后实例 | **id 4,5,6（全部重建）** | **id 1,2,3（未变）** |
+| 保留实例 | **[]** | **[1,2,3]** |
+
+即：旧行为下模型被完整重建（id 全变 = 闪烁），修复后实例身份保持不变。
+测试同时含静态判据（none 数量、闪烁模式扫描），对照组下 FAIL、修复后 PASS。
+
+回归：selfcontained 22/0、webgal_export 0 退出、webgal_import 0 退出、
+asset_library 0 退出、motion_table 0 退出、remote_control 0 退出、
+blackscreen 16/0、flicker 6/6。
+
+---
+
 ## v3.4.3（2026-11-14 21:0x）素材库定位修复：装到任意目录也能找到
 
 > 打包安装包时实测发现的**真 bug**，不是理论风险：v3.4.2 把 core 放进素材库

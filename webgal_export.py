@@ -1032,6 +1032,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
 
     pool = _NamePool()
     events = []                      # (t, prio, seq, [行, ...])
+    _NONE_PENDING = []              # 待定 none 事件（v3.4.4：需后向判定）
     seq = 0
     first_bg = None                  # config Title_img
     first_bgm = None                 # config Title_bgm
@@ -1071,11 +1072,22 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             continue
         _proj_end = max(_proj_end, _f(_d0.get("t")) + _f(_d0.get("dur")))
 
-    def _exit_none(t1, slot):
-        """显式离场时刻的 none 事件（收尾时刻跳过）。"""
+    def _exit_none(t1, slot, ref=None):
+        """显式离场时刻的 none 事件（收尾时刻跳过）。
+
+        v3.4.4 闪烁修复：**先登记，不立即发**。是否真的需要 none 取决于
+        "这个角色之后还回不回来"——同角色换动作被拆成多个 clip 时，每个
+        clip 结束都发 none 会让引擎在每句台词前卸载+重载 Live2D 模型
+        （引擎 changeFigure 去重只在"同槽位同内容"时生效，none 把槽位清空
+        后必然触发重载 + 200ms 淡入 = 人物闪烁）。
+        真正的退场只在「该角色之后再不出现」时才发 none；还会回来的
+        （换动作/换装）直接由新的 changeFigure 覆盖，引擎自行替换。
+
+        ref = 该立绘的引用（角色名），供后向判定用。
+        """
         nonlocal seq
         if t1 < _proj_end - 0.005:
-            events.append((t1, 1, seq, ["changeFigure:none -%s;" % slot]))
+            _NONE_PENDING.append((t1, 1, seq, slot, ref))
             seq += 1
 
     def figure_event(c, t0, t1, lay, out_name, slot, extra=None):
@@ -1097,7 +1109,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             lines.extend(extra)
         events.append((t0, 1, seq, lines))
         seq += 1
-        _exit_none(t1, slot)
+        _exit_none(t1, slot, out_name)
         fig_intervals.append((t0, t1, slot, out_name))
 
     for tr in tracks:
@@ -1180,7 +1192,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                             "直接可玩（无需 .moc3 手工步骤）"))
                         events.append((t0, 1, seq, lines))
                         seq += 1
-                        _exit_none(t1, slot)
+                        _exit_none(t1, slot, "%s/model.json" % rel_ref)
                         fig_intervals.append(
                             (t0, t1, slot, "%s/model.json" % rel_ref))
                     else:
@@ -1328,6 +1340,49 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             continue
         events.append((_f(cm.get("t")), -1, seq, [_comment(ctxt)]))
         seq += 1
+
+    # ---- v3.4.4 闪烁修复：none 事件后向判定 ----
+    # 引擎 changeFigure 的去重只在「同槽位同内容」时成立（ee=false -> 只换
+    # 动作/表情，模型实例不重建）；一旦发出 none，槽位被清空，后续同角色
+    # 的 changeFigure 必然 ee=true -> 卸载旧模型 + 重载 + 200ms 淡入 = 闪烁。
+    #
+    # 判定口径：**按（槽位, 角色）配对**。同角色的连续 clip（换动作）首尾
+    # 相接时，clip 结束不是退场——角色还在，只是换了个动作，必须由新的
+    # changeFigure 直接覆盖（同 key setStage 引擎自行替换实例）。
+    # 只有「该槽位上、该角色之后不再出现」才发 none（真退场）。
+    #
+    # 为什么必须带槽位：none 是**槽位级**指令（changeFigure:none -center），
+    # 它清空的是那个槽位。判定必须回答："清空这个槽位之后，这个角色还会
+    # 回到这个槽位吗？"——如果角色只是换到了别的槽位，那它确实离开了这个
+    # 槽位，none 应当保留（否则旧模型还占着槽位，新角色挤进来会重叠）。
+    if _NONE_PENDING:
+        # 收集所有真实 changeFigure：(时刻, ref, slot)
+        _fig_events = []
+        for _t, _p, _s, _ls in events:
+            for _l in _ls:
+                if _l.startswith("changeFigure:") and \
+                        not _l.startswith("changeFigure:none"):
+                    _m = re.match(
+                        r"changeFigure:(\S+)\s+-(left|center|right)", _l)
+                    if _m:
+                        _fig_events.append((_t, _m.group(1),
+                                            _m.group(2)))
+        _keep = []
+        for _ev in _NONE_PENDING:
+            _t, _prio, _seq, _sl, _ref = _ev
+            # 该角色之后还会回到**同一槽位**吗？
+            # 用 >= ：同角色 clip 首尾相接时（上一 clip 结束点 == 下一 clip
+            # 起点），新的 changeFigure 与 none **同一时刻**，那也是"继续
+            # 在场"（只是换动作），不能判成退场。
+            _same_slot_again = any(
+                t >= _t - 0.005 and s == _sl and r == _ref
+                for (t, r, s) in _fig_events)
+            if _same_slot_again:
+                continue      # 同角色还会回这个槽位 -> 不是退场 -> 丢弃 none
+            # 该角色不再回这个槽位：none 表示真退场，保留
+            _keep.append((_t, _prio, _seq,
+                          ["changeFigure:none -%s;" % _sl]))
+        events.extend(_keep)
 
     # ---- 规则 6：事件排序输出 ----
     events.sort(key=lambda e: (round(_f(e[0]), 3), e[1], e[2]))
