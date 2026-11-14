@@ -797,11 +797,14 @@ def _inject_skin_content_only(game_root, warn):
 # module script 之前设置 window.live2dPromise（lead 演示包手动补丁写法，
 # 已验证人物动作正常）。
 # 版权红线：core js 只从用户本地磁盘拷进用户本地导出包，绝不进 git/安装包。
+# v3.4.2「完全独立」：core 随素材库交付（asset_library/lib/），用户装完
+# 即有、无需本机装过整合包；git/安装包仍然零 core（红线不变，素材库在
+# 安装包之外、由用户自行部署）。
 _L2D_FILES = ("live2dcubismcore.min.js", "live2d.min.js")
 _L2D_MARK = "muppet-live2d-core-v1"
 _L2D_WARN = ("未找到 Live2D core js（专有许可官方不随包），人物将不显示——"
-             "请设置 MUPPET_LIVE2D_CORE_DIR 指向含 live2d.min.js+"
-             "live2dcubismcore.min.js 的目录")
+             "请把 live2d.min.js + live2dcubismcore.min.js 放进素材库 "
+             "asset_library/lib/，或设置 MUPPET_LIVE2D_CORE_DIR 指向该目录")
 _L2D_CACHE = {"dir": None, "searched": False}   # 命中即缓存；searched 防重复扫盘
 
 
@@ -810,11 +813,31 @@ def _l2d_valid(d):
                            for f in _L2D_FILES)
 
 
+def _asset_lib_core_dir():
+    """素材库里的 core 目录（**v3.4.2 起的主依赖位**）：assets_library/lib/。
+    定位口径与 webgal_import.asset_index_path 对齐：env MUPPET_ASSET_INDEX
+    覆盖（指 json 或 asset_library 目录都行），否则默认同级 webgal_games
+    部署位。返回路径，不保证存在（调用方查 _l2d_valid）。"""
+    env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
+    if env:
+        p = os.path.normpath(env)
+        root = p if os.path.isdir(p) else os.path.dirname(p)
+    else:
+        here = os.path.dirname(os.path.abspath(__file__))
+        root = os.path.normpath(os.path.join(
+            here, "..", "webgal_games", "asset_library"))
+    return os.path.join(root, "lib")
+
+
 def _find_live2d_core(rt_dir=None):
     """查找顺序：①env MUPPET_LIVE2D_CORE_DIR ②runtime 树 lib/（未来版本
-    自带则直接用）③env MUPPET_WEBGAL_PACK_DIR（**限定**：设了就只扫它，
-    同 COMFY_API 语义，测试隔离用）④默认整合包位（用户本地尽力扫描，
-    路径硬编码仅为发现、不入库）。命中缓存模块级；env 优先于缓存。"""
+    自带则直接用）③**素材库 lib/**（v3.4.2：用户装完即可用，不再要求
+    本机有整合包——"完全独立"用户诉求）④env MUPPET_WEBGAL_PACK_DIR
+    （**限定**：设了就只扫它，同 COMFY_API 语义，测试隔离用）⑤默认整合包位
+    （用户本地尽力扫描，路径硬编码仅为发现、不入库）。
+    ③ 用 MUPPET_ASSET_INDEX 而非 MUPPET_WEBGAL_PACK_DIR 做隔离开关，
+    这样"整合包不存在"不再等于"core 找不到"。
+    命中缓存模块级；env 优先于缓存。"""
     env = os.environ.get("MUPPET_LIVE2D_CORE_DIR", "").strip()
     if env and _l2d_valid(env):
         return env
@@ -824,6 +847,11 @@ def _find_live2d_core(rt_dir=None):
             return d
     if _L2D_CACHE["dir"] and _l2d_valid(_L2D_CACHE["dir"]):
         return _L2D_CACHE["dir"]
+    d = _asset_lib_core_dir()
+    if _l2d_valid(d):
+        _L2D_CACHE["dir"] = d
+        _L2D_CACHE["searched"] = True
+        return d
     packenv = os.environ.get("MUPPET_WEBGAL_PACK_DIR", "").strip()
     roots = [packenv] if packenv else [r"D:\BaiduNetdiskDownload"]
     for root in roots:

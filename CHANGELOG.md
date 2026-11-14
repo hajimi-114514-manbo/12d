@@ -5,6 +5,45 @@
 
 ---
 
+## v3.4.2（2026-11-14 20:4x）完全独立：Live2D core 随素材库交付
+
+> 用户诉求原话："用户电脑里没有'整合包-B站北风的猫5306教学整合版'怎么办，
+> 必须做完全独立"。此前 core js 只从整合包/二创引擎里找，等于产品隐式依赖
+> 一个 3.4GB 的第三方网盘包——用户删掉整合包就没法导出带人物的可玩包。
+
+- core 落地位置：**`asset_library/lib/`**（live2d.min.js 129,056B +
+  live2dcubismcore.min.js 206,678B，与整合包同名文件 MD5 一致）。
+  素材库本就是唯一的必备依赖目录，core 并入后「装好素材库=全能力」。
+- `webgal_export.py` 新增 `_asset_lib_core_dir()`：定位口径与
+  `webgal_import.asset_index_path` 对齐（env `MUPPET_ASSET_INDEX` 覆盖，
+  否则默认同级 `webgal_games/asset_library`）。查找链改为
+  ①env `MUPPET_LIVE2D_CORE_DIR` ②runtime 树 `lib/` ③**素材库 `lib/`**
+  ④env `MUPPET_WEBGAL_PACK_DIR`（测试隔离限定）⑤整合包位（降级为可选兜底）。
+  关键：用 `MUPPET_ASSET_INDEX` 而非 `MUPPET_WEBGAL_PACK_DIR` 做隔离开关，
+  于是"整合包不存在"不再等同于"core 找不到"。
+- `webgal_preview.py` 同步（`_find_lib_dir` 插入素材库位）：H3 实时预览
+  同样不再要求本机有整合包。
+- 警告文案改写：从"设置 MUPPET_LIVE2D_CORE_DIR"改为
+  "把两个 js 放进素材库 asset_library/lib/，或设置该环境变量"——
+  指向用户真能执行的动作。
+- 文档同步：`WebGAL脚本编写规范.md` §10、`网页端AI提示词包.md` §10
+  均改为"core 随素材库交付、无需整合包、产品完全独立"。
+- 版权红线不变：core js **仍不进 git、仍不进安装包**（`.gitignore` 的
+  `templates/**/live2d.min.js` 等规则保留）；素材库在安装包之外，
+  由用户自行部署，只在用户本地磁盘之间流转。
+
+实测（`MUPPET_WEBGAL_PACK_DIR` 指向不存在目录，模拟本机无整合包）：
+`_find_live2d_core()` 命中 `...\asset_library\lib`，真实导出
+`live2d_core=True`、warnings 为空、产物 `lib/` 两文件齐全、
+`window.live2dPromise` 注入在 module script 之前。
+
+测试：`selfcontained_test.py` **22/0**（4c/4d/4e 改为断言"整合包缺失仍
+找到 core"，4f/4g 新增"连素材库也指空才降级"的反向验证）；
+`webgal_export_test.py` **154/0**（21e 补 `MUPPET_ASSET_INDEX=empty`，
+否则素材库默认位永远命中、验不出缺失状态）。
+
+---
+
 ## v3.4.0（2026-11-14 凌晨）舞台布置 × DSH 联动 × WebGAL 双向
 
 > 成体系新功能集中版（用户规矩 minor+1）：文字→自动布置→WebGAL 可玩导出全链路，

@@ -265,10 +265,13 @@ changeFigure:none -right;
 
 官方 WebGAL 运行时因专有许可**不自带 Live2D core**（live2d.min.js /
 live2dcubismcore.min.js）。导出含 Live2D 立绘（model 条目）的可玩包时，
-导出器会自动从用户本机找到这两个 js 并注入导出包（拷贝进 `lib/` +
+导出器会自动找到这两个 js 并注入导出包（拷贝进 `lib/` +
 在引擎脚本前设置 `window.live2dPromise`），人物即可正常显示与播放动作。
-若用户本机没有 Live2D core（从未装过整合包/二创引擎），导出会带警告
-提示设置环境变量 `MUPPET_LIVE2D_CORE_DIR` 指向含这两个 js 的目录。
+
+**v3.4.2 起 core 随素材库交付**：文件位置 `asset_library/lib/`。
+用户装好素材库就具备完整能力，**不需要**本机装过整合包或二创引擎。
+查找顺序：环境变量 `MUPPET_LIVE2D_CORE_DIR` → 运行时树 `lib/` →
+**素材库 `lib/`** → 整合包（可选兜底）。
 脚本层面**无需任何特殊写法**：按第 5.1/5.2 节正常引用 model 立绘即可。
 
 **运行方式**：官方 4.6.6 是 ES module 构建，浏览器 `file://` 直开

@@ -111,10 +111,25 @@ def _find_runtime_es(runtime_dir):
     return None
 
 
+def _asset_lib_core_dir():
+    """素材库 core 目录（v3.4.2 起的主依赖位，与 webgal_export 同口径）：
+    env MUPPET_ASSET_INDEX 覆盖（json 或 asset_library 目录皆可），否则默认
+    同级 webgal_games 部署位。返回路径，不保证存在。"""
+    env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
+    if env:
+        p = os.path.normpath(env)
+        root = p if os.path.isdir(p) else os.path.dirname(p)
+    else:
+        root = os.path.normpath(os.path.join(
+            _V_DIR, "..", "webgal_games", "asset_library"))
+    return os.path.join(root, "lib")
+
+
 def _find_lib_dir(lib_dir=None):
     """live2d SDK 目录候选链（官方 runtime 包**不含** SDK，许可件用户自备，
     见 runtime index.html「加载IIFE插件」段）：
-    显式参数 → 环境变量 MUPPET_LIVE2D_DIR → runtime/lib → 本地预研原型 lib。
+    显式参数 → 环境变量 MUPPET_LIVE2D_DIR → runtime/lib → **素材库 lib/**
+    （v3.4.2 起主位，用户装完即有）→ 本地预研原型 lib。
     含 live2d.min.js 才算命中；全无 -> None（页面报 error 降级，不崩）。"""
     cands = []
     if lib_dir:
@@ -123,6 +138,7 @@ def _find_lib_dir(lib_dir=None):
     if env:
         cands.append(env)
     cands.append(os.path.join(RUNTIME_DIR, "lib"))
+    cands.append(_asset_lib_core_dir())
     cands.append(os.path.join(os.path.dirname(_V_DIR), "webgal_games",
                               "preview_proto", "lib"))
     for c in cands:

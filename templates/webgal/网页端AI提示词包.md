@@ -304,10 +304,13 @@ changeFigure:none -right;
 
 官方 WebGAL 运行时因专有许可**不自带 Live2D core**（live2d.min.js /
 live2dcubismcore.min.js）。导出含 Live2D 立绘（model 条目）的可玩包时，
-导出器会自动从用户本机找到这两个 js 并注入导出包（拷贝进 `lib/` +
+导出器会自动找到这两个 js 并注入导出包（拷贝进 `lib/` +
 在引擎脚本前设置 `window.live2dPromise`），人物即可正常显示与播放动作。
-若用户本机没有 Live2D core（从未装过整合包/二创引擎），导出会带警告
-提示设置环境变量 `MUPPET_LIVE2D_CORE_DIR` 指向含这两个 js 的目录。
+
+**v3.4.2 起 core 随素材库交付**：文件位置 `asset_library/lib/`。
+用户装好素材库就具备完整能力，**不需要**本机装过整合包或二创引擎。
+查找顺序：环境变量 `MUPPET_LIVE2D_CORE_DIR` → 运行时树 `lib/` →
+**素材库 `lib/`** → 整合包（可选兜底）。
 脚本层面**无需任何特殊写法**：按第 5.1/5.2 节正常引用 model 立绘即可。
 
 **运行方式**：官方 4.6.6 是 ES module 构建，浏览器 `file://` 直开
@@ -366,6 +369,7 @@ index.html 会黑屏——**双击导出包根目录的「启动游戏」**（ex
 ### BGM bgm（286 首，按 mood/场景 tag）
 
 - **flac**（23 首）：`01.祈り`、`02.番狂わせ`、`03.失楽園`、`04.忘却`、`05.ティータイム？` 等23首
+- **m4a**（23 首）：`01.祈り`、`02.番狂わせ`、`03.失楽園`、`04.忘却`、`05.ティータイム？` 等23首
 - **calm**（16 首）：`11_Rain`、`11_Rain_2`、`13_Shittori`、`13_Shittori_2`、`14_Shittori_on_hanabi` 等16首
 - **ban_g_dream**（14 首）：`crychic_01`、`crychic_01_vocal`、`mygo_01_bridge`、`mygo_01_bridge_2`、`mygo_01_chorus` 等14首
 - **band**（14 首）：`crychic_01`、`crychic_01_vocal`、`mygo_01_bridge`、`mygo_01_bridge_2`、`mygo_01_chorus` 等14首
@@ -380,7 +384,6 @@ index.html 会黑屏——**双击导出包根目录的「启动游戏」**（ex
 - **不安**（6 首）：`15_Unrest`、`59_unrest_2`、`Unrest`、`Unrest_2`、`広がる不安` 等6首
 - **悲伤**（6 首）：`13_Shittori`、`13_Shittori_2`、`14_Shittori_on_hanabi`、`Sad`、`Shittori_on_hanabi湿润-烟花背景` 等6首
 - **感动**（6 首）：`10_Kandou`、`10_Kandou_2`、`Kandou(感动)`、`Kandou(感动)_2`、`Kandou(感动)_2_3` 等6首
-- **雨天**（6 首）：`11_Rain`、`11_Rain_2`、`41_Rain_drizzle`、`50_Rain_Umbrella`、`ショパン「雨だれ」` 等6首
 - （另有 188 首无 mood 标注，按文件名挑）
 
 ### 音效 sfx（35 条）
