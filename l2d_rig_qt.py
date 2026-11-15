@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""伪L2D 骨架工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
+"""伪L2D 木偶工作室 V2.0 —— PySide6 + qfluentwidgets（照 Vocal2Midi 风格）
 
 功能对齐 V1.0。标题栏左上角两个下拉按钮：「文件」（新建/打开/导入/保存/另存为/导出 PSD·AE·JSON·MP4·GIF）与「编辑」（撤销/重做/拆分图片）。
 SeeThrough 拆分走 QThread，绝不阻塞 UI。
@@ -161,7 +161,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.4.9"
+VERSION = "3.4.10"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -1824,7 +1824,7 @@ class AssetMenuMixin:
 
     v3.4.6（用户要求「资产管理里面和当前编辑页无关的资产就不显示了」）：
     按**当前编辑页**过滤。宿主通过 `ASSET_PAGE` 类属性声明自己是什么页：
-      - "skeleton"：骨架工作室（拆图/骨骼）。需要 Python 运行时、拆图模型
+      - "skeleton"：木偶工作室图片编辑页（拆图/骨骼）。需要 Python 运行时、拆图模型
         （LayerDiff3D / Marigold / MobileSAM）、CUDA 加速包。
         **不需要** WebGAL 运行时、WebEngine 预览包（那是视频/网页预览的事）。
       - "video"：视频编辑工作台。需要 Python 运行时、WebEngine 预览包、
@@ -2091,7 +2091,7 @@ class AssetMenuMixin:
 
 # ---------------- 工作台页 ----------------
 class Workbench(AssetMenuMixin, QWidget):
-    # v3.4.6：骨架工作室页 —— 资产管理只显示拆图相关资产
+    # v3.4.6：图片编辑页（旧称骨架工作室）—— 资产管理只显示拆图相关资产
     # （Python 运行时 / 拆图模型 / CUDA 加速），不显示 WebGAL 运行时
     # 与 WebEngine 预览包（那是视频编辑页才用得到的）。
     ASSET_PAGE = "skeleton"
