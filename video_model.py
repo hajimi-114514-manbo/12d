@@ -73,6 +73,12 @@ MIN_DUR = 0.05         # clip 最短时长（秒）
 SNAP_STEP = 0.01       # 吸附/对齐精度（秒）
 
 PROJECT_TYPE = "video_edit"
+# F2-L1（task-39 / v3.5）：工程版本 2 = 多幕（acts）。
+# 读入时 version<=1 自动迁移为单幕 v2 形态；内存里永远是 v2。
+PROJECT_VERSION = 2
+# 分支规模上限（防导出文件爆炸，设计 §2.2）
+MAX_CHOICES_PER_ACT = 8
+MAX_OPTIONS_PER_CHOICE = 6
 
 # v3.4.0 A1 舞台布局默认值（契约见模块 docstring）。scale 合法区间钳位用。
 LAYOUT_DEFAULT = {"x": 0.5, "y": 0.5, "scale": 1.0, "rot": 0.0}
@@ -119,7 +125,12 @@ def layout_at(clip, t=None):
 
 # ---------------- 构造 ----------------
 def new_project(width=1920, height=1080, fps=30):
-    """默认一条视频轨 + 一条音频轨。"""
+    """默认一条视频轨 + 一条音频轨。
+
+    F2-L1 兼容策略（**懒升级**）：新建工程仍是**单幕 v1 形状**
+    （tracks/dialogue 在顶层、无 acts），这样 564+ 项既有回归与全部消费
+    方零改动；只有真正用到多幕（add_act 等）时才升级为 v2。读入 v2 文件
+    也保持 v2（见 sanitize_project）。两形状都由 act_view 统一投影。"""
     return {
         "type": PROJECT_TYPE, "version": 1,
         "width": int(width), "height": int(height), "fps": float(fps),
@@ -131,6 +142,235 @@ def new_project(width=1920, height=1080, fps=30):
              "hidden": False, "locked": False, "clips": []},
         ],
     }
+
+
+def new_act(aid="a1", name=None):
+    """一幕（F2-L1 §2.2）：自带完整单时间轴 + 分支节点。
+
+    默认一条视频轨 + 一条音频轨（与单幕工程默认双轨一致）。"""
+    return {
+        "aid": str(aid), "name": str(name or aid),
+        "tracks": [
+            {"id": "v1", "kind": "video", "name": "视频轨 1",
+             "hidden": False, "locked": False, "clips": []},
+            {"id": "a1", "kind": "audio", "name": "音频轨 1",
+             "hidden": False, "locked": False, "clips": []},
+        ],
+        "dialogue": [],
+        "choices": [],       # [{cid, t|null, prompt, options:[{text,target,set,when}]}]
+        "jumps": [],         # [{jid, t, when, target}]
+        "next": None,        # 无分支续幕（导出 changeScene 衔接）
+    }
+
+
+def act_view(proj, aid=None):
+    """F2-L1 §2.3：把某幕投影成**单时间轴形状**（消费方唯一入口）。
+
+    返回 {type,width,height,fps,tracks,dialogue,comments}。
+    `video_export.compose_frame`、快照、时长计算、StageView、时间轴面板
+    **全部只吃本函数**，签名零改动（多幕改造不炸既有代码的关键机制）。
+
+    **两种形状都支持**：
+    - v1 单幕（无 acts）：直接投影顶层 tracks/dialogue —— 与旧行为全等
+    - v2 多幕：按 aid 取幕（None=第一幕），取不到回第一幕
+
+    返回的 tracks/dialogue 是**原对象引用**（面板编辑直接生效）；
+    需要隔离时调用方 deepcopy。绝不抛。"""
+    src = proj if isinstance(proj, dict) else {}
+    view = {"type": PROJECT_TYPE, "width": src.get("width", 1920),
+            "height": src.get("height", 1080), "fps": src.get("fps", 30.0),
+            "tracks": [], "dialogue": [], "comments": src.get("comments", [])}
+    acts = src.get("acts")
+    if not isinstance(acts, list) or not acts:
+        # v1 单幕：顶层即幕
+        # 注意：不能用 `x or []` —— 空 list 是 falsy，会换成新对象破坏
+        # 「返回原引用」契约（面板直接改 view 必须落到工程上）。
+        t = src.get("tracks")
+        view["tracks"] = t if isinstance(t, list) else []
+        d = src.get("dialogue")
+        view["dialogue"] = d if isinstance(d, list) else []
+        return view
+    act = None
+    if aid is not None:
+        for a in acts:
+            if isinstance(a, dict) and a.get("aid") == aid:
+                act = a
+                break
+    if act is None and acts and isinstance(acts[0], dict):
+        act = acts[0]
+    if act:
+        t = act.get("tracks")
+        view["tracks"] = t if isinstance(t, list) else []
+        d = act.get("dialogue")
+        view["dialogue"] = d if isinstance(d, list) else []
+        if "comments" in act:
+            c = act.get("comments")
+            view["comments"] = c if isinstance(c, list) else []
+    return view
+
+
+def is_multi_act(proj):
+    """是否已是 v2 多幕形状。"""
+    return isinstance(proj, dict) and isinstance(proj.get("acts"), list) \
+        and bool(proj.get("acts"))
+
+
+def _upgrade_to_v2(proj):
+    """懒升级：v1 单幕 -> v2 多幕（原地改 proj 并返回它）。
+
+    只在**真正需要多幕**时调用（add_act / 读入 v2 文件）。迁移语义见
+    §2.3：顶层 tracks/dialogue 收进 acts[0]，顶层不再保留镜像。"""
+    if is_multi_act(proj):
+        return proj
+    act = new_act("a1", "幕一")
+    act["tracks"] = proj.get("tracks") or act["tracks"]
+    act["dialogue"] = proj.get("dialogue") or []
+    if "comments" in proj:
+        act["comments"] = proj.get("comments") or []
+    proj.pop("tracks", None)
+    proj.pop("dialogue", None)
+    proj.pop("comments", None)
+    proj["version"] = PROJECT_VERSION
+    proj["vars"] = proj.get("vars") if isinstance(proj.get("vars"), list) else []
+    proj["acts"] = [act]
+    return proj
+
+
+def find_act(proj, aid):
+    """-> 幕 dict 或 None（v1 单幕形状返回 None：它没有 acts）。"""
+    if not isinstance(proj, dict):
+        return None
+    for a in proj.get("acts") or []:
+        if isinstance(a, dict) and a.get("aid") == aid:
+            return a
+    return None
+
+
+def act_ids(proj):
+    """已声明的幕 id 列表（v1 单幕 -> ['a1'] 虚拟幕，便于 UI 统一展示）。"""
+    if not isinstance(proj, dict):
+        return []
+    if not is_multi_act(proj):
+        return ["a1"]
+    return [a.get("aid") for a in proj["acts"]
+            if isinstance(a, dict) and a.get("aid")]
+
+
+def act_list(proj):
+    """UI 用幕摘要列表：[{aid,name,clips,duration,choices}]。"""
+    out = []
+    if not isinstance(proj, dict):
+        return out
+    if not is_multi_act(proj):
+        view = act_view(proj)
+        clips = sum(len(t.get("clips") or []) for t in view["tracks"]
+                    if isinstance(t, dict))
+        return [{"aid": "a1", "name": "幕一", "clips": clips,
+                 "duration": act_duration(view), "choices": 0}]
+    for a in proj["acts"]:
+        if isinstance(a, dict) and a.get("aid"):
+            out.append({
+                "aid": a["aid"], "name": a.get("name") or a["aid"],
+                "clips": sum(len(t.get("clips") or [])
+                             for t in (a.get("tracks") or [])
+                             if isinstance(t, dict)),
+                "duration": act_duration(a),
+                "choices": len(a.get("choices") or [])})
+    return out
+
+
+def next_act_id(proj):
+    return next_id("a", act_ids(proj))
+
+
+def act_duration(act):
+    """幕内时长（该幕 tracks 的最大 clip 结束时刻）。"""
+    if not isinstance(act, dict):
+        return 0.0
+    end = 0.0
+    for t in (act.get("tracks") or []):
+        if isinstance(t, dict):
+            for c in (t.get("clips") or []):
+                try:
+                    end = max(end, float(c["start"]) + float(c["dur"]))
+                except Exception:
+                    pass
+    return round(end, 3)
+
+
+def add_act(proj, name=None, after_aid=None):
+    """新增一幕后返回 (ok, msg, aid)。首次调用会把 v1 懒升级成 v2。
+
+    新幕复制画布参数（在 proj 顶层，天然共享）+ 空双轨；不复制 tracks/
+    dialogue（那是 duplicate_act 的语义）。"""
+    if not isinstance(proj, dict):
+        return False, "工程不是 dict", None
+    _upgrade_to_v2(proj)
+    aid = next_act_id(proj)
+    act = new_act(aid, name or ("幕%d" % (len(proj["acts"]) + 1)))
+    if after_aid:
+        idx = next((i for i, a in enumerate(proj["acts"])
+                    if a.get("aid") == after_aid), None)
+        if idx is not None:
+            proj["acts"].insert(idx + 1, act)
+        else:
+            proj["acts"].append(act)
+    else:
+        proj["acts"].append(act)
+    return True, "", aid
+
+
+def rename_act(proj, aid, name):
+    """改幕显示名（aid 不变，引用不受影响）。返回 (ok, msg)。"""
+    a = find_act(proj, aid)
+    if a is None:
+        return False, "幕不存在: %s" % aid
+    a["name"] = str(name or aid)
+    return True, ""
+
+
+def duplicate_act(proj, aid):
+    """复制一幕（含 tracks/dialogue/choices/jumps，引用按原样带走）。"""
+    src = find_act(proj, aid)
+    if src is None:
+        return False, "幕不存在: %s" % aid, None
+    new_aid = next_act_id(proj)
+    dup = copy.deepcopy(src)
+    dup["aid"] = new_aid
+    dup["name"] = "%s（副本）" % (src.get("name") or aid)
+    idx = proj["acts"].index(src)
+    proj["acts"].insert(idx + 1, dup)
+    return True, "", new_aid
+
+
+def remove_act(proj, aid):
+    """删一幕。级联：把 choices 选项/jumps/next 里指向它的引用清空。
+
+    至少保留一幕（删最后一个 -> 拒绝）。返回 (ok, msg, cleared_refs)。
+    cleared_refs 供 UI 提示"已清理 N 处引用"。"""
+    a = find_act(proj, aid)
+    if a is None:
+        return False, "幕不存在: %s" % aid, 0
+    if len(proj.get("acts") or []) <= 1:
+        return False, "至少要保留一幕", 0
+    proj["acts"].remove(a)
+    cleared = 0
+    for other in proj["acts"]:
+        if not isinstance(other, dict):
+            continue
+        if other.get("next") == aid:
+            other["next"] = None
+            cleared += 1
+        for ch in (other.get("choices") or []):
+            for opt in (ch.get("options") or []):
+                if opt.get("target") == aid:
+                    opt["target"] = None
+                    cleared += 1
+        for j in (other.get("jumps") or []):
+            if j.get("target") == aid:
+                j["target"] = None
+                cleared += 1
+    return True, "", cleared
 
 
 def new_source(kind, path, w=0, h=0, fps=0.0, src_dur=0.0):
@@ -155,23 +395,42 @@ def next_id(prefix, existing):
 
 
 def next_clip_id(proj):
-    return next_id("c", [c["id"] for t in proj["tracks"] for c in t["clips"]])
+    """下一 clip id。**全工程唯一**（跨幕也不重名）：导出/remote 用
+    clip id 全局定位，跨幕撞 id 会串幕，故扫描全部幕。"""
+    ids = []
+    if is_multi_act(proj):
+        for a in proj.get("acts") or []:
+            for t in (a.get("tracks") or []):
+                for c in (t.get("clips") or []):
+                    ids.append(c.get("id"))
+    else:
+        for t in _tracks_of(proj):
+            for c in t["clips"]:
+                ids.append(c["id"])
+    return next_id("c", ids)
 
 
-def next_track_id(proj, kind):
+def next_track_id(proj, kind, aid=None):
+    """下一轨道 id。**幕内唯一**（每幕自带 v1/a1 起点，与轨道是幕内
+    局部容器一致）；跨幕可同名，所有按轨定位都必须带 aid（见 _tracks_of）。"""
+    tracks = _tracks_of(proj, aid) if aid is not None else _tracks_of(proj)
     p = "v" if kind == "video" else "a"
-    return next_id(p, [t["id"] for t in proj["tracks"] if t["kind"] == kind])
+    return next_id(p, [t["id"] for t in tracks if t["kind"] == kind])
 
 
-def add_track(proj, kind, name=None):
-    """追加轨道；kind 只允许 video/audio。返回 (ok, msg, track_id)。"""
+def add_track(proj, kind, name=None, aid=None):
+    """追加轨道；kind 只允许 video/audio。返回 (ok, msg, track_id)。
+
+    aid（F2-L1 可选）：指定加到哪一幕（缺省当前幕/第一幕）。
+    轨道 id 幕内唯一——多幕同名合法，调用方需带 aid 定位。"""
     if kind not in ("video", "audio"):
         return False, "轨道类型必须是 video/audio", None
-    tid = next_track_id(proj, kind)
-    cnt = sum(1 for t in proj["tracks"] if t["kind"] == kind) + 1
+    tid = next_track_id(proj, kind, aid)
+    tracks = _tracks_of(proj, aid)
+    cnt = sum(1 for t in tracks if t["kind"] == kind) + 1
     label = name or ("%s轨 %d" % ("视频" if kind == "video" else "音频", cnt))
-    proj["tracks"].append({"id": tid, "kind": kind, "name": label,
-                           "hidden": False, "locked": False, "clips": []})
+    tracks.append({"id": tid, "kind": kind, "name": label,
+                   "hidden": False, "locked": False, "clips": []})
     return True, "", tid
 
 
@@ -182,7 +441,7 @@ def clip_end(clip):
 
 def find_clip(proj, clip_id):
     """-> (track, clip) 或 (None, None)"""
-    for t in proj["tracks"]:
+    for t in _tracks_of(proj):
         for c in t["clips"]:
             if c["id"] == clip_id:
                 return t, c
@@ -190,7 +449,7 @@ def find_clip(proj, clip_id):
 
 
 def find_track(proj, track_id):
-    for t in proj["tracks"]:
+    for t in _tracks_of(proj):
         if t["id"] == track_id:
             return t
     return None
@@ -198,15 +457,39 @@ def find_track(proj, track_id):
 
 def project_duration(proj):
     end = 0.0
-    for t in proj["tracks"]:
+    for t in _tracks_of(proj):
         for c in t["clips"]:
             end = max(end, clip_end(c))
     return round(end, 3)
 
 
+def _tracks_of(proj, aid=None):
+    """F2-L1：取"当前幕"的 tracks（消费方零改动接入点）。
+
+    v1 单幕 -> 顶层 tracks 原引用（行为与旧版全等）；
+    v2 多幕 -> act_view(proj, aid)["tracks"]，aid=None 取第一幕。
+    修改型函数（add_track/add_clip…）拿到的是该幕真实 list，写入即生效。"""
+    if not isinstance(proj, dict):
+        return []
+    if is_multi_act(proj):
+        return act_view(proj, aid)["tracks"]
+    t = proj.get("tracks")
+    return t if isinstance(t, list) else []
+
+
+def _dialogue_of(proj, aid=None):
+    """F2-L1：取"当前幕"的 dialogue list（同 _tracks_of 口径）。"""
+    if not isinstance(proj, dict):
+        return []
+    if is_multi_act(proj):
+        return act_view(proj, aid)["dialogue"]
+    d = proj.get("dialogue")
+    return d if isinstance(d, list) else []
+
+
 def clips_at(proj, t, kind=None):
     out = []
-    for tr in proj["tracks"]:
+    for tr in _tracks_of(proj):
         if kind and tr["kind"] != kind:
             continue
         for c in tr["clips"]:
@@ -217,7 +500,7 @@ def clips_at(proj, t, kind=None):
 
 def top_video_clip_at(proj, t):
     """最上层可见视频轨在 t 时刻的 clip（后加的轨在上）。"""
-    for tr in reversed(proj["tracks"]):
+    for tr in reversed(_tracks_of(proj)):
         if tr["kind"] != "video" or tr.get("hidden"):
             continue
         for c in tr["clips"]:
@@ -229,7 +512,7 @@ def top_video_clip_at(proj, t):
 def snap_points(proj, exclude_id=None):
     """所有 clip 边界 + 0，供吸附。"""
     pts = {0.0}
-    for t in proj["tracks"]:
+    for t in _tracks_of(proj):
         for c in t["clips"]:
             if c["id"] == exclude_id:
                 continue
@@ -277,8 +560,15 @@ def _src_limit_ok(clip, src_in, dur):
 
 
 # ---------------- 编辑（原地改，返回 (ok, msg)） ----------------
-def add_clip(proj, track_id, clip):
+def add_clip(proj, track_id, clip, aid=None):
+    """加 clip 到指定轨。aid（F2-L1 可选）=目标幕，缺省当前幕/第一幕。"""
     tr = find_track(proj, track_id)
+    if tr is None and aid is not None:
+        tr = None
+        for t in _tracks_of(proj, aid):
+            if t.get("id") == track_id:
+                tr = t
+                break
     if tr is None:
         return False, "轨道不存在: %s" % track_id
     if tr.get("locked"):
@@ -394,7 +684,7 @@ def delete_range(proj, t0, t1):
     if t1 - t0 < MIN_DUR - EPS:
         return 0
     n = 0
-    for tr in proj["tracks"]:
+    for tr in _tracks_of(proj):
         if tr.get("locked"):
             continue
         out = []
@@ -488,8 +778,139 @@ def _sanitize_dialogue(raw):
     return out
 
 
-def sanitize_project(obj):
-    """脏文件容错：逐字段校验 + 补默认。不合法返回 None。"""
+def _sanitize_tracks(tracks, proj_for_id):
+    """校验一组轨道（sanitize 内部共用：v1 顶层与 v2 每幕）。"""
+    out = []
+    if not isinstance(tracks, list):
+        return out
+    seen_ids = set()
+    for tr in tracks:
+        if not isinstance(tr, dict) or tr.get("kind") not in ("video", "audio"):
+            continue
+        tid = str(tr.get("id") or "")
+        if not tid or tid in seen_ids:
+            # 冲突/缺失：按同类已用编号重排（别丢轨）
+            p = "v" if tr["kind"] == "video" else "a"
+            n = 1
+            used = {t["id"] for t in out}
+            while ("%s%d" % (p, n)) in used:
+                n += 1
+            tid = "%s%d" % (p, n)
+        seen_ids.add(tid)
+        clips = []
+        for c in (tr.get("clips") or []):
+            cc = _sanitize_clip(c, seen_clip_ids=seen_ids)
+            if cc:
+                clips.append(cc)
+        out.append({
+            "id": tid, "kind": tr["kind"],
+            "name": str(tr.get("name") or tid),
+            "hidden": bool(tr.get("hidden", False)),
+            "locked": bool(tr.get("locked", False)),
+            "clips": clips})
+    return out
+
+
+def _sanitize_str_list(raw, limit=0):
+    """字符串数组清洗（option.set 用：形如 "met=true"）。"""
+    out = []
+    for x in (raw if isinstance(raw, list) else []):
+        if isinstance(x, str) and x.strip():
+            s = x.strip()[:200]
+            if limit and len(out) >= limit:
+                break
+            out.append(s)
+    return out
+
+
+def _sanitize_choices(raw, act_aids, warn=None):
+    """F2-L1 §2.2：choices 清洗（上限/悬空引用容错，绝不抛）。"""
+    out = []
+    for ch in (raw if isinstance(raw, list) else []):
+        if not isinstance(ch, dict):
+            continue
+        if len(out) >= MAX_CHOICES_PER_ACT:
+            break
+        cid = str(ch.get("cid") or "")
+        if not cid:
+            cid = next_id("c", [c["cid"] for c in out])
+        t = ch.get("t")
+        try:
+            t = None if t is None else round(max(0.0, float(t)), 3)
+        except (TypeError, ValueError):
+            t = None
+        opts = []
+        for o in (ch.get("options") or []):
+            if not isinstance(o, dict):
+                continue
+            if len(opts) >= MAX_OPTIONS_PER_CHOICE:
+                break
+            text = str(o.get("text") or "").strip()[:100]
+            if not text:
+                continue
+            tgt = o.get("target")
+            tgt = str(tgt) if tgt else None
+            if tgt and act_aids and tgt not in act_aids:
+                # 悬空引用：保留原名（往返保真），但标记
+                if warn is not None:
+                    warn.append("选项「%s」目标幕不存在: %s" % (text, tgt))
+            opt = {"text": text, "target": tgt,
+                   "set": _sanitize_str_list(o.get("set"), 8),
+                   "when": (str(o.get("when")).strip()[:120]
+                            if o.get("when") else None)}
+            opts.append(opt)
+        out.append({"cid": cid, "t": t,
+                    "prompt": (str(ch.get("prompt")).strip()[:200]
+                               if ch.get("prompt") else None),
+                    "options": opts})
+    return out
+
+
+def _sanitize_jumps(raw, act_aids, warn=None):
+    """F2-L1 §2.2：jumps 清洗。"""
+    out = []
+    for j in (raw if isinstance(raw, list) else []):
+        if not isinstance(j, dict):
+            continue
+        try:
+            t = round(max(0.0, float(j.get("t"))), 3)
+        except (TypeError, ValueError):
+            continue
+        when = str(j.get("when") or "").strip()[:200]
+        if not when:
+            continue
+        tgt = j.get("target")
+        tgt = str(tgt) if tgt else None
+        if tgt and act_aids and tgt not in act_aids and warn is not None:
+            warn.append("跳转目标幕不存在: %s" % tgt)
+        out.append({"jid": str(j.get("jid") or next_id("j", [x["jid"]
+                                                            for x in out])),
+                    "t": t, "when": when, "target": tgt})
+    return out
+
+
+def _sanitize_vars(raw):
+    """F2-L1：变量声明清洗 [{name, default}]。"""
+    out = []
+    for v in (raw if isinstance(raw, list) else []):
+        if not isinstance(v, dict):
+            continue
+        name = str(v.get("name") or "").strip()
+        if not name or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+            continue
+        out.append({"name": name, "default": v.get("default", 0)})
+    return out
+
+
+def sanitize_project(obj, warn=None):
+    """脏文件容错：逐字段校验 + 补默认。不合法返回 None。
+
+    F2-L1：支持两种形状读入——
+    - v1（无 acts）：顶层 tracks/dialogue 校验后**保持 v1 形状输出**
+      （零破坏：既有全部测试与消费方行为全等）
+    - v2（有 acts）：逐幕校验，输出 v2
+
+    warn（可选 list）：收集容错警告（悬空分支引用等）。"""
     if not isinstance(obj, dict) or obj.get("type") != PROJECT_TYPE:
         return None
     # 画布参数：脏值/越界一律回默认（宽容，别因一个坏字段拒整个工程）
@@ -502,30 +923,50 @@ def sanitize_project(obj):
         h = 1080
     if not (1 <= fps <= 240):
         fps = 30.0
-    proj = {"type": PROJECT_TYPE, "version": 1, "width": w, "height": h,
-            "fps": fps, "tracks": []}
+
+    acts_raw = obj.get("acts")
+    if isinstance(acts_raw, list) and acts_raw:
+        # ---------- v2 多幕 ----------
+        proj = {"type": PROJECT_TYPE, "version": PROJECT_VERSION,
+                "width": w, "height": h, "fps": fps,
+                "vars": _sanitize_vars(obj.get("vars")), "acts": []}
+        # 先定 aid 集合（choices/jumps 悬空校验需要）
+        aids, seen = [], set()
+        for i, a in enumerate(acts_raw):
+            if not isinstance(a, dict):
+                continue
+            aid = str(a.get("aid") or "")
+            if not aid or aid in seen:
+                aid = "a%d" % (i + 1)
+                while aid in seen:
+                    aid += "_"
+            seen.add(aid)
+            aids.append((aid, a))
+        act_aids = [x[0] for x in aids]
+        for aid, a in aids:
+            act = {"aid": aid, "name": str(a.get("name") or aid),
+                   "tracks": _sanitize_tracks(a.get("tracks"), proj),
+                   "dialogue": _sanitize_dialogue(a.get("dialogue")),
+                   "choices": _sanitize_choices(a.get("choices"), act_aids, warn),
+                   "jumps": _sanitize_jumps(a.get("jumps"), act_aids, warn),
+                   "next": (str(a["next"]) if a.get("next") else None)}
+            if not act["tracks"]:
+                act["tracks"] = new_act()["tracks"]
+            if "comments" in a:
+                act["comments"] = _sanitize_comments(a.get("comments"))
+            if act["next"] and act["next"] not in act_aids and warn is not None:
+                warn.append("续幕目标不存在: %s" % act["next"])
+            proj["acts"].append(act)
+        if not proj["acts"]:
+            return None
+        return proj
+
+    # ---------- v1 单幕（原行为逐字节保留）----------
     tracks = obj.get("tracks")
     if not isinstance(tracks, list):
         return None
-    seen_ids = set()
-    for tr in tracks:
-        if not isinstance(tr, dict) or tr.get("kind") not in ("video", "audio"):
-            continue
-        tid = str(tr.get("id") or "")
-        if not tid or tid in seen_ids:
-            tid = next_track_id(proj, tr["kind"])   # 冲突/缺失：重排而非丢轨
-        seen_ids.add(tid)
-        clips = []
-        for c in (tr.get("clips") or []):
-            cc = _sanitize_clip(c, seen_clip_ids=seen_ids)
-            if cc:
-                clips.append(cc)
-        proj["tracks"].append({
-            "id": tid, "kind": tr["kind"],
-            "name": str(tr.get("name") or tid),
-            "hidden": bool(tr.get("hidden", False)),
-            "locked": bool(tr.get("locked", False)),
-            "clips": clips})
+    proj = {"type": PROJECT_TYPE, "version": 1, "width": w, "height": h,
+            "fps": fps, "tracks": _sanitize_tracks(tracks, None)}
     if not proj["tracks"]:
         proj["tracks"] = new_project()["tracks"]     # 至少保证有默认双轨
     # A4：台词表（WebGAL 导出与舞台字幕共用）
@@ -650,7 +1091,7 @@ def figure_clips_at(proj, t):
         tf = float(t)
     except (TypeError, ValueError):
         return out
-    for tr in proj.get("tracks") or []:
+    for tr in _tracks_of(proj):
         if not isinstance(tr, dict) or tr.get("kind") == "audio":
             continue
         for c in tr.get("clips") or []:
@@ -667,7 +1108,7 @@ def figure_intervals(proj, exclude_cid=None):
     iv = []
     if not isinstance(proj, dict):
         return iv
-    for tr in proj.get("tracks") or []:
+    for tr in _tracks_of(proj):
         if not isinstance(tr, dict) or tr.get("kind") == "audio":
             continue
         for c in tr.get("clips") or []:
@@ -727,7 +1168,7 @@ def figure_occupancy_note(proj, t0, t1, exclude_cid=None):
     if peak <= 0:
         return ""
     names = []
-    for tr in (proj.get("tracks") or []):
+    for tr in _tracks_of(proj):
         for c in tr.get("clips") or []:
             if exclude_cid is not None and c.get("id") == exclude_cid:
                 continue
@@ -742,9 +1183,16 @@ def figure_occupancy_note(proj, t0, t1, exclude_cid=None):
 
 
 def normalize_ids(proj):
-    """补齐 sanitize 留下的空 id / 去重。load 后调用一次。"""
+    """补齐 sanitize 留下的空 id / 去重。load 后调用一次。
+
+    F2-L1：轨道 id 幕内唯一、clip id 全工程唯一（分幕分别处理）。"""
+    if is_multi_act(proj):
+        clips_used = set()
+        for a in proj.get("acts") or []:
+            _norm_act_ids(proj, a, clips_used)
+        return proj
     used = set()
-    for tr in proj["tracks"]:
+    for tr in _tracks_of(proj):
         if tr["id"] in used:
             tr["id"] = next_track_id(proj, tr["kind"])
         used.add(tr["id"])
@@ -753,3 +1201,24 @@ def normalize_ids(proj):
                 c["id"] = next_clip_id(proj)
             used.add(c["id"])
     return proj
+
+
+def _norm_act_ids(proj, act, clips_used):
+    """单幕 id 归一（轨道幕内唯一，clip 跨幕唯一由 clips_used 保证）。"""
+    used = set()
+    for tr in (act.get("tracks") or []):
+        if tr.get("id") in used:
+            p = "v" if tr.get("kind") == "video" else "a"
+            n = 1
+            while ("%s%d" % (p, n)) in used:
+                n += 1
+            tr["id"] = "%s%d" % (p, n)
+        used.add(tr.get("id"))
+        for c in (tr.get("clips") or []):
+            if not c.get("id") or c["id"] in clips_used:
+                p = "c"
+                n = 1
+                while ("%s%d" % (p, n)) in clips_used:
+                    n += 1
+                c["id"] = "%s%d" % (p, n)
+            clips_used.add(c["id"])

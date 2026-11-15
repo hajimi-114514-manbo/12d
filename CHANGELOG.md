@@ -5,6 +5,72 @@
 
 ---
 
+## v3.5.0（2026-11-15 15:3x）**最后一版**：F2 分支剧情数据层 + H3 实时预览接入（L1/H3 完成，L2-L5 进行中）
+
+> 用户拍板："那就开始进攻v3.5"。范围：H3 WebEngine 实时预览 + F2 分支剧情。
+> 本节记录已落地部分；L2/L3/L4/L5 完成后补记。
+
+### H3 实时预览——**已接入工作台并真实出画面**
+`webgal_preview.py`（video-source 交付的 H3a）此前**完全没被 workbench 引用**，
+本次完成 J3 §5「视图共存」：
+
+- `QStackedLayout` 同位切换：page0=`StageView`（永远在场，承担全部交互），
+  page1=`WebPreviewView`（懒创建、`WA_TransparentForMouseEvents`）——
+  设计 §5「交互恒归 StageView」落地。
+- 预览区右上角「实时预览」角标开关：**仅 `available()` 为真时创建**
+  （设计 §2 硬规则 1/3：无 WebEngine 环境下连开关都不出现，既有 UI 零 diff）。
+- `render_frame` 尾部挂 `_sync_real_preview(t)`：实时态按 diff 推状态，
+  非实时态**首行 return 零开销**。
+
+### 修掉三个真实 bug（都实测复现 → 修复 → 截图验证）
+1. **实时预览引擎不启动（P0）**：页面 module 就绪前下发 `loadModel` 会被
+   bootstrap 的 `if (window.__muppetOnCmd)` 静默丢弃，而 `boot()` **只在
+   loadModel 里被调用** → 引擎永不启动、画面全黑。修法：连 `pageReady`，
+   延迟 400ms 后再推首帧（`_on_preview_page_ready`/`_push_preview_state`）。
+   实测：修前 `booted:false`，修后 `booted:true + events:['boot','ready']`。
+2. **人物被左右横向挤扁**（用户报「人物是扁的」）：`stage_preview.html`
+   的 `scale.set(v)` **只设 scale.x**，`scale.y` 保留旧值 1.0 ——
+   横向被压缩 `fit` 倍（实测 0.288），纵向不变 = 扁。改 `scale.set(k, k)`
+   显式等比；`__muppetState` 同步暴露 `sy` 便于断言。实测 `sx=sy=0.288`。
+3. **画布被硬拉成容器形状**：`canvas{width:100%;height:100%}` 把 1280×720
+   的 16:9 画布拉成预览区形状（非 16:9 时人物变形）。改 CSS contain 式
+   letterbox（`max-width/max-height:100%` + `aspect-ratio:16/9`）。
+
+### F2-L1 分支剧情数据层——**完成（懒升级策略，零破坏）**
+- **偏离设计的一处决策**：设计 §2.3 要求"内存恒为 v2 多幕形态"，实测会
+  让 564+ 项既有回归（直接访问 `proj["tracks"]`）全炸。改为**懒升级**：
+  `new_project()` 仍返回 v1 单幕形状（tracks/dialogue 在顶层），
+  只有 `add_act()` 才升级 v2。验收锚"单幕导出逐字节等于现状"因此天然成立。
+- 新增工程模型（`video_model.py`）：`PROJECT_VERSION=2`、`new_act`、
+  `act_view(proj, aid)`（v1/v2 双形状投影，**返回原引用**保证写穿透）、
+  `is_multi_act`、`_upgrade_to_v2`、`find_act`/`act_ids`/`act_list`/
+  `next_act_id`/`act_duration`、`add_act`/`rename_act`/`duplicate_act`/
+  `remove_act`（级联清引用）。
+- 分支结构：`choices`（cid/t/prompt/options[text,target,set,when]）、
+  `jumps`（t/when/target）、`next`、工程级 `vars`；上限
+  `MAX_CHOICES_PER_ACT=8`/`MAX_OPTIONS_PER_CHOICE=6`。
+- `sanitize_project(obj, warn=None)` **双形态**：v1 原行为逐字节保留，
+  v2 逐幕校验 + 悬空引用收集警告（保留原名做往返保真）。
+- 全部消费方零改动接入：`_tracks_of(proj, aid)`/`_dialogue_of` 幕感知
+  （v1 返回顶层原引用 = 旧行为全等；v2 返回幕内真实 list）。
+- **修掉两个真 bug**（cpu-engine 报 + 自测）：
+  - `proj.get("tracks") or []` 的 **falsy 陷阱**：空列表返回新表 →
+    `add_track` 写丢（打崩 webgal_import_test）。改 isinstance 判定。
+  - **轨道 id 跨幕重复**：每幕都从 v1/a1 起导致 `find_track`/`_clash`
+    命中错误幕。定为**轨道 id 幕内唯一、clip id 全工程唯一**。
+
+### 验证
+- 新增 `f2_l1_test.py` **60 项全绿**（形状/懒升级/act_view 零 diff/
+  幕管理/分支往返/悬空引用/上限截断/脏值容错/v1 兼容）。
+- 全量回归 **15 套全绿**：f2_l1 / video_model / video_layout / video_source /
+  video_integration / video_export / video_preset / clip_timeline /
+  timeline / script_editor / webgal_import / webgal_export /
+  remote_control / figure_limit / webgal_preview。
+- H3 实机截图：`D:\scripts\temp\ui_shots\h3_wb_sw.png`（workbench 实时
+  预览出立绘，58KB；canvas 导出 219KB）。
+
+---
+
 ## v3.4.10（2026-11-15 14:3x）产品命名统一：旧称「骨架工作室」退役
 
 > 用户指示："记得不要写骨架工作室,现在改成木偶工作室了"。

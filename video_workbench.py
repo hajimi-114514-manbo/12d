@@ -316,7 +316,27 @@ class VideoWorkbench(QWidget):
         self.stage.clip_selected.connect(self._on_stage_select)
         self.stage.layout_changed.connect(self._on_stage_layout_changed)
         self.preview = self.stage          # 兼容旧引用
-        cl.addWidget(self.stage, 1)
+        # ---- H3（v3.5）：实时预览与 StageView 共存（设计 §5）----
+        # QStackedLayout 同位切换：page0=StageView（永远在场，承担全部交互），
+        # page1=WebPreviewView（懒创建，W A_TransparentForMouseEvents）。
+        # available()==False 时**连开关都不创建**（设计 §2 硬规则 1、3），
+        # 既有 UI 测试零 diff。
+        self._webview = None
+        self._preview_real = False
+        self._stack = QStackedLayout()
+        self._stack.setContentsMargins(0, 0, 0, 0)
+        stack_host = QWidget(center)
+        stack_host.setLayout(self._stack)
+        self._stack.addWidget(self.stage)
+        cl.addWidget(stack_host, 1)
+        self._preview_badge = None
+        try:
+            import webgal_preview as WP
+            self._wp = WP
+            if WP.available():
+                self._make_preview_badge(stack_host)
+        except Exception:
+            self._wp = None
         pb = QHBoxLayout()
         self.btn_play = ToolButton(center)
         self.btn_play.setIcon(FluentIcon.PLAY.icon())
@@ -1183,6 +1203,112 @@ class VideoWorkbench(QWidget):
         _se = getattr(self, "script_editor", None)
         if _se is not None:
             _se.refresh_highlight()
+        # H3：实时预览 diff 同步（非实时态内部零开销直接 return）
+        self._sync_real_preview(t)
+
+    # ================= H3 实时预览（v3.5，设计 §5） =================
+    def _make_preview_badge(self, host):
+        """预览区右上角「实时预览」角标开关。仅 available() 为真时创建。"""
+        btn = PushButton("实时预览", host)
+        btn.setCheckable(True)
+        btn.setFixedHeight(26)
+        btn.setToolTip("用 WebGAL 引擎实时渲染立绘（布置辅助，不影响导出画质）")
+        btn.toggled.connect(self._toggle_real_preview)
+        self._preview_badge = btn
+        btn.move(host.width() - btn.width() - 12, 12)
+        btn.show()
+
+    def _ensure_webview(self):
+        """懒创建 WebPreviewView（首次开实时预览时才建，避免启动开销）。"""
+        if self._webview is not None:
+            return self._webview
+        if not getattr(self, "_wp", None) or not self._wp.available():
+            return None
+        try:
+            v = self._wp.WebPreviewView(parent=self)
+            # 交互恒归 StageView（设计 §5）：实时页纯显示
+            v.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            # 页面 module 就绪前下发命令会被 bootstrap 丢弃（其
+            # `if (window.__muppetOnCmd)` 为假即丢）——而 boot() 只在
+            # loadModel 里被调用，丢弃后引擎永不启动。故必须等页面
+            # 就绪再推首帧状态（v3.5 实测根因）。
+            self._preview_ready = False
+            v.pageReady.connect(self._on_preview_page_ready)
+            v.start()
+            self._webview = v
+            self._stack.addWidget(v)
+            return v
+        except Exception as e:
+            InfoBar.warning("实时预览", "初始化失败：%s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return None
+
+    def _on_preview_page_ready(self, ok):
+        """宿主页 loadFinished：module script 还需一点时间求值，延迟推首帧。"""
+        if not ok:
+            return
+        self._preview_ready = True
+        QTimer.singleShot(400, self._push_preview_state)
+
+    def _push_preview_state(self, force=True):
+        """把当前时刻的立绘状态推给实时预览（内部做越界/异常兜底）。"""
+        v = self._webview
+        if v is None or not getattr(self, "_preview_ready", False):
+            return
+        try:
+            view = V.act_view(self.proj, getattr(self, "_aid", None))
+            v.apply_state(view, self._t, force=force)
+        except TypeError:
+            try:
+                v.apply_state(self.proj, self._t, force=force)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _toggle_real_preview(self, on):
+        """切实时/布局态。实时态=WebEngine 画面为底；布局态=QPainter 帧。"""
+        if not on:
+            self._preview_real = False
+            self._stack.setCurrentIndex(0)          # 回 StageView（不销毁）
+            if self._webview is not None:
+                self._webview.clear_all()           # 清掉页面侧模型
+            self.render_frame(self._t)              # 立即回填当前帧，不闪白
+            return
+        v = self._ensure_webview()
+        if v is None:
+            btn = self._preview_badge
+            if btn is not None:
+                btn.blockSignals(True)
+                btn.setChecked(False)
+                btn.blockSignals(False)
+            InfoBar.info("实时预览",
+                         "实时预览不可用：需要 WebEngine 能力包与 WebGAL 运行时",
+                         parent=self, position=InfoBarPosition.TOP,
+                         duration=4000)
+            return
+        self._preview_real = True
+        self._stack.setCurrentIndex(1)
+        # 页面已就绪就立刻推；否则等 pageReady 回调（见 _on_preview_page_ready）
+        if getattr(self, "_preview_ready", False):
+            self._push_preview_state(force=True)
+
+    def _sync_real_preview(self, t):
+        """render_frame 尾部调用：实时态下按 diff 同步（不实时态零开销）。"""
+        if not self._preview_real or self._webview is None:
+            return
+        if not getattr(self, "_preview_ready", False):
+            return                       # 页面未就绪：等 pageReady 后统一推
+        try:
+            view = V.act_view(self.proj, getattr(self, "_aid", None))
+            self._webview.apply_state(view, t)
+        except TypeError:
+            try:
+                self._webview.apply_state(self.proj, t)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def seek(self, t):
         self._t = float(max(0.0, min(t, V.project_duration(self.proj))))

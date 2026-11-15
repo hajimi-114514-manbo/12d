@@ -1361,7 +1361,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                         lines = []
                         y = _f(lay.get("y"), 0.5)
                         if abs(y - 0.5) > Y_DEV:
-                            lines.append(_comment(
+                            lines.append(_note(
                                 "提示：该立绘纵向位置 y=%.2f 需在 "
                                 "WebGAL 编辑器中手动调整" % y))
                         line = "changeFigure:%s/model.json -%s" % (rel_ref, slot)

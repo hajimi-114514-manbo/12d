@@ -14,8 +14,14 @@
 <style>
   html, body { margin: 0; background: #0d0f13; width: 100%; height: 100%;
                overflow: hidden; }
-  #stagebox { position: absolute; inset: 0; }
-  #stagebox canvas { width: 100%; height: 100%; display: block; }
+  /* v3.5 修「人物是扁的」：canvas 是 1280×720（16:9）固定像素画布，不能
+     width/height:100% 硬拉成预览区形状（非 16:9 时横向拉宽 -> 立绘变扁）。
+     改为 contain 式 letterbox：等比缩放到容器内，多余空间留黑边。 */
+  #stagebox { position: absolute; inset: 0; display: flex;
+              align-items: center; justify-content: center; }
+  #stagebox canvas { max-width: 100%; max-height: 100%;
+                     width: auto; height: auto;
+                     aspect-ratio: 16 / 9; display: block; }
   #errline { position: absolute; left: 10px; bottom: 8px; z-index: 30;
              color: #ff9b9b; font: 12px/1.5 "Microsoft YaHei", sans-serif;
              text-shadow: 0 1px 2px #000; pointer-events: none; }
@@ -128,7 +134,10 @@ const puppetAPI = {
     const s = slot(modelId);
     if (!s.model) return;
     s.model.x = x * STAGE_W; s.model.y = y * STAGE_H;
-    s.model.scale.set(Math.max(0.01, s.fit * scale));
+    // v3.5 修「人物被左右横向挤扁」：scale.set(v) 只设 x，y 保留旧值(1.0)
+    // -> 横向被压缩 fit 倍（0.288），纵向不变 = 扁。必须显式等比。
+    const k = Math.max(0.01, s.fit * scale);
+    s.model.scale.set(k, k);
     s.model.rotation = (rot || 0) * Math.PI / 180;
     last.transform[modelId] = [x, y, scale, rot];
   },
@@ -200,7 +209,8 @@ window.__muppetState = function () {
     transform: last.transform,
     rendererType: app ? app.renderer.type : -1,
     contextLost: app && app.renderer.view ? !!app.renderer.contextLost : null,
-    modelInfo: m ? { x: m.x, y: m.y, sx: m.scale.x, visible: m.visible,
+    modelInfo: m ? { x: m.x, y: m.y, sx: m.scale.x, sy: m.scale.y,
+                     visible: m.visible,
                      alpha: m.alpha, w: m.width, h: m.height } : null,
   };
 };
