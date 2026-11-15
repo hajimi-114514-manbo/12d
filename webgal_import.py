@@ -1028,6 +1028,16 @@ class _Builder:
             full += "；素材库回退命中 %d" % self.lib_hits
         if self.warnings:
             full += "：" + "；".join(self.warnings)
+        # K2（task-73）：素材体检摘要——**纯尾部追加**且仅在有缺失时出现
+        # （无缺失 msg 逐字节=现状，前半段格式是回归锚不许动）。体检自身
+        # 异常静默，绝不影响导入结果。
+        try:
+            import asset_audit as _A
+            _hint = _A.audit_hint(self.proj, game_dir)
+            if _hint:
+                full += "；" + _hint
+        except Exception:
+            pass
         return True, full, self.proj
 
     def _finalize(self):
@@ -1360,9 +1370,17 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
 
     n_act = len(proj.get("acts") or [])
     n_pseudo = len(pseudo)
-    return ok, "导入 %d 幕%s，警告 %d" % (
+    # K2（task-73）：素材体检摘要——**纯尾部追加**且仅在有缺失时出现
+    # （msg 前半段格式是回归锚不许动）；体检异常静默不影响导入结果。
+    _hint = ""
+    try:
+        import asset_audit as _A
+        _hint = _A.audit_hint(proj, game_dir)
+    except Exception:
+        pass
+    return ok, "导入 %d 幕%s，警告 %d%s" % (
         n_act, ("（吸收 %d 个伪幕）" % n_pseudo) if n_pseudo else "",
-        len(all_warn)), proj
+        len(all_warn), ("；" + _hint) if _hint else ""), proj
 
 
 def _absorb_pseudo(builder, scene_path, pending, resolve_target, pseudo_set):

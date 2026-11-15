@@ -964,6 +964,36 @@ def _cmd_act_script(wb, args):
     return True, "", {"script": res}
 
 
+def _cmd_assets_check(wb, args):
+    """K2（task-73）素材体检（纯读，无 Qt）。args: {kind?, limit?}
+
+    ok 恒 True = 命令执行成功；缺失与否看 data.total / msg（与
+    assets.query 读命令惯例一致）。"""
+    import asset_audit as A
+    if wb is None or getattr(wb, "proj", None) is None:
+        return False, "无工程，无法体检", None
+    pdir = getattr(wb, "proj_dir", None) or getattr(wb, "_proj_dir", None)
+    rep = A.audit_project(wb.proj, proj_dir=pdir)
+    kind = str(args.get("kind") or "").strip().lower()
+    full = rep["missing"]
+    if kind:
+        full = [m for m in full if m["kind"] == kind]
+    limit = args.get("limit")
+    try:
+        limit = int(limit) if limit else 0
+    except (TypeError, ValueError):
+        limit = 0
+    shown = full[:limit] if limit > 0 else full
+    summary = A.format_report(dict(rep, missing=full))
+    data = {"missing": shown, "total": len(full),
+            "placeholder": rep["placeholder"], "real": rep["real"],
+            "counts": rep["counts"], "lib": rep["lib"], "summary": summary}
+    if not full:
+        return True, "素材体检：无缺失", data
+    return True, "素材体检缺 %d 项（占位符 %d / 真缺失 %d）——%s" % (
+        len(full), rep["placeholder"], rep["real"], summary or "详见 data"), data
+
+
 _HANDLERS = {
     "project.new": _cmd_project_new,
     "scene.set_bg": _cmd_scene_set_bg,
@@ -983,6 +1013,9 @@ _HANDLERS = {
     # G4：assets.query 主线程兜底入口（正常走 _handle 的 HTTP 线程专用分支，
     # 这里保证 run_command 直调/D2 面板等场景同样可用——纯读，无 Qt）
     "assets.query": lambda wb, args: _assets_query(args),
+    # K2（task-73）：素材体检（纯读；正常走 _handle 的 HTTP 线程分支，
+    # 这里保证 run_command 直调同样可用）
+    "assets.check": _cmd_assets_check,
     # ---- F2-L4（v3.5）：多幕 / 分支 / 变量 ----
     "act.list": _cmd_act_list,
     "act.add": _cmd_act_add,
