@@ -14,17 +14,55 @@
 <style>
   html, body { margin: 0; background: #0d0f13; width: 100%; height: 100%;
                overflow: hidden; }
-  /* v3.5 修「人物是扁的」：canvas 是 1280×720（16:9）固定像素画布，不能
-     width/height:100% 硬拉成预览区形状（非 16:9 时横向拉宽 -> 立绘变扁）。
-     改为 contain 式 letterbox：等比缩放到容器内，多余空间留黑边。 */
-  #stagebox { position: absolute; inset: 0; display: flex;
-              align-items: center; justify-content: center; }
-  #stagebox canvas { max-width: 100%; max-height: 100%;
-                     width: auto; height: auto;
-                     aspect-ratio: 16 / 9; display: block; }
+  /* ---- v3.5.2：舞台区改成「自己就是 16:9 画面框」----
+     原来 #stagebox 是 inset:0 铺满窗口、内部 flex 居中 canvas，画面有黑边。
+     现在让 #stagebox 直接算成 16:9 的最大内接矩形（min(100vw, 100vh*16/9)），
+     body 负责居中。好处：字幕/tint 用 inset:0 铺 #stagebox 就**精确覆盖
+     画面**，跟黑边无关 —— 不需要 JS 同步 getBoundingClientRect
+     （实测那个在 WebEngine 里基准不可靠，字幕会飞到左上角）。 */
+  body { display: flex; align-items: center; justify-content: center; }
+  #stagebox { position: relative; flex: 0 0 auto;
+              width: min(100vw, calc(100vh * 16 / 9));
+              height: min(100vh, calc(100vw * 9 / 16));
+              display: flex; align-items: center; justify-content: center;
+              overflow: hidden; }
+  /* canvas 保持 PIXI 自己算的 CSS 尺寸（它会把 1280x720 缩放到容器内）。
+     **不要**给它设 width:100%/height:100% 或 absolute —— 实测这两种做法都会
+     让 PIXI 的渲染失效：width:100% 时画面只显示右半（canvas.x 变 -500），
+     absolute+inset:0 时画面整个消失（只剩 DOM 字幕）。
+     交给 PIXI：它自己按容器尺寸 set 到位图与 CSS 尺寸。 */
+  #stagebox canvas { display: block; max-width: 100%; max-height: 100%;
+                     z-index: 1; }
+
   #errline { position: absolute; left: 10px; bottom: 8px; z-index: 30;
              color: #ff9b9b; font: 12px/1.5 "Microsoft YaHei", sans-serif;
              text-shadow: 0 1px 2px #000; pointer-events: none; }
+  /* ---- v3.5.2：滤镜叠加色层（模拟 setTransform 的 colorR/G/B 偏色）----
+     inset:0 铺满 #stagebox（#stagebox 现在就是 16:9 画面框） */
+  #tint { position: absolute; inset: 0; z-index: 5; display: none;
+          pointer-events: none; mix-blend-mode: multiply; }
+  /* ---- v3.5.2：字幕层（对齐导出皮肤：白字黑描边 + 蓝名字胶囊）----
+     纯 CSS 居中底部定位，**不用 JS 同步坐标**：getBoundingClientRect 在
+     这个 WebEngine 环境里返回的基准不可靠（实测字幕飞到左上角）。
+     字幕层铺满 #stagebox，内部 flex 底部居中 -> 与 canvas 视觉同区。 */
+  #subtitle { position: absolute; inset: 0; z-index: 20; display: none;
+              flex-direction: column; align-items: center;
+              justify-content: flex-end; padding: 0 6% 6%;
+              box-sizing: border-box; pointer-events: none;
+              text-align: center;
+              font-family: "Microsoft YaHei", sans-serif; }
+  #sub-name { display: inline-block; margin-bottom: 6px; padding: 2px 12px;
+              border-radius: 999px; background: #4c88ff; color: #fff;
+              font-size: 15px; font-weight: 600;
+              box-shadow: 0 2px 6px rgba(0,0,0,.45); }
+  #sub-text { color: #fff; font-size: 22px; font-weight: 700;
+              line-height: 1.35; white-space: pre-wrap;
+              /* 8 方向描边：用多重 text-shadow 近似（与 QPainter 版视觉一致）*/
+              text-shadow: -2px -2px 0 #000, 2px -2px 0 #000,
+                           -2px 2px 0 #000, 2px 2px 0 #000,
+                           0 -2px 0 #000, 0 2px 0 #000,
+                           -2px 0 0 #000, 2px 0 0 #000,
+                           0 3px 8px rgba(0,0,0,.6); }
 </style>
 <script>
   // 官方 index.html「加载IIFE插件」等价物：lib 路径由 Python 注入（可为 null）。
@@ -46,7 +84,13 @@
 </script>
 </head>
 <body>
-<div id="stagebox"></div>
+<div id="stagebox">
+  <div id="tint"></div>
+  <div id="subtitle">
+    <span id="sub-name"></span>
+    <div id="sub-text"></div>
+  </div>
+</div>
 <div id="errline"></div>
 <!-- 引擎主包求值期强依赖的 DOM 骨架（J2 关键事实 3；官方 index.html 同构） -->
 <div id="ebg" class="html-body__effect-background">
@@ -66,6 +110,20 @@ const showErr = (m) => { document.getElementById("errline").textContent = m; };
 let es = null, app = null, booted = false;
 const slots = new Map();          // modelId -> {queue, model, ref, fit}
 const last = { motion: {}, expression: {}, transform: {} };
+// v3.5.2：背景 / 字幕 / 滤镜三层状态（供幂等判断与 __muppetState 观测）
+let bgSprite = null;
+const state = { bgUrl: "", sub: "", filter: "" };
+
+// v3.5.2：把 tint / 字幕层的包围盒同步到 canvas 实际显示区域。
+// canvas 是 16:9 居中 letterbox，窗口非 16:9 时有黑边 —— 若这两层用
+// inset:0 铺满窗口，字幕会贴到黑边外底部、tint 会盖住黑边（实测偏右）。
+// v3.5.2：overlay（tint/字幕）现在用纯 CSS inset:0 铺满 #stagebox，
+// 而 #stagebox 本身就是 16:9 画面框 —— **不需要 JS 同步坐标**。
+// 保留这个空函数只为兼容既有调用点（boot/setSubtitle 里调用无副作用）。
+function _syncOverlayRect() { /* CSS 定位，无需同步 */ }
+
+// 窗口/容器尺寸变化时重同步（canvas 由 flex 自适应，尺寸会变）
+window.addEventListener("resize", _syncOverlayRect);
 
 async function boot() {
   if (booted) return true;
@@ -82,7 +140,29 @@ async function boot() {
       preserveDrawingBuffer: true,               // grab 截图需要
     });
     const box = document.getElementById("stagebox");
-    box.appendChild(app.view);
+    // canvas 插到 tint 之前（DOM 序：canvas -> tint -> subtitle）；
+    // 层级另有 z-index（canvas 1 / tint 5 / subtitle 20）双保险
+    const tintEl = document.getElementById("tint");
+    if (tintEl && tintEl.parentNode === box) {
+      box.insertBefore(app.view, tintEl);
+    } else {
+      box.appendChild(app.view);
+    }
+    app.view.style.zIndex = "1";
+    // v3.5.2：canvas 用 absolute 铺满 #stagebox。
+    // 走过两个弯路（都实测过，别回头）：
+    //   1) 交给 PIXI 默认 CSS 尺寸 -> canvas 按 1280 参与 flex 布局，
+    //      被挤出容器（x=-500，画面只剩右半）
+    //   2) 设 width/height:100% + flex 居中 -> flex 仍按 1280 算位置，
+    //      x 还是 -500
+    // absolute + inset:0 完全脱离 flex 布局计算，才真正贴合容器。
+    // 注意：**不能同时改位图尺寸**（attr width/height 必须留 1280x720，
+    // 舞台内所有坐标按 STAGE_W/STAGE_H 算），只改 CSS 显示尺寸。
+    app.view.style.position = "absolute";
+    app.view.style.left = "0";
+    app.view.style.top = "0";
+    app.view.style.width = "100%";
+    app.view.style.height = "100%";
     booted = true;
     sendEvt("boot", { pixi: true, es: true });
     return true;
@@ -179,6 +259,98 @@ const puppetAPI = {
   async setPaused(paused) {
     if (app) app.ticker.paused = !!paused;
   },
+
+  // ================= v3.5.2：背景层 / 字幕层 / 滤镜层 =================
+  // 用户报「实时预览没有背景和文字和滤镜」——这三层原来完全没实现
+  // （推送端只发立绘的 5 条命令）。现在补齐：
+  //   背景 = PIXI.Sprite 压在 stage 最底层（zIndex 排序保证在立绘下）
+  //   字幕 = DOM 层（与导出皮肤的 MyGO 风一致：白字黑描边 + 蓝名字胶囊）
+  //   滤镜 = CSS filter（brightness/contrast/saturate/blur/sepia/hue）
+  //          + 叠加色层，对齐 setTransform 的语义子集
+
+  async setBackground(url) {
+    if (!(await boot())) return;
+    const u = url ? new URL(url, location.href).href : "";
+    if (state.bgUrl === u) return;                    // 幂等
+    state.bgUrl = u;
+    if (bgSprite) {
+      app.stage.removeChild(bgSprite);
+      bgSprite.destroy({ texture: true, baseTexture: true });
+      bgSprite = null;
+    }
+    if (!u) return;
+    try {
+      const tex = await window.PIXI.Texture.fromURL(u);
+      bgSprite = new window.PIXI.Sprite(tex);
+      // 铺满舞台（cover）：等比放大到刚好盖住，居中裁切
+      const k = Math.max(STAGE_W / tex.width, STAGE_H / tex.height);
+      bgSprite.width = tex.width * k;
+      bgSprite.height = tex.height * k;
+      bgSprite.x = (STAGE_W - bgSprite.width) / 2;
+      bgSprite.y = (STAGE_H - bgSprite.height) / 2;
+      bgSprite.zIndex = -1;                            // 压到立绘下面
+      app.stage.sortableChildren = true;
+      app.stage.addChildAt(bgSprite, 0);
+      sendEvt("bgReady", { url: u });
+    } catch (e) {
+      sendEvt("error", { code: "bg_failed", msg: String(e).slice(0, 160) });
+      showErr("背景加载失败: " + ((e && e.message) || e));
+    }
+  },
+
+  async setSubtitle(who, text) {
+    const box = document.getElementById("subtitle");
+    const nameEl = document.getElementById("sub-name");
+    const textEl = document.getElementById("sub-text");
+    if (!box) return;
+    const w = String(who || ""), tx = String(text || "");
+    if (!tx) { box.style.display = "none"; state.sub = ""; return; }
+    // v3.5.2：必须用 flex（不是 block）—— CSS 里靠 flex-end 把字幕压到
+    // 画面底部，设成 block 会让 justify-content 失效、字幕跑到顶部。
+    box.style.display = "flex";
+    nameEl.textContent = w;
+    nameEl.style.display = w ? "inline-block" : "none";
+    textEl.textContent = tx;
+    state.sub = w + "\u0000" + tx;
+  },
+
+  async setFilter(spec) {
+    // spec = {brightness, contrast, saturate, blur, sepia, hue, opacity,
+    //         colorRed, colorGreen, colorBlue, target}
+    // 同时作用于舞台容器（背景+立绘一起），target 只做记录（PIXI 未分层）
+    const f = spec || {};
+    const box = document.getElementById("stagebox");
+    if (!box) return;
+    const parts = [];
+    const pct = (v, d) => (v === undefined || v === null ? d : Number(v));
+    const br = pct(f.brightness, 1), ct = pct(f.contrast, 1);
+    const sa = f.saturation !== undefined ? Number(f.saturation) : 1;
+    const bl = f.blur !== undefined ? Number(f.blur) : 0;
+    if (br !== 1) parts.push("brightness(" + br + ")");
+    if (ct !== 1) parts.push("contrast(" + ct + ")");
+    if (sa !== 1) parts.push("saturate(" + Math.max(0, sa) + ")");
+    if (bl > 0) parts.push("blur(" + Math.min(bl, 20) + "px)");
+    box.style.filter = parts.length ? parts.join(" ") : "";
+    // 叠加色层（tint）：用半透明遮罩近似 colorRed/Green/Blue 的染色
+    const tint = document.getElementById("tint");
+    if (tint) {
+      const hasRgb = (f.colorRed !== undefined && f.colorRed !== 255) ||
+                     (f.colorGreen !== undefined && f.colorGreen !== 255) ||
+                     (f.colorBlue !== undefined && f.colorBlue !== 255);
+      if (hasRgb) {
+        const r = f.colorRed === undefined ? 255 : f.colorRed;
+        const g = f.colorGreen === undefined ? 255 : f.colorGreen;
+        const b = f.colorBlue === undefined ? 255 : f.colorBlue;
+        // 只对"缺色"方向补一层，模拟该 RGB 乘子偏色
+        tint.style.background =
+          "rgba(" + r + "," + g + "," + b + "," + (1 - Math.min(r, g, b) / 255) * 0.55 + ")";
+        tint.style.display = "block";
+      } else {
+        tint.style.display = "none";
+      }
+    }
+    state.filter = parts.join(" ") || "";
+  },
 };
 
 window.__muppetOnCmd = function (j) {
@@ -192,6 +364,10 @@ window.__muppetOnCmd = function (j) {
     case "setExpression": enqueue(a.modelId, () => puppetAPI.setExpression(a.modelId, a.name, a.fadeMs)); break;
     case "clearModel": enqueue(a.modelId || "__all__", () => puppetAPI.clear(a.modelId || "")); break;
     case "setPaused": puppetAPI.setPaused(a.paused); break;
+    // v3.5.2：背景 / 字幕 / 滤镜（补齐「实时预览没有背景和文字和滤镜」）
+    case "setBackground": enqueue("__bg__", () => puppetAPI.setBackground(a.url || "")); break;
+    case "setSubtitle": puppetAPI.setSubtitle(a.who || "", a.text || ""); break;
+    case "setFilter": puppetAPI.setFilter(a); break;
     default: sendEvt("error", { code: "cmdUnsupported", cmd: e.cmd, ref: e.id });
   }
 };
@@ -212,6 +388,19 @@ window.__muppetState = function () {
     modelInfo: m ? { x: m.x, y: m.y, sx: m.scale.x, sy: m.scale.y,
                      visible: m.visible,
                      alpha: m.alpha, w: m.width, h: m.height } : null,
+    // v3.5.2：三层状态（截图/断言用；也方便排查"为什么没背景"）
+    bg: { url: state.bgUrl, hasSprite: !!bgSprite,
+          w: bgSprite ? Math.round(bgSprite.width) : 0,
+          h: bgSprite ? Math.round(bgSprite.height) : 0 },
+    subtitle: (function () {
+      const b = document.getElementById("subtitle");
+      return { visible: !!b && b.style.display !== "none",
+               who: document.getElementById("sub-name")
+                    ? document.getElementById("sub-name").textContent : "",
+               text: document.getElementById("sub-text")
+                    ? document.getElementById("sub-text").textContent : "" };
+    })(),
+    filter: state.filter,
   };
 };
 </script>

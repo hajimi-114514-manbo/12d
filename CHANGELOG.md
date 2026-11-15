@@ -97,6 +97,52 @@ WindowShortcut，但 Qt 会先给焦点控件发 ShortcutOverride —— 在输�
 宽高比仍 16:9、几何居中不溢出、字幕换行不丢字、坐标变换互逆、
 节流不丢末帧。
 
+### 五、实时预览补齐三层：背景 / 字幕 / 滤镜（用户报「实时预览没有背景和文字和滤镜」）
+
+**根因**：实时预览页只实现立绘层 —— 推送端发 5 条命令（loadModel /
+setTransform / playMotion / setExpression / clearModel），页面也只认这 5 条。
+背景、字幕、滤镜**从来没有代码**，不是坏掉是压根没写。
+
+补齐（`stage_preview.html` + `webgal_preview.py` 两端）：
+
+| 层 | 实现 | 命令 |
+|---|---|---|
+| 背景 | `PIXI.Sprite` 压 stage 最底层（zIndex=-1），cover 铺满不拉伸 | `setBackground{url}` |
+| 字幕 | DOM 层：白字黑描边（8 方向 text-shadow）+ 蓝名字胶囊 | `setSubtitle{who,text}` |
+| 滤镜 | CSS `filter`（brightness/contrast/saturate/blur）+ `#tint` 色层模拟色彩偏移 | `setFilter{...}` |
+
+推送端（`_do_apply` 尾部新增三支，各自 diff 不重复发）：
+- `_apply_bg`：取最底可见视频轨的 image clip -> 路径经 `/model/<key>/`
+  静态通道注册（复用既有 scheme handler，不新开路由）
+- `_apply_subtitle`：act_view 取当前时刻生效台词 -> who/text
+- `_apply_filter`：从 `proj["effects"]` 找 ≤t 的最后一条 setTransform，
+  解析 JSON 当 CSS 参数下发
+
+**顺带修的既有 bug**：`_sync_real_preview` / `_push_preview_state` 里读的是
+`self._aid`，而 workbench 的幕游标叫 `_cur_aid` —— 永远拿到 None，多幕工程
+切幕时预览始终推第一幕的数据。改为 `_cur_aid` 并传给 `webview._aid`。
+
+**踩过的坑（都写进注释了）**：
+1. `__init__` 只建控件，**必须显式 `start()`** 才装载宿主页（诊断时 page.url
+   为空、`__muppetState` undefined，排查花了些时间）
+2. `getBoundingClientRect` 在这个 WebEngine 环境里基准不可靠 —— 想用它同步
+   字幕位置，实测字幕飞到左上角。改用「`#stagebox` 自己就是 16:9 画面框 +
+   overlay 纯 CSS inset:0」的方案，不需要任何 JS 坐标同步
+3. canvas 定位三个坑：交给 PIXI 默认尺寸 -> 按 1280 参与 flex 布局被挤出容器
+   （x=-500，只剩右半）；`width:100%` + flex 居中 -> x 还是 -500；
+   **最终 absolute + inset:0 才脱离 flex 计算正确贴合**。注意只改 CSS 显示
+   尺寸，位图 attribute 必须留 1280x720（舞台坐标都按它算）
+4. 字幕 `display` 必须是 `flex` 不能是 `block` —— CSS 靠 `justify-content:
+   flex-end` 把字幕压到画面底部，设 block 会让它跑到顶部
+5. `#stagebox` 加 `flex:0 0 auto`，否则会被 body 的 flex 拉伸
+
+**验证**：新增 `preview_layers_test.py` 21 项全绿 —— A 段（命令层，不需
+WebEngine）验三层命令都发、背景 url 能被 handler 解析到真实文件、diff
+不重复发、越界后台词清空、无背景工程发空 url；B 段（真起 WebEngine）从
+`__muppetState()` 读回背景 sprite / 字幕 DOM / CSS filter 的真实状态。
+实机截图 `D:\scripts\temp\v352_preview_shots\`（教室+暖滤镜+字幕、
+夜空+暖滤镜+换角、旁白无名字胶囊）。
+
 ### 验证
 新增 `hscroll_test.py` 24 项（滑块出现/隐藏、拖滑块、滚轮横滚、贴边自动滚、
 6 个快捷键、follow 跟随、高度账目）全绿；`clip_timeline_test` 93 项全绿

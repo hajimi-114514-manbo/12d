@@ -307,6 +307,11 @@ if HAS_WEBENGINE:
             self._figstate = {}               # clip_id -> 已下发状态（diff 基）
             self._pending_apply = None
             self._ids = 0
+            # v3.5.2：背景/字幕/滤镜三层的 diff 基（不重复发同样的内容）
+            self._bg_url = None
+            self._sub_key = None
+            self._filter_key = None
+            self._aid = None                  # 当前幕（多幕工程由 wb 设置）
             self._degraded = None             # 不可恢复降级原因（no_runtime /
                                               # error_streak，J3 §8-7）
             self._err_streak = 0              # 连续机制级 error 计数（ready 清零）
@@ -505,6 +510,114 @@ if HAS_WEBENGINE:
                 if cid not in target:
                     self._send("clearModel", {"modelId": cid})
             self._figstate = target
+            # ---- v3.5.2：背景 / 字幕 / 滤镜三层 ----
+            # 原来只推立绘，用户看到「实时预览没有背景和文字和滤镜」。
+            self._apply_bg(proj, t)
+            self._apply_subtitle(proj, t)
+            self._apply_filter(proj, t)
+
+        # ---------- v3.5.2：三层推送（各自 diff，不重复发）----------
+        def _apply_bg(self, proj, t):
+            """当前时刻生效的最底层视频 clip 图片 -> setBackground。
+
+            取「最底轨的第一个 image clip」作为背景（与导出层
+            `changeBg` 语义一致：背景永远是底图）。
+            资源走已有的 /model/<key>/ 静态通道（register_model_dir 同一个
+            注册表，只是这里注册的是图片**所在目录**），不新开路由。
+            """
+            try:
+                import video_model as VM
+                want = ""
+                for tr in VM._tracks_of(proj, getattr(self, "_aid", None)):
+                    if tr.get("kind") != "video" or tr.get("hidden"):
+                        continue
+                    for c in (tr.get("clips") or []):
+                        s0 = float(c.get("start") or 0.0)
+                        d0 = float(c.get("dur") or 0.0)
+                        if not (s0 - 1e-6 <= t < s0 + d0 - 1e-6):
+                            continue
+                        src = c.get("source") or {}
+                        if str(src.get("kind") or "") != "image":
+                            continue
+                        path = str(src.get("path") or "")
+                        if path and os.path.isfile(path):
+                            want = self._register_file(path)
+                        break
+                    if want:
+                        break
+                if want == getattr(self, "_bg_url", None):
+                    return
+                self._bg_url = want
+                self._send("setBackground", {"url": want})
+            except Exception:
+                pass
+
+        def _register_file(self, path):
+            """单个文件 -> 可被页面请求的相对 URL（复用 /model 通道）。"""
+            try:
+                d = os.path.dirname(os.path.abspath(path))
+                base = os.path.basename(path)
+                key = hashlib.sha1(
+                    d.encode("utf-8", "ignore")).hexdigest()[:10]
+                self._model_roots[key] = d
+                return "model/%s/%s" % (key, base)
+            except Exception:
+                return ""
+
+        def _apply_subtitle(self, proj, t):
+            """当前时刻生效的台词 -> setSubtitle（取最后一条并集，与舞台一致）"""
+            try:
+                import video_model as VM
+                view = VM.act_view(proj, getattr(self, "_aid", None))
+                cur = None
+                for d in (view.get("dialogue") or []):
+                    s0 = float(d.get("t") or 0.0)
+                    d0 = float(d.get("dur") or 0.0)
+                    if s0 - 1e-6 <= t < s0 + d0 - 1e-6:
+                        cur = d
+                key = ""
+                if cur:
+                    key = "%s\x00%s" % (cur.get("who") or "",
+                                       cur.get("text") or "")
+                if key == getattr(self, "_sub_key", None):
+                    return
+                self._sub_key = key
+                who = (cur or {}).get("who") or ""
+                txt = (cur or {}).get("text") or ""
+                self._send("setSubtitle", {"who": str(who), "text": str(txt)})
+            except Exception:
+                pass
+
+        def _apply_filter(self, proj, t):
+            """当前时刻生效的 setTransform 特效 -> setFilter（CSS 语义子集）"""
+            try:
+                import json as _json
+                import re as _re
+                import video_model as VM
+                view = VM.act_view(proj, getattr(self, "_aid", None))
+                want = {}
+                for ef in (view.get("effects") or []):
+                    et = float(ef.get("t") or 0.0)
+                    if et > t + 1e-6:
+                        continue
+                    cmd = str(ef.get("cmd") or "")
+                    if not cmd.startswith("setTransform"):
+                        continue
+                    m = _re.search(r"\{.*\}", cmd)
+                    if not m:
+                        continue
+                    try:
+                        want = _json.loads(m.group(0))
+                    except Exception:
+                        continue
+                # 只在变化时发（effects 每帧都会被查，重复发会刷爆 IPC）
+                key = _json.dumps(want, sort_keys=True)
+                if key == getattr(self, "_filter_key", None):
+                    return
+                self._filter_key = key
+                self._send("setFilter", want)
+            except Exception:
+                pass
 
         def _send_transform(self, cid, lay):
             self._send("setTransform", {"modelId": cid, "x": lay[0],

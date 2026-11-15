@@ -1543,8 +1543,14 @@ class VideoWorkbench(QWidget):
         v = self._webview
         if v is None or not getattr(self, "_preview_ready", False):
             return
+        # v3.5.2：同 _sync_real_preview —— 幕游标是 `_cur_aid` 不是 `_aid`
+        aid = getattr(self, "_cur_aid", None)
         try:
-            view = V.act_view(self.proj, getattr(self, "_aid", None))
+            v._aid = aid
+        except Exception:
+            pass
+        try:
+            view = V.act_view(self.proj, aid)
             v.apply_state(view, self._t, force=force)
         except TypeError:
             try:
@@ -1587,8 +1593,17 @@ class VideoWorkbench(QWidget):
             return
         if not getattr(self, "_preview_ready", False):
             return                       # 页面未就绪：等 pageReady 后统一推
+        # v3.5.2：当前幕要传对。
+        # 原来这里写 getattr(self, "_aid", None) —— workbench 上根本没有
+        # `_aid` 属性（幕游标叫 `_cur_aid`），永远拿到 None = 恒按第一幕
+        # 取数据。单幕无感，多幕必错（切到 a2 预览还在推 a1 的背景/台词）。
+        aid = getattr(self, "_cur_aid", None)
         try:
-            view = V.act_view(self.proj, getattr(self, "_aid", None))
+            self._webview._aid = aid      # 背景/字幕/滤镜三层也按幕取
+        except Exception:
+            pass
+        try:
+            view = V.act_view(self.proj, aid)
             self._webview.apply_state(view, t)
         except TypeError:
             try:
