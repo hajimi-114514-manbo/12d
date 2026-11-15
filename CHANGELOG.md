@@ -84,6 +84,77 @@
 - 版本处理：并入 v3.5.0 **不单独 bump**（用户拍板："小改动并入大改动后
   不变版本号是合理的,可以计入更新日志"）。
 
+### F2-L2 分支剧情导出层——**完成（单幕逐字节不变）**
+用户拍板「继续冲v3.5」。设计见 `docs/F2分支剧情设计.md` §3，全部用
+**标准 WebGAL 语法，零方言**：
+
+- **多幕 -> 多 scene 文件**：`game/scene/<safe(aid)>.txt`，首幕同时写
+  `start.txt`（引擎固定入口）。`stats` 新增 `scenes` 计数。
+- **choice** -> `choose:文本1:scene1.txt|文本2:scene2.txt;`（§8-1 已核实）。
+  选项文本按 demo_escape 规则转义：`:` `,` `.` `|` `\`。
+- **option.set** -> **伪幕技术**：生成 `<aid>__c<cid>_<i>.txt`，内容是
+  `setVar:…;` + `changeScene:<真目标>;`。零方言、组合任意（§3.2）。
+- **option.when** -> 伪幕内 `if:cond:…;` + 兜底目标（§8-3 未证实语法，
+  没有 when 时不生成，绝不猜）。
+- **jumps** -> 幕内 `if:表达式:target.txt;`（§8-2 实测：`if` 是真实命令，
+  传言的 `jumpIf` **不存在**）。
+- **next** -> 幕尾 `changeScene:<target>.txt;`。
+- **vars 初始化** -> **只写 start.txt 头部**（§3.2：各幕不重复声明，
+  避免播放中被重置）。
+- **关键实现**：`export_game` 加内部参数 `_scene`/`_ctx`，逐幕递归调用
+  自身；`_ctx` 携带跨幕共享上下文（资源名字池/已拷资源去重/first_bg/
+  stats），多幕共用同一份 background/figure，不重复占体积。
+  **单幕路径不传 `_ctx`，逐字节等于旧输出**（回归锚 A5 实测验证）。
+- 确定性：伪幕/scene 文件名由 `(aid, cid, option_index)` 纯函数决定，
+  同工程两次导出逐字节一致。
+- 新增 `render_branch_script()`：内存预览（不写盘），给 `act.script` 命令用。
+
+### F2-L3 分支剧情导入层——**完成（多文件 BFS + 伪幕折叠）**
+- 新入口 `import_project_dir(game_dir, entry)`：从 `start.txt` **BFS**
+  收集被引用 scene（`changedScene`/`if`/`choose` 目标），visited 防环，
+  **每文件一幕**。
+- `choose` -> choices 节点（选项文本反转义；目标 scene 名映射成幕 aid，
+  映射不到保留原名，往返不丢）。
+- `if` -> jumps；`changeScene` -> next；`setVar` -> 工程级 vars
+  （默认值按字面量解析：`"stay"`->str、`0`->int、`true`->1）。
+- **伪幕吸收（往返闭环关键）**：只含 `setVar`+`changeScene` 且被 choose
+  指向的文件 -> **不生成为幕**，其 setVar 吸收回对应 `option.set`，
+  目标改指伪幕里的真 scene。实测 2 幕（吸收 1 个伪幕）。
+- `import_script` 单文件入口行为不变（无分支语句时不升级 v2）。
+
+### F2-L4 remote 命令组——**完成（14 条命令）**
+设计 §5。与既有命令风格一致，全部主线程派发：
+- `act.list/add/switch/rename/duplicate/remove/next/script`
+- `choice.set/remove`、`jump.set/remove`、`var.set/list`
+- **懒升级语义**：单幕工程（v1）首次调用 `act.add` 才升级 v2，回执里
+  `upgraded:true` 明确告知，不让 DSH 代理误判工程结构突变。
+- 当前幕游标存 `wb._cur_aid`（编辑器会话状态，**不进工程文件**）。
+
+### 修掉三个真实 bug（都是本轮实测抓到的）
+1. **`option.set` 被 sanitize 洗成空列表（P0）**：`_sanitize_str_list`
+   只认 list，导入端写入的 `"k=v;k2=v"` 字符串被 silently 丢掉 ->
+   伪幕吸收的副作用全部丢失。改：同时接受字符串，按分号切分归一成列表。
+   连带修 `remote_control.choice.set` 与导出端伪幕生成（统一列表形态）。
+2. **伪幕吸收时序错**：`_fold_branch` 在 `builder.run()` 内就把 choices
+   搬进 `acts`，之后再改 `builder._choices` 无效。改：run **之前**建好
+   `_pseudo_map`，在 `_fold_branch` 内部吸收。
+3. **v2 工程统计 KeyError**：v2 里 `tracks/dialogue` 在 `acts[0]` 内，
+   顶层没有 -> `self.proj["tracks"]` 直接 KeyError。改：统计走
+   `act_view` 投影。
+
+### 验证（本轮新增）
+- `f2_l2_test.py` **46 项全绿**（含 **A5：单幕输出与 git HEAD 逐字节
+  一致**、多幕/伪幕/if/next/vars/确定性/内存预览/边界）
+- `f2_l3_test.py` **44 项全绿**（单文件不变/BFS/choose/伪幕吸收/jumps/
+  vars/往返闭环/循环引用/悬空目标/转义）
+- `f2_l4_test.py` **75 项全绿**（14 条命令 + 上限 + 健壮性 + 懒升级）
+- `f2_l2_e2e.py` **16 项全绿**（真导出 playable 包：index.html/启动器/
+  live2d core/全部 scene/皮肤/导入器可解析）
+- **全量回归 22 套全绿**：f2_l1/l2/l3/l4 + video_model/layout/source/
+  integration/export/preset + clip_timeline/timeline/script_editor +
+  webgal_import/export/preview/preview_audit + remote_control +
+  figure_limit/dialogue_action/cubism_key/asset_consume
+
 ### 验证
 - 新增 `f2_l1_test.py` **60 项全绿**（形状/懒升级/act_view 零 diff/
   幕管理/分支往返/悬空引用/上限截断/脏值容错/v1 兼容）。

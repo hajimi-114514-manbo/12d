@@ -58,11 +58,13 @@ _COMMANDS = frozenset((
     "changeBg", "changeFigure", "bgm", "playEffect", "video", "intro",
     "setTextbox", "choose", "branch", "jumpLabel", "label", "callScene",
     "changeScene", "setVar", "unlockCg", "unlockBgm",
+    # F2-L3（v3.5）：if 是真实的条件跳转命令（§8-2 实测，jumpIf 不存在）
+    "if",
 ))
 # 明确不支持的语句：跳过 + 记警告，不报错。
 _UNSUPPORTED = frozenset((
-    "choose", "branch", "jumpLabel", "label", "callScene", "changeScene",
-    "setVar", "unlockCg", "unlockBgm", "setTextbox",
+    "branch", "jumpLabel", "label", "callScene",
+    "unlockCg", "unlockBgm", "setTextbox",
 ))
 _SLOT_X = {"left": 0.2, "center": 0.5, "right": 0.8}
 _IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
@@ -359,6 +361,75 @@ def assets_query(kind=None, tags=None, limit=30):
     return True, "", {"total": total, "items": out}
 
 
+# ---------------- F2-L3（v3.5）：分支语句解析辅助 ----------------
+def _split_unescaped(s, sep, maxsplit=-1):
+    """按**未转义**的 sep 切分（`\\|` `\\:` `\\,` `\\.` 是转义形态）。
+
+    WebGAL choose 选项文本里这些字符会带反斜杠转义（§8-1 demo_escape），
+    切分时必须尊重转义，否则选项会被切碎。"""
+    out = []
+    cur = []
+    i = 0
+    n = len(str(s))
+    text = str(s)
+    done = 0
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            cur.append(ch)
+            cur.append(text[i + 1])
+            i += 2
+            continue
+        if ch == sep and (maxsplit < 0 or done < maxsplit):
+            out.append("".join(cur))
+            cur = []
+            done += 1
+            i += 1
+            continue
+        cur.append(ch)
+        i += 1
+    out.append("".join(cur))
+    return out
+
+
+def _unesc_choose(s):
+    """choose 选项文本反转义：`\\:`->`:`、`\\,`->`,`、`\\.`->`.`、
+    `\\|`->`|`、`\\\\`->`\\`。"""
+    out = []
+    i = 0
+    text = str(s or "")
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text) and text[i + 1] in ":, .|\\".replace(" ", ""):
+            out.append(text[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _parse_literal(v):
+    """setVar 右值 -> Python 值（数字/布尔/字符串）。
+
+    导出端写的默认值形态：`"stay"`（带引号字符串）/ `0` / `1.5`。
+    其它一律按去引号字符串保留（表达式不求值——A4 放弃项）。"""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        return s[1:-1]
+    low = s.lower()
+    if low in ("true", "false"):
+        return 1 if low == "true" else 0
+    try:
+        if "." in s or "e" in low:
+            return float(s)
+        return int(s)
+    except (TypeError, ValueError):
+        return s
+
+
 def _split_line(raw):
     """一行 -> (head, rest, err)。注释/空行/无冒号行分别处理。"""
     line = raw.strip()
@@ -399,12 +470,19 @@ def _comment_text(raw):
 
 
 def _parse_change_figure(arg):
-    """changeFigure 参数 -> (path, slot, motion, expression)。"""
+    """changeFigure 参数 -> (path, slot, motion, expression, fid, transform)。
+
+    K1（task-69）平移：-id 句柄（none 按 id 精确退场）与 -transform JSON
+    （position 中心原点绝对像素 → 还原 layout.x/y）。-transform 值若含
+    空格会被 token 切碎，json 解析失败按无 transform 处理（导出端产出
+    紧凑 JSON，正常不会踩到）。"""
     path = slot = None
     motion = expression = None
+    fid = None
+    transform = None
     toks = str(arg or "").split()
     if not toks:
-        return path, slot, motion, expression
+        return path, slot, motion, expression, fid, transform
     path = toks[0]
     for tk in toks[1:]:
         tk_clean = tk[1:] if tk.startswith("-") else tk
@@ -414,13 +492,29 @@ def _parse_change_figure(arg):
             motion = tk[len("-motion="):]
         elif tk.startswith("-expression="):
             expression = tk[len("-expression="):]
-    return path, slot, motion, expression
+        elif tk.startswith("-id="):
+            fid = tk[len("-id="):]
+        elif tk.startswith("-transform="):
+            try:
+                transform = json.loads(tk[len("-transform="):])
+            except Exception:
+                transform = None
+    return path, slot, motion, expression, fid, transform
 
 
 def _parse_file(arg):
     """命令参数首 token 即资源路径（其余为选项，这里忽略）。"""
     toks = str(arg or "").split()
     return toks[0] if toks else ""
+
+
+def _num_ok(v):
+    """K1：transform position 数值判定（int/float 可，str 数字亦可）。"""
+    try:
+        float(v)
+        return v is not None
+    except (TypeError, ValueError):
+        return False
 
 
 def _who_of(path):
@@ -480,6 +574,8 @@ class _Builder:
         self.stmt_n = 0
         self.lib_hits = 0        # G4：素材库回退命中计数（记 info 不进警告）
         self.comments = []       # I3（task-67）：// 与 ;…; 注释行内容载体
+        # K1（task-69）：-id 句柄 -> who 映射（none -id 精确退场用）
+        self._id_fig = {}
         # 轨道登记：name -> tid
         self._tid = {}
         # 未闭合 clip：track_id -> clip
@@ -488,6 +584,15 @@ class _Builder:
         self._slot_fig = {"left": None, "center": None, "right": None}
         # 立绘名 -> (track_id, clip)
         self._fig = {}
+        # ---- F2-L3（v3.5）：分支折叠载体 ----
+        self._choices = []       # [{cid,t,prompt,options}] -> 幕 choices
+        self._jumps = []         # [{t,when,target}]      -> 幕 jumps
+        self._vars = []          # [{name,default}]       -> 工程 vars
+        self._next = None        # 幕尾续接（changeScene）
+        self._branch_end = False  # 本文件出现分叉语句：后续语句仍在同幕积累
+        self._pending_sets = []  # 伪幕里的 setVar（供 option.set 吸收）
+        self._scene_name = None  # 本文件对应 scene 名（多文件导入时设）
+        self._aid = "a1"
 
     # ---- 轨道 ----
     def _track(self, name, kind="video"):
@@ -542,7 +647,8 @@ class _Builder:
             self._open[bt] = clip
 
     def do_change_figure(self, game_dir, arg):
-        path, slot, motion, expression = _parse_change_figure(arg)
+        path, slot, motion, expression, fid, transform = \
+            _parse_change_figure(arg)
         if not path:
             return
         if not str(path).lower().endswith(("none",)):
@@ -578,9 +684,25 @@ class _Builder:
             if clip is None:
                 return
             lay = dict(self.VM.default_layout())
-            lay["x"] = _SLOT_X.get(slot, 0.5)
+            lay["x"] = _SLOT_X.get(slot, 0.5) if slot else 0.5
             lay["y"] = 0.7
             lay["scale"] = 0.6
+            # K1 平移反向：-transform position（中心原点绝对像素）→ x/y。
+            # 画布维度优先取导出器侧键 muppet{w,h}（回环精确还原），
+            # 无侧键退回本工程画布。
+            pos = ((transform or {}).get("position") or {})
+            if isinstance(pos, dict):
+                _mu = (transform or {}).get("muppet") or {}
+                _W = _num_ok(_mu.get("w")) and float(_mu["w"]) \
+                    or float(self.proj["width"] or 1920)
+                _H = _num_ok(_mu.get("h")) and float(_mu["h"]) \
+                    or float(self.proj["height"] or 1080)
+                if _num_ok(pos.get("x")):
+                    lay["x"] = max(0.0, min(1.0,
+                                            0.5 + float(pos["x"]) / _W))
+                if _num_ok(pos.get("y")):
+                    lay["y"] = max(0.0, min(1.0,
+                                            0.5 - float(pos["y"]) / _H))
             clip["layout"] = lay
             if motion is not None:
                 clip["motion"] = motion
@@ -588,16 +710,22 @@ class _Builder:
                 clip["expression"] = expression
             self._open[ft] = clip
             self._fig[who] = (ft, clip)
+            if fid:
+                self._id_fig[fid] = who
             if slot in self._slot_fig:
                 self._slot_fig[slot] = who
         else:
-            # changeFigure:none -槽位：显式退场该槽位当前角色
-            who = self._slot_fig.get(slot)
+            # changeFigure:none -槽位 / -id=xxx：显式退场（K1 两种句柄形态）
+            who = self._id_fig.get(fid) if fid else None
+            if who is None:
+                who = self._slot_fig.get(slot)
             if who and who in self._fig:
                 ft, _c = self._fig.pop(who)
                 self._close(ft)
                 if slot in self._slot_fig:
                     self._slot_fig[slot] = None
+                for k in [k for k, v in self._id_fig.items() if v == who]:
+                    self._id_fig.pop(k, None)
 
     def do_video(self, game_dir, arg):
         path, k = self._locate(game_dir, _parse_file(arg))
@@ -641,6 +769,95 @@ class _Builder:
              "who": "旁白", "text": text})
         self.t += dur
 
+    # ---- F2-L3（v3.5）：分支语句落地 ----
+    # 设计 docs/F2分支剧情设计.md §4。全部**折叠回 v2 工程**（幕列表 + choices
+    # + jumps + vars），不引入新形状。单文件导入（import_script）行为不变：
+    # 没有 choose/setVar/if 时，下面这些方法根本不会被调用。
+    def do_choose(self, game_dir, arg):
+        """`choose:文本1:scene1.txt|文本2:scene2.txt;` -> choices 节点。
+
+        目标带 .txt = 跨文件跳转（映射成幕 aid 待 BFS 后回填）；不带 = 同文件
+        label（A4 放弃项，记警告但保留原名）。选项文本反转义（\\: \\, \\.）。"""
+        self.stmt_n = self.stmt_n          # 已计数
+        opts = []
+        # 按未转义的 | 切分
+        parts = _split_unescaped(str(arg or ""), "|")
+        for p in parts:
+            p = p.strip()
+            if not p:
+                continue
+            # 按未转义的 : 切成 文本:目标（只切第一个）
+            seg = _split_unescaped(p, ":", maxsplit=1)
+            if len(seg) < 2:
+                self.warnings.append("choose 选项格式非法（缺目标）: %s" % p[:40])
+                continue
+            txt = _unesc_choose(seg[0].strip())
+            tgt = seg[1].strip()
+            if txt:
+                opts.append({"text": txt, "target": tgt})
+        if not opts:
+            self.warnings.append("choose 无可解析选项，已跳过")
+            return
+        cid = "c%d" % (len(self._choices) + 1)
+        self._choices.append({"cid": cid, "t": None, "prompt": "",
+                              "options": opts})
+        # choose 之后剧情在此分叉：本幕在这一刻收尾
+        self._branch_end = True
+
+    def do_choose_prompt(self, text):
+        """choose 前一行旁白若是提示语，挂到最近一个选择点上。"""
+        if not self._choices:
+            return False
+        t = str(text or "").strip()
+        if not t:
+            return False
+        self._choices[-1]["prompt"] = t
+        return True
+
+    def do_set_var(self, _game_dir, arg):
+        """`setVar:名=表达式;` -> vars 声明（工程级，只增不覆盖已有默认）。"""
+        s = str(arg or "").strip()
+        if "=" not in s:
+            self.warnings.append("setVar 格式非法（缺 =）: %s" % s[:40])
+            return
+        name, val = s.split("=", 1)
+        name = name.strip()
+        val = val.strip()
+        if not name:
+            return
+        # -global 选项：剥掉（我们统一工程级，无作用域概念）
+        for flag in ("-global", "-local"):
+            if val.endswith(flag):
+                val = val[:-len(flag)].strip()
+        for v in self._vars:
+            if v["name"] == name:
+                return                     # 已声明：不覆盖（首声明=默认值）
+        self._vars.append({"name": name, "default": _parse_literal(val)})
+        # 伪幕识别：本文件若只含 setVar + changeScene，则这些 setVar 属于
+        # 某个 option.set 副作用 -> 由 _finalize 吸收回 option.set
+        self._pending_sets.append("%s=%s" % (name, val))
+
+    def do_if(self, game_dir, arg):
+        """`if:表达式:scene.txt;` -> jumps 节点（单条件，实测语法）。"""
+        s = str(arg or "").strip()
+        seg = _split_unescaped(s, ":", maxsplit=1)
+        if len(seg) < 2:
+            self.warnings.append("if 格式非法（缺目标）: %s" % s[:40])
+            return
+        cond = seg[0].strip()
+        tgt = seg[1].strip()
+        if not cond or not tgt:
+            return
+        self._jumps.append({"t": round(self.t, 3), "when": cond, "target": tgt})
+        self._branch_end = True
+
+    def do_change_scene(self, _game_dir, arg):
+        """`changeScene:x.txt;` -> 幕尾 next（导出反向：next -> changeScene）。"""
+        tgt = str(arg or "").strip()
+        if tgt:
+            self._next = tgt
+            self._branch_end = True
+
     # ---- 台词 ----
     def do_dialogue(self, who, text):
         dur = max(2.5, 0.4 * len(text))
@@ -677,7 +894,12 @@ class _Builder:
                       "bgm": self.do_bgm,
                       "playEffect": self.do_play_effect,
                       "video": self.do_video,
-                      "intro": self.do_intro}.get(head)
+                      "intro": self.do_intro,
+                      # F2-L3（v3.5）：分支语句落地
+                      "choose": self.do_choose,
+                      "setVar": self.do_set_var,
+                      "if": self.do_if,
+                      "changeScene": self.do_change_scene}.get(head)
                 if fn is None:
                     if head in _UNSUPPORTED:
                         self.warnings.append("跳过不支持的语句: %s" % head)
@@ -709,11 +931,20 @@ class _Builder:
         ok, msg = self._finalize()
         if not ok:
             return False, msg, None
-        n_track = len(self.proj["tracks"])
-        n_clip = sum(len(t.get("clips") or []) for t in self.proj["tracks"])
-        n_dlg = len(self.proj.get("dialogue") or [])
+        # F2-L3：v2 多幕工程里 tracks/dialogue 在 acts[0] 内（顶层不再有），
+        # 统计必须走 act_view 投影，否则 KeyError（旧断言炸过）。
+        view = self.VM.act_view(self.proj)
+        n_track = len(view.get("tracks") or [])
+        n_clip = sum(len(t.get("clips") or []) for t in view.get("tracks") or [])
+        n_dlg = len(view.get("dialogue") or [])
+        n_act = len(self.proj.get("acts") or []) or 1
         full = "导入 %d 条语句->%d 轨 %d clip %d 台词，警告 %d" % (
             self.stmt_n, n_track, n_clip, n_dlg, len(self.warnings))
+        if n_act > 1:
+            full = full.replace("，警告", "（%d 幕），警告" % n_act) \
+                if "（" not in full else full
+            full = "导入 %d 条语句->%d 幕 %d 轨 %d clip %d 台词，警告 %d" % (
+                self.stmt_n, n_act, n_track, n_clip, n_dlg, len(self.warnings))
         if self.lib_hits:
             # G4 信息计数（不是警告）：素材库回退让脚本引用的缺失资源落了地
             full += "；素材库回退命中 %d" % self.lib_hits
@@ -722,6 +953,15 @@ class _Builder:
         return True, full, self.proj
 
     def _finalize(self):
+        # ---- F2-L3：分支载体折叠进工程（v2 多幕形状）----
+        # 本文件只要有 choices/jumps/next/vars 任一，就升级成 v2：
+        #   - 本文件的 tracks/dialogue 收进 acts[0]（video_model 懒升级）
+        #   - choices/jumps/next 挂到该幕；vars 挂工程级
+        if self._choices or self._jumps or self._vars or self._next:
+            try:
+                self._fold_branch()
+            except Exception as e:
+                self.warnings.append("分支折叠失败（退化为单幕）: %r" % e)
         try:
             import video_model as VM
             proj = VM.sanitize_project(self.proj)
@@ -732,9 +972,80 @@ class _Builder:
         self.proj = proj
         return True, ""
 
+    def _fold_branch(self):
+        """把 choices/jumps/next/vars 折叠成 v2 多幕工程（原地改 self.proj）。"""
+        VM = self.VM
+        # 目标是 scene 文件名 -> 幕 aid 的映射（多文件导入时由调用方填）
+        s2a = getattr(self, "_scene_to_aid", None) or {}
+
+        def _map_target(t):
+            """scene 文件名 -> 幕 aid；映射不到就保留原名（往返不丢）。"""
+            t = str(t or "").strip()
+            if not t:
+                return ""
+            if t in s2a:
+                return s2a[t]
+            for k, v in s2a.items():
+                if os.path.basename(k).lower() == os.path.basename(t).lower():
+                    return v
+            return t
+
+        # 升级成 v2（把顶层 tracks/dialogue 收进 acts[0]）
+        VM._upgrade_to_v2(self.proj)
+        act = self.proj["acts"][0]
+        if self._scene_name:
+            act["name"] = os.path.splitext(os.path.basename(
+                self._scene_name))[0]
+            act["aid"] = getattr(self, "_aid", "a1")
+        # 伪幕吸收：本文件若只含 setVar(+changeScene)，说明是被 choose 指来的
+        # 副作用片段 -> 吸收成对应 option.set，不生成为幕（往返闭环关键）
+        if self._pending_sets and getattr(self, "_absorb", False):
+            self._absorbed_set = ";".join(self._pending_sets)
+        for ch in self._choices:
+            clean_opts = []
+            for o in ch.get("options") or []:
+                tgt = str(o.get("target") or "").strip()
+                setexpr = o.get("set")
+                # 伪幕吸收（导出端 option.set -> 伪幕文件；导入端反向折叠）：
+                # 选项目标是伪幕（只含 setVar+changeScene 的小文件）时，
+                # 把它的 setVar 并成 option.set，目标改指真 scene、
+                pm = getattr(self, "_pseudo_map", None) or {}
+                key = os.path.basename(tgt.replace("\\", "/")).lower()
+                if key in pm:
+                    psets, preal = pm[key]
+                    if psets:
+                        setexpr = ";".join(psets)
+                    tgt = preal or tgt
+                e = {"text": o.get("text"), "target": _map_target(tgt)}
+                if setexpr:
+                    e["set"] = setexpr
+                if o.get("when"):
+                    e["when"] = o["when"]
+                clean_opts.append(e)
+            act.setdefault("choices", []).append(
+                {"cid": ch.get("cid"), "t": ch.get("t"),
+                 "prompt": ch.get("prompt") or "", "options": clean_opts})
+        for j in self._jumps:
+            act.setdefault("jumps", []).append(
+                {"t": j.get("t"), "when": j.get("when"),
+                 "target": _map_target(j.get("target"))})
+        if self._next:
+            act["next"] = _map_target(self._next)
+        if self._vars:
+            existing = self.proj.get("vars") or []
+            names = {v.get("name") for v in existing if isinstance(v, dict)}
+            for v in self._vars:
+                if v.get("name") not in names:
+                    existing.append(v)
+                    names.add(v.get("name"))
+            self.proj["vars"] = existing
+
 
 def import_script(script_path, game_dir, width=1920, height=1080, fps=30):
-    """WebGAL 场景脚本 -> 视频工程 dict。返回 (ok, msg, proj)。"""
+    """WebGAL 场景脚本 -> 视频工程 dict。返回 (ok, msg, proj)。
+
+    单文件入口，行为与旧版完全一致（无 choose/setVar/if 时不升级 v2）。
+    多文件（多幕）请用 import_project_dir。"""
     if not script_path or not os.path.isfile(str(script_path)):
         return False, "脚本文件不存在: %s" % script_path, None
     try:
@@ -742,6 +1053,272 @@ def import_script(script_path, game_dir, width=1920, height=1080, fps=30):
     except Exception as e:
         return False, "构建器初始化失败: %r" % e, None
     return b.run(str(script_path), game_dir)
+
+
+# ================= F2-L3：多文件（多幕）导入 =================
+def _scan_branch_targets(script_path):
+    """扫一个 scene 文件里所有跳转目标（choose 选项 / if 目标 / changeScene）。
+
+    返回 (targets:set[str], sets:[str], has_only_set_and_scene:bool)。
+    纯文本扫，不建工程——BFS 收集文件用。"""
+    targets = set()
+    sets = []
+    other_stmts = 0
+    try:
+        lines = open(script_path, encoding="utf-8", errors="ignore").readlines()
+    except OSError:
+        return targets, sets, False
+    for raw in lines:
+        if _comment_text(raw) is not None:
+            continue
+        head, rest, err = _split_line(raw)
+        if err or head is None:
+            continue
+        if head == "choose":
+            for p in _split_unescaped(str(rest or ""), "|"):
+                seg = _split_unescaped(p.strip(), ":", maxsplit=1)
+                if len(seg) >= 2:
+                    t = seg[1].strip()
+                    if t and t.lower().endswith(".txt"):
+                        targets.add(t)
+            other_stmts += 1
+        elif head == "if":
+            seg = _split_unescaped(str(rest or ""), ":", maxsplit=1)
+            if len(seg) >= 2:
+                t = seg[1].strip()
+                if t and t.lower().endswith(".txt"):
+                    targets.add(t)
+            other_stmts += 1
+        elif head == "changeScene":
+            t = str(rest or "").strip()
+            if t:
+                targets.add(t)
+            # changeScene 不算"其它内容"（伪幕识别用）
+        elif head == "setVar":
+            sets.append(str(rest or "").strip())
+        elif head in ("intro", "setTextbox"):
+            other_stmts += 1
+        else:
+            other_stmts += 1
+    only_set_scene = (other_stmts == 0 and bool(sets))
+    return targets, sets, only_set_scene
+
+
+def import_project_dir(game_dir, entry="game/scene/start.txt",
+                       width=1920, height=1080, fps=30):
+    """F2-L3：WebGAL 工程目录（多 scene）-> v2 多幕工程。返回 (ok, msg, proj)。
+
+    流程：
+      1. 从入口 scene 文件 BFS 收集所有被引用 scene（visited 防环）
+      2. 每个文件建一个 _Builder（= 一幕），记录 scene -> aid 映射
+      3. 伪幕识别：只含 setVar(+changeScene) 且无其它语句的文件，且被某个
+         choose 指向 -> 不生成为幕，setVar 吸收回对应 option.set
+      4. 合并所有幕成 v2 工程（vars 并集、choice 目标映射成 aid）
+
+    单文件工程（无跳转）等价于 import_script，行为零变化。"""
+    game_dir = str(game_dir or "").rstrip("\\/")
+    entry_path = entry if os.path.isabs(entry) else os.path.join(
+        game_dir, entry.replace("/", os.sep))
+    if not os.path.isfile(entry_path):
+        alt = os.path.join(game_dir, "scene", os.path.basename(entry_path))
+        if os.path.isfile(alt):
+            entry_path = alt
+        else:
+            return False, "入口脚本不存在: %s" % entry_path, None
+
+    scene_root = os.path.dirname(entry_path)
+
+    def _resolve_target(t):
+        base = os.path.basename(str(t or "").replace("\\", "/"))
+        p = os.path.join(scene_root, base)
+        return p if os.path.isfile(p) else None
+
+    # ---- 1. BFS 收集 ----
+    order = []
+    visited = set()
+    queue = [entry_path]
+    pending = {}
+    while queue:
+        p = queue.pop(0)
+        key = os.path.normcase(os.path.abspath(p))
+        if key in visited:
+            continue
+        visited.add(key)
+        order.append(p)
+        tgts, sets, only_sets = _scan_branch_targets(p)
+        pending[p] = {"targets": tgts, "sets": sets, "only_sets": only_sets}
+        for t in tgts:
+            rp = _resolve_target(t)
+            if rp:
+                queue.append(rp)
+
+    # ---- 2. 伪幕识别 ----
+    # 被 choose 指向 + 只含 setVar/changeScene -> 伪幕（吸收成 option.set）
+    pointed = set()
+    for p, info in pending.items():
+        for t in info["targets"]:
+            rp = _resolve_target(t)
+            if rp:
+                pointed.add(os.path.normcase(os.path.abspath(rp)))
+    pseudo = {p for p in order
+              if pending[p]["only_sets"]
+              and os.path.normcase(os.path.abspath(p)) in pointed}
+
+    real_scenes = [p for p in order if p not in pseudo]
+    if not real_scenes:
+        return False, "没有任何可导入的幕文件", None
+
+    # ---- 3. 每文件一幕 ----
+    scene_to_aid = {}
+    for i, p in enumerate(real_scenes):
+        aid = "a%d" % (i + 1)
+        scene_to_aid[os.path.basename(p)] = aid
+        scene_to_aid[p] = aid
+
+    # 伪幕 -> 它是哪个选项的目标：文件名 a1__c1_0.txt 可解析，兜底靠内容匹配
+    def _pseudo_owner(p):
+        """伪幕归属 (目标 scene 里的 option)：返回 (target_scene_path, sets)。"""
+        info = pending.get(p) or {}
+        return info.get("sets") or []
+
+    # 伪幕吸收表：{伪幕 basename(小写): (sets列表, 真目标scene名)}
+    # **必须在 builder.run 之前建好**——run 内部 _finalize -> _fold_branch 会
+    # 立刻把 choices 搬进 acts，之后再改 builder._choices 就没用了（实测 bug）。
+    pseudo_map = {}
+    for pp in pseudo:
+        info = pending.get(pp) or {}
+        real = None
+        try:
+            for raw in open(pp, encoding="utf-8", errors="ignore").readlines():
+                h2, r2, e2 = _split_line(raw)
+                if e2 or h2 is None:
+                    continue
+                if h2 == "changeScene":
+                    real = str(r2 or "").strip()
+                    break
+        except OSError:
+            pass
+        pseudo_map[os.path.basename(pp).lower()] = (info.get("sets") or [], real)
+
+    builders = []
+    all_warn = []
+    for i, p in enumerate(real_scenes):
+        aid = "a%d" % (i + 1)
+        try:
+            b = _Builder(width, height, fps)
+        except Exception as e:
+            return False, "构建器初始化失败: %r" % e, None
+        b._scene_name = os.path.basename(p)
+        b._aid = aid
+        b._scene_to_aid = scene_to_aid
+        b._pseudo_map = pseudo_map          # 供 _fold_branch 吸收用
+        b.run(p, game_dir)
+        builders.append(b)
+        all_warn.extend(b.warnings)
+
+    if not builders:
+        return False, "没有成功导入任何幕", None
+
+    # ---- 4. 合并成 v2 ----
+    VM = None
+    try:
+        import video_model as VM
+    except Exception as e:
+        return False, "video_model 不可用: %s" % e, None
+
+    base = builders[0]
+    proj = base.proj
+    VM._upgrade_to_v2(proj)
+    # 第一幕的 aid/名字已经是 a1；其余幕追加
+    acts = proj["acts"]
+    if acts:
+        acts[0]["aid"] = "a1"
+        acts[0]["name"] = os.path.splitext(base._scene_name)[0]
+    for b in builders[1:]:
+        p2 = b.proj
+        VM._upgrade_to_v2(p2)
+        a = p2["acts"][0]
+        a["aid"] = b._aid
+        a["name"] = os.path.splitext(b._scene_name)[0]
+        acts.append(a)
+        # vars 并集
+        for v in (p2.get("vars") or []):
+            names = {x.get("name") for x in (proj.get("vars") or [])
+                     if isinstance(x, dict)}
+            if isinstance(v, dict) and v.get("name") not in names:
+                proj.setdefault("vars", []).append(v)
+    # 二次映射：把目标里的 scene 文件名换成 aid（各 builder 已做过一次，
+    # 这里补一次防止跨文件引用在 builder 阶段还没拿到完整映射）
+    for a in acts:
+        for ch in (a.get("choices") or []):
+            for o in (ch.get("options") or []):
+                t = str(o.get("target") or "")
+                if t in scene_to_aid:
+                    o["target"] = scene_to_aid[t]
+                elif os.path.basename(t) in scene_to_aid:
+                    o["target"] = scene_to_aid[os.path.basename(t)]
+        for j in (a.get("jumps") or []):
+            t = str(j.get("target") or "")
+            if t in scene_to_aid:
+                j["target"] = scene_to_aid[t]
+            elif os.path.basename(t) in scene_to_aid:
+                j["target"] = scene_to_aid[os.path.basename(t)]
+        nx = a.get("next")
+        if nx:
+            if nx in scene_to_aid:
+                a["next"] = scene_to_aid[nx]
+            elif os.path.basename(str(nx)) in scene_to_aid:
+                a["next"] = scene_to_aid[os.path.basename(str(nx))]
+
+    ok, msg = True, ""
+    try:
+        fixed = VM.sanitize_project(proj)
+        if fixed is None:
+            ok, msg = False, "合并后工程不合法"
+        else:
+            proj = fixed
+    except Exception as e:
+        ok, msg = False, "合并校验失败: %r" % e
+
+    n_act = len(proj.get("acts") or [])
+    n_pseudo = len(pseudo)
+    return ok, "导入 %d 幕%s，警告 %d" % (
+        n_act, ("（吸收 %d 个伪幕）" % n_pseudo) if n_pseudo else "",
+        len(all_warn)), proj
+
+
+def _absorb_pseudo(builder, scene_path, pending, resolve_target, pseudo_set):
+    """把某幕 choose 选项指向的伪幕吸收回 option.set（原地改 builder 的 choices）。
+
+    伪幕形如 a1__c1_0.txt，内容 = setVar* + changeScene:<真目标>。
+    吸收后：该选项 set = "k=v;k2=v2"，target = 真目标（不再是伪幕）。"""
+    resolve = resolve_target
+    for ch in builder._choices:
+        for o in (ch.get("options") or []):
+            tgt = str(o.get("target") or "").strip()
+            if not tgt:
+                continue
+            rp = resolve(tgt)
+            if not rp or rp not in pseudo_set:
+                continue
+            info = pending.get(rp) or {}
+            sets = info.get("sets") or []
+            if sets:
+                o["set"] = ";".join(sets)
+            # 真目标：伪幕里的 changeScene
+            real = None
+            try:
+                for raw in open(rp, encoding="utf-8",
+                                errors="ignore").readlines():
+                    head, rest, err = _split_line(raw)
+                    if err or head is None:
+                        continue
+                    if head == "changeScene":
+                        real = str(rest or "").strip()
+                        break
+            except OSError:
+                pass
+            o["target"] = real or ""
 
 
 # ================= CLI =================

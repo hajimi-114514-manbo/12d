@@ -812,9 +812,19 @@ def _sanitize_tracks(tracks, proj_for_id):
 
 
 def _sanitize_str_list(raw, limit=0):
-    """字符串数组清洗（option.set 用：形如 "met=true"）。"""
+    """option.set 清洗：契约形态 = 字符串列表（形如 ["met=true", "route=x"]）。
+
+    F2-L2/L3 补丁：**同时接受单个字符串**（"met=true;route=x"）——导入端从
+    WebGAL 脚本里拿到的是分号串，直接写进来；旧实现只认 list，字符串会被
+    silently 洗成 []（实测 bug：伪幕吸收的 option.set 全部丢失）。
+    字符串按未转义分号切分后逐条清洗，语义与列表形态一致。"""
+    items = []
+    if isinstance(raw, list):
+        items = raw
+    elif isinstance(raw, str):
+        items = [x for x in raw.split(";") if x is not None]
     out = []
-    for x in (raw if isinstance(raw, list) else []):
+    for x in items:
         if isinstance(x, str) and x.strip():
             s = x.strip()[:200]
             if limit and len(out) >= limit:

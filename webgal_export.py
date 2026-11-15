@@ -126,6 +126,48 @@ def _slot(x):
     return "center"
 
 
+# K1（task-69）平移：x 恰在三分位快捷值（0.2/0.5/0.8 ± 0.02）→ 维持旧
+# -left/-center/-right 形态（≤3 人导出逐字节=现状锚）；非三分位 → 角色
+# 稳定 -id 句柄 + -transform 中心原点绝对像素定位（step0 取证：官方
+# demo_parallel_animation 语法；none -id 精确退场已实拍验证）。
+# 已知限制：本批只平移 position；scale/rot 不进 -transform（WebGAL 立绘
+# 缩放由引擎内置管理，v3.5 后续卡再评估）。
+_SLOT_XS = (0.2, 0.5, 0.8)
+_SLOT_EPS = 0.02
+
+
+def _is_slot_x(x):
+    return any(abs(_f(x, 0.5) - sx) <= _SLOT_EPS for sx in _SLOT_XS)
+
+
+def _who_export(path):
+    """角色粒度（与导入端 webgal_import._who_of 同口径；惰性 import 防循环）。"""
+    try:
+        import webgal_import as _WI
+        return _WI._who_of(path)
+    except Exception:
+        return os.path.splitext(os.path.basename(
+            str(path).replace("\\", "/").rstrip("/")))[0] or "fig"
+
+
+def _fig_id(who):
+    return "muppet_" + (safe_name(who) or "fig")
+
+
+def _transform_of(lay, W, H):
+    """非三分位 layout -> -transform 紧凑 JSON（position 中心原点像素）。
+
+    附带 `muppet:{w,h}` 画布维度侧键：官方解析器只读 position/scale 等已知
+    键（未知键无害），回环时导入端据此精确还原归一化 x/y，不受
+    import_script 默认画布尺寸影响。"""
+    x = _f(lay.get("x"), 0.5)
+    y = _f(lay.get("y"), 0.5)
+    px = int(round((x - 0.5) * W))
+    py = int(round((0.5 - y) * H))
+    return ('{"position":{"x":%d,"y":%d},"muppet":{"w":%d,"h":%d}}'
+            % (px, py, int(round(W)), int(round(H))))
+
+
 def safe_name(name):
     """规则 7：空格→下划线；只保留中文/字母数字/._-（即剔除 `":;|?*<>` 与 / \\ 等）。"""
     s = str(name or "").replace(" ", "_")
@@ -1167,8 +1209,413 @@ def _load_json_proj(path):
         return obj
 
 
+# ================= F2-L2（v3.5）：多幕 / 分支导出 =================
+# 设计文档 docs/F2分支剧情设计.md §3。全部用**标准 WebGAL 语法**，零方言：
+#   - 多幕 -> game/scene/<safe(aid)>.txt，首幕同时写 start.txt（引擎固定入口）
+#   - choice -> `choose:文本1:scene1.txt|文本2:scene2.txt;`（§8-1 已核实）
+#   - option.set -> **伪幕**：生成 <aid>__c<cid>_<i>.txt，内容是若干
+#     `setVar:…;` + `changeScene:<真目标>;`。零方言、组合任意（§3.2）
+#   - option.when -> 同上伪幕 + 头部 `if:cond:…;` 兜底（§8-3 未证实，
+#     无 when 时不生成，绝不猜语法）
+#   - jumps -> 幕内 t 处 `if:表达式:target.txt;`（§8-2：if 是真实命令，
+#     jumpIf 不存在）
+#   - next -> 幕尾 `changeScene:<target>.txt;`
+#   - vars -> **只写 start.txt 头部** `setVar:名=默认值;`（§3.2：各幕不重复
+#     声明，避免播放中被重置）
+#
+# 稳定性契约：伪幕/scene 文件名由 (aid, cid, option_index) 纯函数决定，
+# 同工程两次导出逐字节一致（回归可断言）。
+
+_BRANCH_RESERVED = "__"
+
+
+def _scene_filename(aid, pool=None):
+    """幕 id -> scene 文件名（安全化 + 去重）。start 保留给首幕。"""
+    s = safe_name(str(aid or "act")) or "act"
+    name = s + ".txt"
+    if pool is not None:
+        name = pool.alloc("scene", name)
+    return name
+
+
+def _pseudo_name(aid, cid, idx):
+    """伪幕文件名（纯函数，保证两次导出同名）。"""
+    a = safe_name(str(aid or "a")) or "a"
+    c = safe_name(str(cid or "c")) or "c"
+    return "%s%s%s_%d.txt" % (a, _BRANCH_RESERVED, c, int(idx))
+
+
+def _esc_choose_text(t):
+    """choose 选项文本转义（§8-1 demo_escape 实测）：`：`→`\\:`、
+    `,`→`\\,`、`.`→`\\.`；另外我们自己还要护住分隔符 `:` 和 `|`。"""
+    s = str(t or "").replace("\n", " ")
+    for a, b in (("\\", "\\\\"), (":", "\\:"), ("|", "\\|"),
+                 (",", "\\,"), (".", "\\.")):
+        s = s.replace(a, b)
+    return s
+
+
+def _branch_target_scene(target, aid_to_scene):
+    """分支目标 -> scene 文件名。
+
+    目标可以是幕 id（本工程内跳转，映射成 scene 文件）或外部 scene 名
+    （如 "chapter2.txt"，原样保留）。空目标 -> None（不 emit）。"""
+    t = str(target or "").strip()
+    if not t:
+        return None
+    if t in aid_to_scene:
+        return aid_to_scene[t]
+    if t.lower().endswith(".txt"):
+        return t
+    # 未匹配任何幕 id：当作外部 scene 名，补 .txt（并交给调用方记警告）
+    return safe_name(t) + ".txt" if safe_name(t) else None
+
+
+def _emit_branch_tail(act, ctx):
+    """生成一幕结尾的分支语句 + 伪幕文件内容。
+
+    返回 (tail_lines, pseudo_files)：
+      tail_lines   = 追加到该幕 scene 文件末尾的行
+      pseudo_files = [(文件名, [行...])]  伪幕（option.set 副作用）
+    单幕工程（act 为 None / 无 choices/jumps/next）返回 ([], [])，调用方
+    跳过整段 -> 逐字节等于旧输出。"""
+    if not isinstance(act, dict):
+        return [], []
+    aid_to_scene = ctx.get("aid_to_scene") or {}
+    scene_of_self = ctx.get("scene_of_self") or ""
+
+    tail = []
+    pseudo = []
+
+    # ---- jumps：幕内条件跳转 ----
+    for j in (act.get("jumps") or []):
+        if not isinstance(j, dict):
+            continue
+        tgt = _branch_target_scene(j.get("target"), aid_to_scene)
+        if not tgt:
+            continue
+        if tgt == scene_of_self:
+            continue                     # 跳自己 = 无操作，跳过（防死循环）
+        cond = str(j.get("when") or "").strip()
+        if not cond:
+            # 无条件跳转：幕内任意时刻无条件跳走会截断后续剧情，
+            # 语义上等价于 next；为安全起见按幕尾 changeScene 处理。
+            continue
+        # 条件里出现裸分号会切断语句，转全角（§8-6 注释同样的防护）
+        cond = cond.replace(";", "；")
+        tail.append(_note("条件跳转 @%.2fs" % _f(j.get("t"))))
+        tail.append("if:%s:%s;" % (cond, tgt))
+
+    # ---- choices：选择点 ----
+    for ch in (act.get("choices") or []):
+        if not isinstance(ch, dict):
+            continue
+        cid = ch.get("cid")
+        opts = [o for o in (ch.get("options") or []) if isinstance(o, dict)]
+        if not opts:
+            continue
+        prompt = str(ch.get("prompt") or "").strip()
+        t_ch = ch.get("t")
+        if prompt:
+            # prompt 用旁白台词展示（可选，§3.2）
+            tail.append(_note("选择点 @%s" % ("幕尾" if t_ch is None
+                                            else "%.2fs" % _f(t_ch))))
+            ptxt = prompt.replace(";", "；").replace("\\n", " ")
+            tail.append("旁白:%s;" % ptxt)
+        parts = []
+        for i, o in enumerate(opts):
+            txt = _esc_choose_text(o.get("text"))
+            setexpr = o.get("set")
+            # option.set 契约 = 字符串列表（video_model._sanitize_str_list）；
+            # 兼容早期/外部传来的单个 "k=v;k2=v" 字符串形态。
+            if isinstance(setexpr, (list, tuple)):
+                set_list = [str(x).strip() for x in setexpr if str(x or "").strip()]
+            elif setexpr:
+                set_list = [x.strip() for x in str(setexpr).split(";")
+                            if x.strip()]
+            else:
+                set_list = []
+            when = str(o.get("when") or "").strip()
+            real = _branch_target_scene(o.get("target"), aid_to_scene)
+            if set_list or when:
+                # 伪幕：无条件副作用 + 跳转；when 无对应语法时退化为
+                # 伪幕内 if + 兜底（绝不在 choose 行写未证实语法）
+                pname = _pseudo_name(ctx.get("aid"), cid, i)
+                plines = []
+                if when:
+                    plines.append(_note("选项条件（导出为伪幕 if 判断）"))
+                    w = when.replace(";", "；")
+                    plines.append("if:%s:%s;" % (w, real or ctx.get(
+                        "fallback_scene", "")))
+                for kv in set_list:
+                    plines.append("setVar:%s;" % kv.replace(";", "；"))
+                if real:
+                    plines.append("changeScene:%s;" % real)
+                elif ctx.get("fallback_scene"):
+                    plines.append("changeScene:%s;" % ctx["fallback_scene"])
+                pseudo.append((pname, plines))
+                tgt = pname
+            else:
+                tgt = real
+            if not tgt:
+                continue
+            parts.append("%s:%s" % (txt, tgt))
+        if parts:
+            tail.append("choose:%s;" % "|".join(parts))
+
+    # ---- next：幕尾续接 ----
+    nxt = act.get("next")
+    if nxt:
+        tgt = _branch_target_scene(nxt, aid_to_scene)
+        if tgt and tgt != scene_of_self:
+            tail.append("changeScene:%s;" % tgt)
+
+    return tail, pseudo
+
+
+def _collect_vars_lines(proj):
+    """工程级 vars -> start.txt 头部 setVar 初始化行（只写一次）。"""
+    out = []
+    for v in (proj.get("vars") or []):
+        if not isinstance(v, dict):
+            continue
+        name = str(v.get("name") or "").strip()
+        if not name:
+            continue
+        dflt = v.get("default", 0)
+        if isinstance(dflt, bool):
+            dflt = 1 if dflt else 0
+        elif isinstance(dflt, (int, float)):
+            dflt = dflt
+        else:
+            dflt = '"%s"' % str(dflt).replace('"', "").replace(";", "；")
+        out.append("setVar:%s=%s;" % (name, dflt))
+    return out
+
+
+def export_branch_game(proj, out_dir, proj_dir=None, game_name=None,
+                       playable=False, style=True, live_badge=0):
+    """F2-L2 编排器：v2 多幕工程 -> 多 scene 文件 + 分支语句的标准 WebGAL 包。
+
+    流程：
+      1. 建目录骨架（只一次）
+      2. 预先分配"幕 id -> scene 文件名"映射（首幕 = start.txt）
+      3. 逐幕递归调 export_game（共享 ctx：名字池/资源去重/first_bg/stats）
+      4. vars 初始化行插到 start.txt 头部（仅当有 vars）
+      5. 统一收尾：playable 运行时拷贝 / 皮肤 / Live2D core / 启动器
+    返回 (ok, msg, stats)，stats 额外带 scenes 数量。
+    """
+    acts = [a for a in (proj.get("acts") or []) if isinstance(a, dict)]
+    if not acts:
+        return False, "多幕工程里没有有效幕", {"files": 0, "lines": 0,
+                                          "warnings": []}
+    out_dir = str(out_dir)
+    game_root = os.path.join(out_dir, "game")
+
+    stats = {"files": 0, "lines": 0, "warnings": []}
+    warn = stats["warnings"]
+    try:
+        for d in GAME_SUBDIRS:
+            os.makedirs(os.path.join(game_root, d), exist_ok=True)
+    except OSError as e:
+        return False, "创建目录失败: %r" % e, stats
+
+    # 幕 id -> scene 文件名（首幕 = start.txt，保持引擎入口约定）
+    aid_to_scene = {}
+    pool = _NamePool()
+    for i, a in enumerate(acts):
+        aid = str(a.get("aid") or ("a%d" % (i + 1)))
+        if i == 0:
+            aid_to_scene[aid] = "start.txt"
+        else:
+            aid_to_scene[aid] = _scene_filename(aid, pool)
+
+    ctx = {"stats": stats, "pool": pool, "aid_to_scene": aid_to_scene,
+           "puppet_refs": _collect_puppet_motion_refs(proj)}
+
+    # 逐幕生成
+    for a in acts:
+        aid = str(a.get("aid") or "")
+        scene_name = aid_to_scene.get(aid) or _scene_filename(aid, pool)
+        view = {"type": proj.get("type", "video_edit"),
+                "width": proj.get("width", 1920),
+                "height": proj.get("height", 1080),
+                "fps": proj.get("fps", 30.0),
+                "tracks": a.get("tracks") or [],
+                "dialogue": a.get("dialogue") or [],
+                "comments": a.get("comments") or []}
+        ctx["act"] = a
+        ctx["aid"] = aid
+        ctx["scene_of_self"] = scene_name
+        ctx["fallback_scene"] = aid_to_scene.get(str(a.get("next") or ""), "")
+        try:
+            ok, msg, _st = export_game(view, out_dir, proj_dir=proj_dir,
+                                       game_name=game_name, dialect="webgal",
+                                       playable=False, style=False,
+                                       live_badge=live_badge,
+                                       _scene=scene_name, _ctx=ctx)
+        except Exception as e:
+            warn.append("幕 %s 导出异常: %s: %s" % (aid, type(e).__name__, e))
+            continue
+        if not ok:
+            warn.append("幕 %s 导出失败: %s" % (aid, msg))
+        stats["scenes"] = stats.get("scenes", 0) + 1
+
+    # vars 初始化插到 start.txt 头部（只此一处，避免播放中被各幕重置）
+    var_lines = _collect_vars_lines(proj)
+    start_path = os.path.join(game_root, "scene", "start.txt")
+    if var_lines and os.path.isfile(start_path):
+        try:
+            with open(start_path, "r", encoding="utf-8") as f:
+                body = f.read()
+            head = [_note("变量初始化（全局仅此一处）")] + var_lines
+            with open(start_path, "w", encoding="utf-8", newline="\n") as f:
+                f.write("\n".join(head) + "\n" + body)
+            stats["lines"] = stats.get("lines", 0) + len(var_lines)
+        except OSError as e:
+            warn.append("变量初始化写入失败: %r" % e)
+
+    # ---- 统一收尾：playable / 皮肤 / Live2D core ----
+    if playable:
+        try:
+            import runtime_pack as RP
+            rt_st = RP.status()
+        except ImportError:
+            return False, "未安装 WebGAL 运行时：runtime_pack 缺失", stats
+        except Exception as e:
+            return False, "playable 读取运行时状态失败: %r" % e, stats
+        if not rt_st.get("installed"):
+            return False, "未安装 WebGAL 运行时：请先在模板页导入压缩包或资产管理下载", stats
+        rt_dir = rt_st.get("path")
+        if rt_dir and os.path.isdir(rt_dir):
+            for entry in sorted(os.listdir(rt_dir)):
+                src = os.path.join(rt_dir, entry)
+                dst = os.path.join(out_dir, entry)
+                try:
+                    if os.path.isdir(src):
+                        if entry == "game":
+                            _merge_missing(src, dst, warn)
+                        else:
+                            shutil.copytree(src, dst, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(src, dst)
+                    stats["files"] += 1
+                except Exception as e:
+                    warn.append("playable 拷贝失败 %s: %r" % (entry, e))
+        stats["playable"] = True
+        lk, _ln = _inject_launcher(out_dir, warn)
+        if lk:
+            stats["launcher"] = lk
+        _inject_sentinel_playable(out_dir, warn, stats)
+        if style:
+            if _inject_skin_playable(out_dir, _app_version(),
+                                     _runtime_version(rt_st, rt_dir),
+                                     live_badge, warn):
+                stats["skin"] = "injected"
+            else:
+                stats["skin"] = "failed"
+        else:
+            stats["skin"] = "off"
+        if stats.get("model_dirs", 0) > 0:
+            _inject_live2d_core(out_dir, rt_dir, warn, stats, playable=True)
+    else:
+        if style and _inject_skin_content_only(game_root, warn):
+            stats["skin"] = "css-only"
+        if stats.get("model_dirs", 0) > 0:
+            _inject_live2d_core(out_dir, None, warn, stats, playable=False)
+
+    n_scenes = stats.get("scenes", 0)
+    msg = "已导出 WebGAL 分支工程到 %s（%d 幕，语句 %d，文件 %d，警告 %d%s）" % (
+        game_root, n_scenes, stats["lines"], stats["files"], len(warn),
+        "，含启动器(双击「启动游戏」打开)" if stats.get("playable") else "")
+    return True, msg, stats
+
+
+def render_branch_script(proj, proj_dir=None):
+    """act.script 命令用的**纯内存脚本预览**（不写盘）。
+
+    返回 (ok, data)：data = {"scenes": [{name, aid, lines:[...]}],
+    "vars": [...], "warnings": [...]}。给 DSH 代理在对话里直接看导出结果。
+    单幕工程也能用（返回单个 start.txt 内容）。"""
+    res = {"scenes": [], "vars": [], "warnings": []}
+    for v in (proj.get("vars") or []):
+        if isinstance(v, dict) and v.get("name"):
+            res["vars"].append(dict(v))
+    acts = [a for a in (proj.get("acts") or []) if isinstance(a, dict)]
+    if not acts:
+        # 单幕：直接渲染成脚本
+        try:
+            view = {"type": proj.get("type"), "width": proj.get("width"),
+                    "height": proj.get("height"), "fps": proj.get("fps"),
+                    "tracks": proj.get("tracks") or [],
+                    "dialogue": proj.get("dialogue") or [],
+                    "comments": proj.get("comments") or []}
+            lines, pseudo, _w = _render_scene_lines(view, proj_dir, "start.txt",
+                                                    {}, None)
+            res["scenes"].append({"name": "start.txt", "aid": "a1",
+                                  "lines": lines})
+            for pn, pl in pseudo:
+                res["scenes"].append({"name": pn, "aid": "a1", "lines": pl})
+        except Exception as e:
+            return False, {"error": "%s: %s" % (type(e).__name__, e),
+                           "warnings": res["warnings"]}
+        return True, res
+
+    aid_to_scene = {}
+    pool = _NamePool()
+    for i, a in enumerate(acts):
+        aid = str(a.get("aid") or ("a%d" % (i + 1)))
+        aid_to_scene[aid] = "start.txt" if i == 0 else _scene_filename(aid, pool)
+    for a in acts:
+        aid = str(a.get("aid") or "")
+        try:
+            view = {"type": proj.get("type"), "width": proj.get("width"),
+                    "height": proj.get("height"), "fps": proj.get("fps"),
+                    "tracks": a.get("tracks") or [],
+                    "dialogue": a.get("dialogue") or [],
+                    "comments": a.get("comments") or []}
+            lines, pseudo, w = _render_scene_lines(
+                view, proj_dir, aid_to_scene[aid], aid_to_scene, a)
+            res["scenes"].append({"name": aid_to_scene[aid], "aid": aid,
+                                  "lines": lines})
+            for pn, pl in pseudo:
+                res["scenes"].append({"name": pn, "aid": aid, "lines": pl})
+            res["warnings"].extend(w)
+        except Exception as e:
+            res["warnings"].append("幕 %s 渲染异常: %s" % (aid, e))
+    return True, res
+
+
+def _render_scene_lines(view, proj_dir, scene_name, aid_to_scene, act):
+    """把一幕渲染成脚本行（不写盘）。供 render_branch_script 用。
+
+    复用与落盘路径相同的 _emit_branch_tail；主语句体走一个极简的子集：
+    只有台词（预览够用），完整映射以落盘路径为准。
+    返回 (lines, pseudo, warnings)。"""
+    lines = []
+    warns = []
+    for d in (view.get("dialogue") or []):
+        if not isinstance(d, dict):
+            continue
+        txt = str(d.get("text") or "").replace(";", "；").replace("\n", " ")
+        who = str(d.get("who") or "旁白").replace(":", "").replace(";", "")
+        if txt:
+            lines.append("%s:%s;" % (who or "旁白", txt))
+    if act:
+        ctx = {"aid": str(act.get("aid") or ""), "aid_to_scene": aid_to_scene,
+               "scene_of_self": scene_name,
+               "fallback_scene": aid_to_scene.get(str(act.get("next") or ""), "")}
+        tail, pseudo = _emit_branch_tail(act, ctx)
+        lines.extend(tail)
+    else:
+        pseudo = []
+    return lines, pseudo, warns
+
+
+# ================= 单幕导出（原有行为，逐字节不变） =================
 def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
-                playable=False, style=True, live_badge=0):
+                playable=False, style=True, live_badge=0,
+                _scene="start.txt", _ctx=None):
     """把视频工程 dict 导出为 WebGAL 工程目录。返回 (ok, msg, stats)。
 
     playable=True（E3）：要求本地已导入 WebGAL 运行时（runtime_pack），
@@ -1180,6 +1627,13 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     style=True（I2/task-58）：注入 MyGO 风字幕皮肤——playable 时直接改
     index.html（<style>+水印），非 playable 时写 game/style/muppet.css +
     start.txt 头注释；live_badge>0 追加左下"N人正在看"角标（默认关）。
+
+    ---- F2-L2（v3.5）多幕分支导出 ----
+    工程是 v2 多幕时：本函数负责**编排**（见文件尾部 export_branch_game），
+    逐幕递归调用自身（`_scene` = 该幕的 scene 文件名，`_ctx` = 跨幕共享
+    上下文：名字池/已拷贝资源/first_bg/stats/finalize 标记），保证：
+      - 资源只拷一份（多幕共用 background/figure/bgm），不重复占体积
+      - 单幕工程路径**逐字节不变**（不传 `_scene`/`_ctx` 即旧行为）
     """
     if dialect == "mygo":
         raise NotImplementedError("MyGO 方言导出器 v3.5 提供")
@@ -1190,7 +1644,15 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         return False, "proj 必须是 dict（video_edit 工程结构）", \
                {"files": 0, "lines": 0, "warnings": []}
 
-    stats = {"files": 0, "lines": 0, "warnings": []}
+    # F2-L2：v2 多幕 -> 交给编排器（单幕工程不走这里，行为零变化）
+    if _ctx is None and isinstance(proj.get("acts"), list) and proj.get("acts"):
+        return export_branch_game(proj, out_dir, proj_dir=proj_dir,
+                                  game_name=game_name, playable=playable,
+                                  style=style, live_badge=live_badge)
+
+    ctx = _ctx if _ctx is not None else {}
+    stats = ctx.get("stats") or {"files": 0, "lines": 0, "warnings": []}
+    ctx["stats"] = stats
     warn = stats["warnings"]
     out_dir = str(out_dir)
     game_root = os.path.join(out_dir, "game")
@@ -1221,13 +1683,17 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 bottom_tid = tr.get("id")
                 break
 
-    pool = _NamePool()
+    # F2-L2：资源池跨幕共享——多幕导出时同一背景/人物只拷一份，
+    # 幕间只共用文件名（scene 文件里各自引用同一份资源）。
+    pool = ctx.get("pool") or _NamePool()
+    ctx["pool"] = pool
     events = []                      # (t, prio, seq, [行, ...])
     _NONE_PENDING = []              # 待定 none 事件（v3.4.4：需后向判定）
     seq = 0
-    first_bg = None                  # config Title_img
-    first_bgm = None                 # config Title_bgm
-    cubism_seen = False
+    # 多幕时 first_bg/first_bgm 也要跨幕持续（config 只写一份）
+    first_bg = ctx.get("first_bg")   # config Title_img
+    first_bgm = ctx.get("first_bgm")  # config Title_bgm
+    cubism_seen = ctx.get("cubism_seen", False)
     # H2a：台词级动作的"落点"采集——每条立绘事件登记区间 (t0, t1, slot, ref)，
     # 台词带 motion/expression 时按时刻找回生效引用（见规则 10）。
     fig_intervals = []
@@ -1239,14 +1705,23 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     # v3.4.9 性能修复：预扫 Cubism2 puppet clip 实际引用的动作/表情，
     # 导出时按引用瘦身 model.json + 按需拷池文件（引擎会全量预载定义，
     # 664 动作池 = 每模型 ~900 请求，场景切换重载再一遍 —— 播放卡顿根源）。
-    puppet_refs = _collect_puppet_motion_refs(proj)
+    # F2-L2：多幕时合并全工程引用（同一模型在不同幕用不同动作，必须都保留）。
+    puppet_refs = ctx.get("puppet_refs")
+    if puppet_refs is None:
+        puppet_refs = _collect_puppet_motion_refs(proj)
+        ctx["puppet_refs"] = puppet_refs
+    copied = ctx.setdefault("copied", set())   # 已拷资源（跨幕去重）
 
     def copy_in(cat, src_path, out_name):
         dst = os.path.join(copy_map[cat], out_name)
+        key = (cat, out_name.lower())
+        if key in copied and os.path.isfile(dst):
+            return True                    # 多幕复用：已拷过，跳过重复 IO
         try:
             if src_path and os.path.isfile(src_path):
                 shutil.copyfile(src_path, dst)
                 stats["files"] += 1
+                copied.add(key)
                 return True
         except Exception as e:
             warn.append("拷贝失败 %s: %r" % (out_name, e))
@@ -1267,7 +1742,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             continue
         _proj_end = max(_proj_end, _f(_d0.get("t")) + _f(_d0.get("dur")))
 
-    def _exit_none(t1, slot, ref=None):
+    def _exit_none(t1, slot, ref=None, fid=None):
         """显式离场时刻的 none 事件（收尾时刻跳过）。
 
         v3.4.4 闪烁修复：**先登记，不立即发**。是否真的需要 none 取决于
@@ -1279,13 +1754,15 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         （换动作/换装）直接由新的 changeFigure 覆盖，引擎自行替换。
 
         ref = 该立绘的引用（角色名），供后向判定用。
+        fid = K1（task-69）平移态的角色句柄（非三分位才有）：后向判定
+              按 id 而非槽位（none -id 精确退场，step0 实拍已验证引擎支持）。
         """
         nonlocal seq
         if t1 < _proj_end - 0.005:
-            _NONE_PENDING.append((t1, 1, seq, slot, ref))
+            _NONE_PENDING.append((t1, 1, seq, slot, ref, fid))
             seq += 1
 
-    def figure_event(c, t0, t1, lay, out_name, slot, extra=None):
+    def figure_event(c, t0, t1, lay, out_name, slot, extra=None, fid=None):
         nonlocal seq, cubism_seen
         lines = []
         y = _f(lay.get("y"), 0.5)
@@ -1294,7 +1771,13 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                "编辑器中手动调整" % y))
         # C2：clip 带 motion/expression 时，changeFigure 行尾分号前追加参数
         # （puppet 与 image 立绘共用此函数，故都加）。
-        line = "changeFigure:%s -%s" % (out_name, slot)
+        # K1（task-69）：非三分位 + 有角色句柄 → -id/-transform 平移形态。
+        use_fid = fid if (fid and not _is_slot_x(lay.get("x"))) else None
+        if use_fid:
+            line = "changeFigure:%s -id=%s -transform=%s" % (
+                out_name, use_fid, _transform_of(lay, W, H))
+        else:
+            line = "changeFigure:%s -%s" % (out_name, slot)
         if c.get("motion"):
             line += " -motion=%s" % c["motion"]
         if c.get("expression"):
@@ -1304,8 +1787,8 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             lines.extend(extra)
         events.append((t0, 1, seq, lines))
         seq += 1
-        _exit_none(t1, slot, out_name)
-        fig_intervals.append((t0, t1, slot, out_name))
+        _exit_none(t1, slot, out_name, use_fid)
+        fig_intervals.append((t0, t1, slot, out_name, use_fid, lay))
 
     for tr in tracks:
         if not isinstance(tr, dict) or tr.get("hidden"):
@@ -1341,7 +1824,8 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     slot = _slot(lay.get("x"))
                     nm = pool.alloc("figure", safe_name(raw_name) or "fig.png")
                     copy_in("figure", path, nm)
-                    figure_event(c, t0, t1, lay, nm, slot)
+                    figure_event(c, t0, t1, lay, nm, slot,
+                                 fid=_fig_id(_who_export(path)))
             elif sk == "puppet":
                 # ---- H1 task-43：Cubism2 模型目录分支（优先于渲染/Cubism4） ----
                 # path 指向含 model.json 的目录 = Cubism2 整合包模型：
@@ -1365,6 +1849,15 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                 "提示：该立绘纵向位置 y=%.2f 需在 "
                                 "WebGAL 编辑器中手动调整" % y))
                         line = "changeFigure:%s/model.json -%s" % (rel_ref, slot)
+                        # K1（task-69）平移：非三分位 → 角色稳定 -id + -transform
+                        _fid_c2 = _fig_id(str(rel_ref).split("/")[0])
+                        _use_fid = _fid_c2 if not _is_slot_x(lay.get("x")) \
+                            else None
+                        if _use_fid:
+                            line = ("changeFigure:%s/model.json -id=%s "
+                                    "-transform=%s"
+                                    % (rel_ref, _use_fid,
+                                       _transform_of(lay, W, H)))
                         # motion/expression 与键名表三级匹配：
                         # 精确 > 后缀 > 模糊；命中写真实键名，未命中不写选项
                         # 并注释可用名（前 8 个）。
@@ -1375,7 +1868,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                         if mv:
                             line += " -motion=%s" % mv
                         elif c.get("motion"):
-                            lines.append(_comment(
+                            lines.append(_note(
                                 "可用动作: %s" % ", ".join(info["motions"][:8])))
                         if ev:
                             line += " -expression=%s" % ev
@@ -1389,9 +1882,11 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                             "直接可玩（无需 .moc3 手工步骤）"))
                         events.append((t0, 1, seq, lines))
                         seq += 1
-                        _exit_none(t1, slot, "%s/model.json" % rel_ref)
+                        _exit_none(t1, slot, "%s/model.json" % rel_ref,
+                                   _use_fid)
                         fig_intervals.append(
-                            (t0, t1, slot, "%s/model.json" % rel_ref))
+                            (t0, t1, slot, "%s/model.json" % rel_ref,
+                             _use_fid, lay))
                     else:
                         warn.append("Cubism2 模型拷贝失败，clip 跳过: %s" % path)
                     continue
@@ -1429,7 +1924,8 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                    "changeFigure:%s/%s.model3.json "
                                    "-motion=idle -expression=xx"
                                    % (fig_stem, fig_stem))]
-                figure_event(c, t0, t1, lay, nm, slot, extra=extra)
+                figure_event(c, t0, t1, lay, nm, slot, extra=extra,
+                             fid=_fig_id(_who_export(path)))
             elif sk == "video":
                 # ---- 规则 4 ----
                 nm = pool.alloc("video", safe_name(raw_name) or "clip.mp4")
@@ -1480,7 +1976,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             return 1 if wl in ref.lower() else 0
 
         if len(act) == 1:
-            return act[0][2], act[0][3]
+            return act[0][2], act[0][3], act[0][4], act[0][5]
         best, bi = -1, -1
         for i, iv in enumerate(act):
             s = _score(iv)
@@ -1488,7 +1984,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 best, bi = s, i
         if best <= 0:
             return None
-        return act[bi][2], act[bi][3]
+        return act[bi][2], act[bi][3], act[bi][4], act[bi][5]
 
     for d in (proj.get("dialogue") or []):
         if not isinstance(d, dict):
@@ -1510,10 +2006,16 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             if hit is None:
                 warn.append("台词动作无落点: %s @%.2fs" % (who or "旁白", t))
             else:
-                slot, ref = hit
+                slot, ref, fid, dlay = hit
                 key = (ref, mo or "", ex or "")
                 if dialogue_prev_action.get(slot) != key:
-                    line = "changeFigure:%s -%s" % (ref, slot)
+                    # K1：平移态角色——切换行沿用该角色 -id 句柄与位置
+                    # （绝不裸 changeFigure：无槽位默认 center 会顶人）
+                    if fid:
+                        line = "changeFigure:%s -id=%s -transform=%s" % (
+                            ref, fid, _transform_of(dlay, W, H))
+                    else:
+                        line = "changeFigure:%s -%s" % (ref, slot)
                     if mo:
                         line += " -motion=%s" % mo
                     if ex:
@@ -1553,7 +2055,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     # 回到这个槽位吗？"——如果角色只是换到了别的槽位，那它确实离开了这个
     # 槽位，none 应当保留（否则旧模型还占着槽位，新角色挤进来会重叠）。
     if _NONE_PENDING:
-        # 收集所有真实 changeFigure：(时刻, ref, slot)
+        # 收集所有真实 changeFigure：(时刻, ref, slot, id)
         _fig_events = []
         for _t, _p, _s, _ls in events:
             for _l in _ls:
@@ -1562,18 +2064,34 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     _m = re.match(
                         r"changeFigure:(\S+)\s+-(left|center|right)", _l)
                     if _m:
-                        _fig_events.append((_t, _m.group(1),
-                                            _m.group(2)))
+                        _fig_events.append((_t, _m.group(1), _m.group(2),
+                                            None))
+                        continue
+                    # K1 平移形态：changeFigure:<ref> -id=<fid> [-transform=…]
+                    _mi = re.match(
+                        r"changeFigure:(\S+)\s+-id=(\S+?)(?:\s|$)", _l)
+                    if _mi:
+                        _fig_events.append((_t, _mi.group(1), None,
+                                            _mi.group(2)))
         _keep = []
         for _ev in _NONE_PENDING:
-            _t, _prio, _seq, _sl, _ref = _ev
+            _t, _prio, _seq, _sl, _ref, _fid = _ev
+            if _fid:
+                # 平移态：按 id 判定"之后还回不回这个句柄"（与槽位无关）
+                _again = any(t >= _t - 0.005 and i == _fid
+                             for (t, _r, _s2, i) in _fig_events)
+                if _again:
+                    continue
+                _keep.append((_t, _prio, _seq,
+                              ["changeFigure:none -id=%s;" % _fid]))
+                continue
             # 该角色之后还会回到**同一槽位**吗？
             # 用 >= ：同角色 clip 首尾相接时（上一 clip 结束点 == 下一 clip
             # 起点），新的 changeFigure 与 none **同一时刻**，那也是"继续
             # 在场"（只是换动作），不能判成退场。
             _same_slot_again = any(
                 t >= _t - 0.005 and s == _sl and r == _ref
-                for (t, r, s) in _fig_events)
+                for (t, r, s, _i) in _fig_events)
             if _same_slot_again:
                 continue      # 同角色还会回这个槽位 -> 不是退场 -> 丢弃 none
             # 该角色不再回这个槽位：none 表示真退场，保留
@@ -1587,29 +2105,58 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     for _, _, _, lines in events:
         stmt_lines.extend(lines)
 
+    # ---- F2-L2：本幕的分支尾巴（choice / jumps / next）----
+    # 只在该幕确有分支时追加；单幕工程（_ctx 为 None）完全不进这段，
+    # 逐字节输出与旧版一致。
+    # 注意：分支数据挂在**幕**上（ctx["act"]），不在传进来的 view 里——
+    # 编排器给的是幕视图（tracks/dialogue），acts 键根本不在这层。
+    act = ctx.get("act") if _ctx is not None else None
+    tail, pseudo = _emit_branch_tail(act, ctx) if act else ([], [])
+    if tail:
+        if not stmt_lines:
+            stmt_lines = list(_EMPTY_SCRIPT.splitlines())
+        stmt_lines.extend(tail)
+
     if not stmt_lines:
         script = _EMPTY_SCRIPT
         stats["lines"] = 1
     else:
         script = "\n".join(stmt_lines) + "\n"
-        stats["lines"] = sum(1 for l in stmt_lines
-                             if l and not l.startswith("//")
-                             and not l.startswith(";"))
+        stats["lines"] = stats.get("lines", 0) + sum(
+            1 for l in stmt_lines
+            if l and not l.startswith("//") and not l.startswith(";"))
 
-    scene_path = os.path.join(game_root, "scene", "start.txt")
+    scene_path = os.path.join(game_root, "scene", _scene)
     with open(scene_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(script)
+    # 伪幕（option.set 副作用片段）落在同目录的小文件
+    for _pname, _plines in pseudo:
+        with open(os.path.join(game_root, "scene", _pname), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(_plines) + "\n")
+        stats["files"] += 1
 
     # ---- config.txt（Key:Value;）----
-    gname = game_name or proj.get("name") or "木偶工作室导出"
-    cfg = ["Game_name:%s;" % gname,
-           "Game_key:%s;" % _rand_key(),
-           "Title_img:%s;" % (first_bg or ""),
-           "Title_bgm:%s;" % (first_bgm or ""),
-           "Default_Language:zh_CN;"]
-    with open(os.path.join(game_root, "config.txt"), "w",
-              encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(cfg) + "\n")
+    # F2-L2：多幕时只写一次（第一幕写完后 _ctx 标记，后续幕跳过）
+    if not ctx.get("cfg_written"):
+        gname = game_name or proj.get("name") or "木偶工作室导出"
+        cfg = ["Game_name:%s;" % gname,
+               "Game_key:%s;" % _rand_key(),
+               "Title_img:%s;" % (first_bg or ""),
+               "Title_bgm:%s;" % (first_bgm or ""),
+               "Default_Language:zh_CN;"]
+        with open(os.path.join(game_root, "config.txt"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(cfg) + "\n")
+        ctx["cfg_written"] = True
+    ctx["first_bg"] = first_bg
+    ctx["first_bgm"] = first_bgm
+    ctx["cubism_seen"] = cubism_seen
+
+    # F2-L2：多幕时运行时段（playable/皮肤/core）由编排器统一收尾，
+    # 各幕只负责生成 scene 文件。
+    if _ctx is not None:
+        return True, "", stats
 
     # ---- 规则 11（E3）：playable=True -> 把运行时树拷入 out_dir ----
     if playable:

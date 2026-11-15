@@ -18,6 +18,7 @@
 import json
 import os
 import queue
+import re
 import threading
 import time
 import tempfile
@@ -640,6 +641,329 @@ def _assets_query(args):
         return False, "素材查询异常 %s: %s" % (type(e).__name__, e), None
 
 
+# ================= F2-L4（v3.5）：多幕 / 分支 / 变量 命令组 =================
+# 设计 docs/F2分支剧情设计.md §5。四组命名空间，全部主线程（走 _HANDLERS
+# 统一派发），纯 dict 操作不碰 Qt 之外的东西。
+#
+# 与既有命令的关系：
+#   - 单幕工程（v1 形状）**完全不受影响**：任何 act.* 首次调用会把工程
+#     懒升级成 v2（video_model.add_act 内部完成），upgrade 字段在回执里
+#     明确告知，避免 DSH 代理误以为工程结构突变。
+#   - figure.* / say / motion.* 仍然只用 act_view 投影出的"当前幕"，
+#     不需要感知幕的存在（L1 的 act_view 契约就是为此设计的）。
+#
+# 当前幕游标：存在 wb 上（_cur_aid），不进 proj——它是编辑器会话状态，
+# 不该污染工程文件。缺失/无效时一律回落到第一幕。
+
+def _cur_aid(wb):
+    """当前幕 id（v1 单幕 -> 'a1'）。无效游标回第一幕。"""
+    V = _vm()
+    ids = V.act_ids(wb.proj)
+    aid = getattr(wb, "_cur_aid", None)
+    if aid and aid in ids:
+        return aid
+    return ids[0] if ids else "a1"
+
+
+def _set_cur_aid(wb, aid):
+    try:
+        wb._cur_aid = aid
+    except Exception:
+        pass
+
+
+def _cmd_act_list(wb, _args=None):
+    """act.list -> 幕摘要 + 当前幕。"""
+    V = _vm()
+    return True, "", {
+        "acts": V.act_list(wb.proj),
+        "cur": _cur_aid(wb),
+        "multi": V.is_multi_act(wb.proj),
+        "vars": V.sanitize_project(wb.proj).get("vars", []) if hasattr(
+            V, "sanitize_project") else [],
+    }
+
+
+def _cmd_act_add(wb, args):
+    """act.add{name?, after?} -> 新幕（首次调用把 v1 懒升级成 v2）。"""
+    V = _vm()
+    was_multi = V.is_multi_act(wb.proj)
+    name = args.get("name")
+    after = args.get("after")
+    ok, msg, aid = V.add_act(wb.proj, str(name) if name else None,
+                             str(after) if after else None)
+    if not ok:
+        return False, msg or "新增幕失败", None
+    _set_cur_aid(wb, aid)
+    _refresh(wb)
+    data = {"aid": aid, "upgraded": (not was_multi)}
+    return True, msg or ("已新增幕 %s" % aid), data
+
+
+def _cmd_act_switch(wb, args):
+    """act.switch{aid} -> 切当前幕（只切编辑器游标，不改工程内容）。"""
+    V = _vm()
+    aid = str(args.get("aid") or "")
+    if not aid or aid not in V.act_ids(wb.proj):
+        return False, "幕不存在: %s" % (aid or "(空)"), \
+            {"available": V.act_ids(wb.proj)}
+    _set_cur_aid(wb, aid)
+    a = V.find_act(wb.proj, aid)
+    _refresh(wb)
+    data = {"aid": aid, "name": (a or {}).get("name"),
+            "duration": V.act_duration(a) if a else 0.0}
+    return True, "已切到幕 %s" % aid, data
+
+
+def _cmd_act_rename(wb, args):
+    """act.rename{aid?, name} -> 改显示名（aid 不变）。"""
+    V = _vm()
+    aid = str(args.get("aid") or _cur_aid(wb))
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return False, "name 不能为空", None
+    ok, msg = V.rename_act(wb.proj, aid, name)
+    return bool(ok), msg, ({"aid": aid, "name": name} if ok else None)
+
+
+def _cmd_act_duplicate(wb, args):
+    """act.duplicate{aid?} -> 复制一幕（含 tracks/dialogue/choices/jumps）。"""
+    V = _vm()
+    aid = str(args.get("aid") or _cur_aid(wb))
+    ok, msg, new_aid = V.duplicate_act(wb.proj, aid)
+    if not ok:
+        return False, msg, None
+    _set_cur_aid(wb, new_aid)
+    _refresh(wb)
+    return True, msg or ("已复制为 %s" % new_aid), {"aid": new_aid, "from": aid}
+
+
+def _cmd_act_remove(wb, args):
+    """act.remove{aid?} -> 删一幕，级联清引用（至少保留一幕）。"""
+    V = _vm()
+    aid = str(args.get("aid") or _cur_aid(wb))
+    ok, msg, cleared = V.remove_act(wb.proj, aid)
+    if not ok:
+        return False, msg, None
+    if getattr(wb, "_cur_aid", None) == aid:
+        _set_cur_aid(wb, V.act_ids(wb.proj)[0])
+    _refresh(wb)
+    return True, msg or "已删除幕 %s" % aid, {"cleared_refs": cleared}
+
+
+def _act_of(wb, args):
+    """取目标幕：显式 aid > 当前幕。返回 (act_dict|None, aid)。"""
+    V = _vm()
+    aid = str(args.get("aid") or _cur_aid(wb))
+    return V.find_act(wb.proj, aid), aid
+
+
+def _cmd_choice_set(wb, args):
+    """choice.set{aid?, cid?, t?, prompt?, options[]} -> 增/改一个选择点。
+
+    options: [{text, target, set?, when?}]，上限 MAX_OPTIONS_PER_CHOICE，
+             choices 总量上限 MAX_CHOICES_PER_ACT（video_model 常量）。
+    cid 省略=新建；给了且存在=原位更新。
+    """
+    V = _vm()
+    act, aid = _act_of(wb, args)
+    if act is None:
+        return False, "幕不存在: %s" % aid, {"available": V.act_ids(wb.proj)}
+    opts = args.get("options")
+    if opts is not None and not isinstance(opts, (list, tuple)):
+        return False, "options 必须是列表", None
+    cid = str(args.get("cid") or "").strip()
+    if cid:
+        target = None
+        for ch in act.get("choices") or []:
+            if ch.get("cid") == cid:
+                target = ch
+                break
+        if target is None:
+            return False, "选择点不存在: %s" % cid, None
+    else:
+        if len(act.get("choices") or []) >= V.MAX_CHOICES_PER_ACT:
+            return False, "本幕选择点已达上限 %d" % V.MAX_CHOICES_PER_ACT, None
+        cid = "c%d" % (len(act.get("choices") or []) + 1)
+        target = {"cid": cid, "t": None, "prompt": "", "options": []}
+        act.setdefault("choices", []).append(target)
+    if args.get("t") is not None:
+        try:
+            target["t"] = max(0.0, float(args["t"]))
+        except (TypeError, ValueError):
+            return False, "t 非法", None
+    if args.get("prompt") is not None:
+        target["prompt"] = str(args["prompt"])
+    if opts is not None:
+        if len(opts) > V.MAX_OPTIONS_PER_CHOICE:
+            return False, "选项数超上限 %d" % V.MAX_OPTIONS_PER_CHOICE, None
+        clean = []
+        for o in opts:
+            if not isinstance(o, dict):
+                return False, "options 元素必须是对象", None
+            txt = str(o.get("text") or "").strip()
+            if not txt:
+                return False, "选项 text 不能为空", None
+            e = {"text": txt, "target": str(o.get("target") or "")}
+            if o.get("set"):
+                # option.set 契约 = 字符串列表（video_model._sanitize_str_list）。
+                # 接受 "k=v;k2=v" 字符串或 ["k=v","k2=v"] 列表两种入参。
+                sv = o["set"]
+                if isinstance(sv, (list, tuple)):
+                    e["set"] = [str(x).strip() for x in sv
+                                if str(x or "").strip()]
+                else:
+                    e["set"] = [x.strip() for x in str(sv).split(";")
+                                if x.strip()]
+            if o.get("when"):
+                e["when"] = str(o["when"])
+            clean.append(e)
+        target["options"] = clean
+    wb.push_history() if hasattr(wb, "push_history") else None
+    _refresh(wb)
+    return True, "已写入选择点 %s（%d 选项）" % (cid, len(target["options"])), \
+        {"aid": aid, "cid": cid, "choice": dict(target)}
+
+
+def _cmd_choice_remove(wb, args):
+    """choice.remove{aid?, cid} -> 删选择点。"""
+    V = _vm()
+    act, aid = _act_of(wb, args)
+    if act is None:
+        return False, "幕不存在: %s" % aid, None
+    cid = str(args.get("cid") or "")
+    lst = act.get("choices") or []
+    for i, ch in enumerate(lst):
+        if ch.get("cid") == cid:
+            lst.pop(i)
+            _refresh(wb)
+            return True, "已删除选择点 %s" % cid, {"aid": aid, "cid": cid}
+    return False, "选择点不存在: %s" % cid, None
+
+
+def _cmd_jump_set(wb, args):
+    """jump.set{aid?, t, when?, target} -> 设条件跳转（if:cond:target;）。"""
+    V = _vm()
+    act, aid = _act_of(wb, args)
+    if act is None:
+        return False, "幕不存在: %s" % aid, None
+    try:
+        t = max(0.0, float(args.get("t", 0.0)))
+    except (TypeError, ValueError):
+        return False, "t 非法", None
+    target_scene = str(args.get("target") or "").strip()
+    if not target_scene:
+        return False, "target 不能为空", None
+    # target 允许是本工程幕 id（导出时映射成 scene 名），也允许是外部 scene 名
+    V.act_ids(wb.proj)
+    j = {"t": t, "when": str(args.get("when") or ""), "target": target_scene}
+    act.setdefault("jumps", []).append(j)
+    wb.push_history() if hasattr(wb, "push_history") else None
+    _refresh(wb)
+    return True, "已设跳转 @%.2fs -> %s" % (t, target_scene), \
+        {"aid": aid, "jump": j}
+
+
+def _cmd_jump_remove(wb, args):
+    """jump.remove{aid?, index} -> 按下标删跳转。"""
+    V = _vm()
+    act, aid = _act_of(wb, args)
+    if act is None:
+        return False, "幕不存在: %s" % aid, None
+    try:
+        idx = int(args.get("index", -1))
+    except (TypeError, ValueError):
+        return False, "index 非法", None
+    lst = act.get("jumps") or []
+    if not (0 <= idx < len(lst)):
+        return False, "index 越界（共 %d 条）" % len(lst), None
+    lst.pop(idx)
+    _refresh(wb)
+    return True, "已删除第 %d 条跳转" % idx, {"aid": aid}
+
+
+def _cmd_act_next(wb, args):
+    """act.next{aid?, target|null} -> 设/清单幕结尾的续幕（导出 changeScene）。"""
+    V = _vm()
+    act, aid = _act_of(wb, args)
+    if act is None:
+        return False, "幕不存在: %s" % aid, None
+    tgt = args.get("target")
+    if tgt in (None, ""):
+        act["next"] = None
+        _refresh(wb)
+        return True, "已清除幕 %s 的续接" % aid, {"aid": aid, "next": None}
+    tgt = str(tgt)
+    ids = V.act_ids(wb.proj)
+    if tgt not in ids:
+        return False, "目标幕不存在: %s" % tgt, {"available": ids}
+    if tgt == aid:
+        return False, "不能接回自己", None
+    act["next"] = tgt
+    _refresh(wb)
+    return True, "幕 %s 结尾续接到 %s" % (aid, tgt), {"aid": aid, "next": tgt}
+
+
+def _cmd_var_set(wb, args):
+    """var.set{name, default?} -> 声明/更新一个分支变量（工程级）。"""
+    V = _vm()
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return False, "name 不能为空", None
+    # 变量名要做标识符安全化（导出会写进 setVar:name=...;）
+    if not re.match(r"^[A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*$", name):
+        return False, "name 只能由字母/数字/下划线/汉字组成且不以数字开头", None
+    if not V.is_multi_act(wb.proj):
+        # 变量是 v2 特性：v1 工程先懒升级，保证 sanitize 能保留 vars
+        V.add_act(wb.proj, "幕一")
+    vars_ = wb.proj.get("vars")
+    if not isinstance(vars_, list):
+        vars_ = []
+        wb.proj["vars"] = vars_
+    default = args.get("default", 0)
+    for v in vars_:
+        if v.get("name") == name:
+            v["default"] = default
+            _refresh(wb)
+            return True, "已更新变量 %s" % name, {"name": name, "default": default}
+    vars_.append({"name": name, "default": default})
+    wb.push_history() if hasattr(wb, "push_history") else None
+    _refresh(wb)
+    return True, "已声明变量 %s = %r" % (name, default), \
+        {"name": name, "default": default, "total": len(vars_)}
+
+
+def _cmd_var_list(wb, _args=None):
+    """var.list -> 全部变量声明。"""
+    vars_ = wb.proj.get("vars")
+    return True, "", {"vars": list(vars_) if isinstance(vars_, list) else []}
+
+
+def _cmd_act_script(wb, args):
+    """act.script -> 生成当前工程的 WebGAL 分支脚本预览（不写盘）。
+
+    只跑导出器的脚本生成部分（branch=False 的轻量路径），给 DSH 代理
+    在对话里直接看结果。aid 省略=全部幕。
+    """
+    V = _vm()
+    try:
+        import webgal_export as WE
+    except ImportError:
+        return False, "导出器未就绪（webgal_export 缺失）", None
+    fn = getattr(WE, "render_branch_script", None)
+    if fn is None:
+        return False, "导出器尚未实现多幕脚本预览（F2-L2 未落地）", None
+    try:
+        res = fn(wb.proj, getattr(wb, "_proj_dir", None))
+    except Exception as e:
+        return False, "脚本预览异常: %s: %s" % (type(e).__name__, e), None
+    if isinstance(res, tuple) and len(res) >= 2:
+        ok, data = res[0], res[1]
+        return bool(ok), "" if ok else str(data), \
+            (data if isinstance(data, dict) else {"script": data})
+    return True, "", {"script": res}
+
+
 _HANDLERS = {
     "project.new": _cmd_project_new,
     "scene.set_bg": _cmd_scene_set_bg,
@@ -659,6 +983,21 @@ _HANDLERS = {
     # G4：assets.query 主线程兜底入口（正常走 _handle 的 HTTP 线程专用分支，
     # 这里保证 run_command 直调/D2 面板等场景同样可用——纯读，无 Qt）
     "assets.query": lambda wb, args: _assets_query(args),
+    # ---- F2-L4（v3.5）：多幕 / 分支 / 变量 ----
+    "act.list": _cmd_act_list,
+    "act.add": _cmd_act_add,
+    "act.switch": _cmd_act_switch,
+    "act.rename": _cmd_act_rename,
+    "act.duplicate": _cmd_act_duplicate,
+    "act.remove": _cmd_act_remove,
+    "act.next": _cmd_act_next,
+    "act.script": _cmd_act_script,
+    "choice.set": _cmd_choice_set,
+    "choice.remove": _cmd_choice_remove,
+    "jump.set": _cmd_jump_set,
+    "jump.remove": _cmd_jump_remove,
+    "var.set": _cmd_var_set,
+    "var.list": _cmd_var_list,
 }
 
 
