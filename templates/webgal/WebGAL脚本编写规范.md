@@ -58,10 +58,12 @@ changeFigure:figure/角色.png -left -motion=idle -expression=smile;
 
 ### 3.2 motion / expression 的合法 id
 
-**以 `templates/webgal/motion_table.json` 为准。写之前先读该文件**：
+**写 `-motion=` / `-expression=` 直接查随包附带的 `motion_keys.json`**
+（664 动作 + 232 表情全量键名 + 命名空间角色对照 + 推荐子集，权威字典）。
+完整预设定义在仓库 `templates/webgal/motion_table.json`（体积超限未随包附带）：
 
-- 动作 id：读 `motions[].id`
-- 表情 id：读 `expressions[].id`
+- 程序化动作/表情（idle/blink/smile 等 7+5 个）：见 motion_keys.json `programmatic` 节
+- Cubism 模型键名（角色/动作形态）：见 motion_keys.json `cubism` 节
 
 当前合法值（如该文件更新，以文件为准）：
 
@@ -197,7 +199,8 @@ model 立绘的 `-motion=` / `-expression=` 键名来自整合包**共享动作�
   `bye01`、`kime01`、`cry01`、`nf01`、`nnf03`——前缀任意命名空间均可
   （如 `anon/idle01`、`soyo/smile02`、`taki/angry01`）。
 - 推荐层不够细再查全表：附件 `motion_keys.json`（664+232 全量键名，
-  按命名空间排序），或 `motion_table.json` 的 `kind=cubism*` 条目。
+  按命名空间排序）——完整定义在仓库 `templates/webgal/motion_table.json`
+  的 `kind=cubism*` 条目（体积超限未随包附带）。
 - **不要自造键名**：`-motion=` 只认表内真实键名（未知键导出会记警告
   并跳过该参数）。想要"更生气一点"就换 `angry02`/`angry03` 这类真实
   键，而不是发明 `angry08`。
@@ -238,7 +241,8 @@ changeFigure:none -right;
   脚本末尾时刻。
 - **只支持标准 WebGAL**：不要写方言专属命令。`setTransform` 滤镜已实测
   被本引擎（官方 4.6.6 内核）支持、可以用；场景结束记得重置。
-  参数速查见《WebGAL演出特效参考.md》，实码查 effect_table.json。
+  参数速查见随包的《WebGAL演出特效参考.md》；221 条实码在仓库
+  `templates/webgal/effect_table.json`（体积超限未随包附带）。
 
 ## 8. 驻场与同屏规约（工作室规约，K4 更新）
 

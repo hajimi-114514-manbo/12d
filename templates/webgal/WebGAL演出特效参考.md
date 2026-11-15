@@ -2,7 +2,8 @@
 
 > **来源与署名**：本文档整理自 B 站 UP 主「北风的猫5306」制作的两份教程：
 > 《WebGAL 高级演出特效代码整合（去重最终版）》《webgal电影感滤镜1.21》。
-> 结构化数据见同目录 `effect_table.json`（221 条）。版权归原作者，此处仅为
+> 结构化数据见仓库 `templates/webgal/effect_table.json`（221 条，
+> 体积超限未随投喂包附带）。版权归原作者，此处仅为
 > 便于检索的收录。
 
 ## ✅ 引擎兼容性（2026-11-15 实测更新）
@@ -114,14 +115,16 @@ setTransform:{"alpha":1,"scale":{"x":1,"y":1},"position":{"x":0,"y":0},"rotation
 
 ## 电影感滤镜（背景 + 人物成对）
 
-`effect_table.json` 里 `film_light` 分类的每一项都有 `bg`（背景）和 `fig`
+仓库 `templates/webgal/effect_table.json`（未随包附带）里 `film_light`
+分类的每一项都有 `bg`（背景）和 `fig`
 （人物）两行代码，**必须成对使用**才协调。场景包括：火光/爆炸、黑暗（有灯光）、
 清晨/黄昏（轻）、黑暗（无灯光）、白天、黄昏（重·室外）、黄昏（重·室内）、
 面光系列等 15 组。
 
 ## 完整清单
 
-全部 221 条的完整代码、参数、适用场景说明都在 `effect_table.json`：
+全部 221 条的完整代码、参数、适用场景说明都在仓库
+`templates/webgal/effect_table.json`（体积超限未随投喂包附带，请自取）：
 
 ```json
 {

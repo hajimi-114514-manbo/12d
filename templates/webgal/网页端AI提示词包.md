@@ -35,7 +35,8 @@
 8. **默认不写画面特效**。`setTransform`（滤镜）/`setTempAnimation`（运镜）
    是 MyGO 二创引擎的扩展指令，**官方 WebGAL 4.6.6 不保证支持**。只在
    用户明确要求特效、且确认目标引擎支持时才用——届时查附件
-   WebGAL演出特效参考.md（用法速查）与 effect_table.json（220 条实码）；
+   WebGAL演出特效参考.md（用法速查）；221 条实码在仓库
+   `templates/webgal/effect_table.json`（体积超限未随包附带）；
 9. 产出的脚本用代码块输出，代码块内除场景切换注释（`;…;` 首尾分号
    合法形态）外不写解释文字。
 
@@ -101,10 +102,12 @@ changeFigure:figure/角色.png -left -motion=idle -expression=smile;
 
 ### 3.2 motion / expression 的合法 id
 
-**以 `templates/webgal/motion_table.json` 为准。写之前先读该文件**：
+**写 `-motion=` / `-expression=` 直接查随包附带的 `motion_keys.json`**
+（664 动作 + 232 表情全量键名 + 命名空间角色对照 + 推荐子集，权威字典）。
+完整预设定义在仓库 `templates/webgal/motion_table.json`（体积超限未随包附带）：
 
-- 动作 id：读 `motions[].id`
-- 表情 id：读 `expressions[].id`
+- 程序化动作/表情（idle/blink/smile 等 7+5 个）：见 motion_keys.json `programmatic` 节
+- Cubism 模型键名（角色/动作形态）：见 motion_keys.json `cubism` 节
 
 当前合法值（如该文件更新，以文件为准）：
 
@@ -240,7 +243,8 @@ model 立绘的 `-motion=` / `-expression=` 键名来自整合包**共享动作�
   `bye01`、`kime01`、`cry01`、`nf01`、`nnf03`——前缀任意命名空间均可
   （如 `anon/idle01`、`soyo/smile02`、`taki/angry01`）。
 - 推荐层不够细再查全表：附件 `motion_keys.json`（664+232 全量键名，
-  按命名空间排序），或 `motion_table.json` 的 `kind=cubism*` 条目。
+  按命名空间排序）——完整定义在仓库 `templates/webgal/motion_table.json`
+  的 `kind=cubism*` 条目（体积超限未随包附带）。
 - **不要自造键名**：`-motion=` 只认表内真实键名（未知键导出会记警告
   并跳过该参数）。想要"更生气一点"就换 `angry02`/`angry03` 这类真实
   键，而不是发明 `angry08`。
@@ -281,7 +285,8 @@ changeFigure:none -right;
   脚本末尾时刻。
 - **只支持标准 WebGAL**：不要写方言专属命令。`setTransform` 滤镜已实测
   被本引擎（官方 4.6.6 内核）支持、可以用；场景结束记得重置。
-  参数速查见《WebGAL演出特效参考.md》，实码查 effect_table.json。
+  参数速查见随包的《WebGAL演出特效参考.md》；221 条实码在仓库
+  `templates/webgal/effect_table.json`（体积超限未随包附带）。
 
 ## 8. 驻场与同屏规约（工作室规约，K4 更新）
 
@@ -436,7 +441,7 @@ index.html 会黑屏——**双击导出包根目录的「启动游戏」**（ex
 
 ---
 
-## 附：动作 / 表情映射表（与 motion_table.json 实时同步）
+## 附：动作 / 表情映射表（与仓库 `templates/webgal/motion_table.json` 同步）
 
 ### A. 程序化预置（PNG 静态立绘 / puppet 工程用 `-motion=` id）
 
@@ -478,7 +483,7 @@ index.html 会黑屏——**双击导出包根目录的「启动游戏」**（ex
 
 > 键名前缀（命名空间）只是来源分组：`taki/angry01` 也能给爱音的模型播。把前缀换成台词角色自己的名字读起来最自然（如 soyo 的戏用 `soyo/smile02`）。
 
-**命名空间 ↔ 角色对照**（共 664 动作 / 232 表情，全量键名见附件 `motion_keys.json` 或 `motion_table.json` 的 cubism 条目）：
+**命名空间 ↔ 角色对照**（共 664 动作 / 232 表情，写 -motion= 直接查随包附件 `motion_keys.json`——全量键名权威字典；完整定义在仓库 `templates/webgal/motion_table.json` 的 cubism 条目，体积超限未随包附带）：
 
 | 命名空间 | 角色 | 动作数 | 表情数 |
 |---|---|---|---|
@@ -496,4 +501,4 @@ index.html 会黑屏——**双击导出包根目录的「启动游戏」**（ex
 
 > **规则**：`-motion=` / `-expression=` 只认表内真实键名（未知键导出记警告并跳过）；推荐层不够细再翻 motion_keys.json 全量 664+232；**禁止自造键名**（想要更强烈的情绪就换相邻真实编号，如 angry02/angry03）。
 
-> 自定义动作/表情：编辑 motion_table.json 追加条目即可（重启或等待自动加载），本包与规范中的清单以该文件为准。
+> 自定义动作/表情：编辑仓库 `templates/webgal/motion_table.json` 追加条目即可（重启或等待自动加载），本包与规范中的清单以该文件为准；该文件体积超限不随投喂包附带。
