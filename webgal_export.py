@@ -90,11 +90,46 @@ def _escape_say_body(text):
 
     配套：导入端 webgal_import._strip_say_args 按同一规则识别并还原，
     保证工程里存的是**用户原文**，导出/导入往返不丢字、不变形。
+
+    v3.5 补丁（存量脏数据）：旧版本导入器把台词参数（-fontSize=small）
+    当成了正文存进工程。这类正文里已经有「空格+减号」了，如果一律加
+    零宽保护，引擎就不再把它当参数 -> **整段 "-fontSize=small" 显示
+    在正文里**（比原来更糟）。
+    所以这里先识别出「合法的参数形态」并**剥掉**（参数本来就该由
+    引擎处理，不该出现在正文），剩下的才是真正文，再加保护。
     """
     s = str(text or "")
     if _ZWSP in s:
         return s                      # 已保护过，不重复插
+    # 存量脏数据：正文里混着合法参数 -> 先剥离（引擎会自己读参数）
+    s = _strip_known_say_args(s)
     return re.sub(r"(?<!\\) -", " " + _ZWSP + "-", s)
+
+
+def _strip_known_say_args(text):
+    """从台词正文里剥掉「合法的参数形态」片段（存量脏数据修复）。
+
+    合法形态 = `-key=value` 或 `-key`（key 为纯标识符）。
+    「- B 这样的内容」这种自然语言**不剥**（那是真正文）。
+    引擎支持的台词参数（实测）：fontSize / notend / concat / clear /
+    vocal / speaker / figureId 等，键名匹配即可。
+    """
+    s = str(text or "")
+    m = re.search(r" -", s)
+    if not m:
+        return s
+    head, argpart = s[:m.start()], s[m.start():]
+    keep = []
+    for seg in argpart.split(" -"):
+        seg = seg.strip()
+        if not seg:
+            continue
+        if re.match(r"^[A-Za-z_]\w*(?:=.*)?$", seg):
+            continue                  # 合法参数 -> 丢掉（交给引擎）
+        keep.append(seg)
+    if not keep:
+        return head
+    return head + " - " + " - ".join(keep)
 
 
 def _comment(text):
