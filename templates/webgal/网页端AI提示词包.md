@@ -45,11 +45,19 @@
 7. 对话场景默认**两名角色同屏**（说话人+听话人 left/right，规范 5.2）：
    每行只更新说话人的 -motion/-expression，听话人保持 idle 微动；
    退场是显式操作（`changeFigure:none -槽位;`），对话轮替绝不产生移除；
-8. **默认不写画面特效**。`setTransform`（滤镜）/`setTempAnimation`（运镜）
-   是 MyGO 二创引擎的扩展指令，**官方 WebGAL 4.6.6 不保证支持**。只在
-   用户明确要求特效、且确认目标引擎支持时才用——届时查附件
-   WebGAL演出特效参考.md（用法速查）；221 条实码在仓库
-   `templates/webgal/effect_table.json`（体积超限未随包附带）；
+8. **默认就要用画面滤镜**（`setTransform`）。本引擎**已实测支持**
+   （官方 WebGAL 4.6.6 内核，v3.4.8 实测画面生效），可以放心用。
+   用法：每个场景按"时间/光线/情绪"选一套滤镜，**背景 + 人物各一行**
+   （环境光配对，见下），场景结束**必须重置**。
+   - 背景行：`-target=bg-main`；人物行：`-target=fig-center`
+     （人物在 left/right 时用 `-target=fig-left` / `-target=fig-right`）；
+   - 成套预设（直接抄，只改 target 与时长）见本包末「电影感滤镜预设」节；
+   - **滤镜不是可选项**：一个 3 分钟以上的剧情，至少有 1/3 的场景应带
+     滤镜（时段变化、情绪转折、回忆、紧张场面必须带）；
+   - 同一场景内换滤镜用 `-duration=500~1500` 做过渡，别硬切；
+   - 场景结束/回日常必须重置（重置指令见附件《WebGAL演出特效参考.md》
+     「通用重置指令」），否则滤镜会一直带到下一个场景；
+   - `setTempAnimation`（运镜推拉摇）**仍属按需验证**，别主动写；
 9. 产出的脚本用代码块输出，代码块内除场景切换注释（`;…;` 首尾分号
    合法形态）外不写解释文字。
 
@@ -232,3 +240,151 @@
 > **规则**：`-motion=` / `-expression=` 只认表内真实键名（未知键导出记警告并跳过）；推荐层不够细再翻 motion_keys.json 全量 664+232；**禁止自造键名**（想要更强烈的情绪就换相邻真实编号，如 angry02/angry03）。
 
 > 自定义动作/表情：编辑仓库 `templates/webgal/motion_table.json` 追加条目即可（重启或等待自动加载），本包与规范中的清单以该文件为准；该文件体积超限不随投喂包附带。
+
+---
+
+## 附：电影感滤镜预设（背景 + 人物成对，直接照抄）
+
+> **这是本引擎已实测支持的正式用法**（`setTransform`，官方 WebGAL 4.6.6 内核）。每套给两行：**先背景、后人物**，两行都要写。
+> 只需把 `-target=` 换成你的实际槽位（`fig-left`/`fig-right`/`fig-center`），时长按需要改 `-duration=`（0=立即，500~1500=过渡）。
+
+> ⚠ **场景结束必须重置**（否则滤镜带到下一场）：
+> `setTransform:{"brightness":1,"contrast":1,"saturation":1,"gamma":1,"bloom":0,"bloomBrightness":0,"bloomBlur":0,"blur":0,"bevel":0} -target=bg-main -duration=500 -next;`
+> `setTransform:{"brightness":1,"contrast":1,"saturation":1,"gamma":1,"bloom":0,"bloomBrightness":0,"bloomBlur":0,"blur":0,"bevel":0} -target=fig-center -duration=500;`
+
+### 1. 火光/爆炸↑
+
+```
+; 背景
+setTransform:{"brightness":0.9,"contrast":0.8,"saturation":0.5,"gamma":0.6,"colorRed":255,"colorGreen":218,"colorBlue":184,"bloom":1,"bloomBrightness":0.8,"bloomBlur":8,"bevelRed":255,"bevelGreen":194,"bevelBlue":125} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.75,"contrast":1.1,"saturation":0.8,"gamma":1,"colorRed":255,"colorGreen":234,"colorBlue":217,"bloom":0.6,"bloomBrightness":0.7,"bloomBlur":4,"bevel":2,"bevelThickness":20,"bevelRotation":80,"bevelRed":255,"bevelGreen":201,"bevelBlue":125} -target=fig-center -duration=0;
+```
+
+### 2. 黑暗（有灯光）
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":1,"bloomBrightness":0.7,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.6,"contrast":1.1,"saturation":0.9,"gamma":0.9,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.2,"bloomBrightness":0.9,"bloomBlur":10,"bevel":1,"bevelThickness":18,"bevelRotation":30,"bevelRed":204,"bevelGreen":204,"bevelBlue":204} -target=fig-center -duration=0;
+```
+
+### 3. 清晨/黄昏（轻）
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":255,"colorGreen":234,"colorBlue":214,"bloom":1,"bloomBrightness":0.7,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.6,"contrast":1.1,"saturation":0.9,"gamma":0.9,"colorRed":255,"colorGreen":234,"colorBlue":217,"bloom":0.4,"bloomBrightness":0.9,"bloomBlur":10,"bevel":1,"bevelThickness":10,"bevelRotation":30,"bevelRed":255,"bevelGreen":238,"bevelBlue":224} -target=fig-center -duration=0;
+```
+
+### 4. 黑暗（无灯光）
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":222,"colorGreen":222,"colorBlue":222,"bloom":1,"bloomBrightness":0.7,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.4,"contrast":1.1,"saturation":0.9,"gamma":0.7,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.2,"bloomBrightness":0.9,"bloomBlur":10,"bevel":0.2,"bevelThickness":18,"bevelRotation":130,"bevelRed":161,"bevelGreen":161,"bevelBlue":161} -target=fig-center -duration=0;
+```
+
+### 5. 白天
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":1.1,"saturation":0.8,"gamma":0.5,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.5,"bloomBrightness":0.8,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.6,"contrast":1.1,"saturation":0.8,"gamma":0.6,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.7,"bloomBrightness":0.6,"bloomBlur":10,"bevel":1,"bevelThickness":18,"bevelRotation":30,"bevelRed":255,"bevelGreen":255,"bevelBlue":255} -target=fig-center -duration=0;
+```
+
+### 6. 黄昏(重)（室外）
+
+```
+; 背景
+setTransform:{"brightness":0.9,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":255,"colorGreen":205,"colorBlue":171,"bloom":0.7,"bloomBrightness":0.8,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.4,"contrast":1.2,"saturation":0.7,"gamma":0.8,"colorRed":255,"colorGreen":213,"colorBlue":176,"bloom":0.5,"bloomBlur":10,"bevel":1,"bevelThickness":18,"bevelRotation":30,"bevelRed":255,"bevelGreen":204,"bevelBlue":148} -target=fig-center -duration=0;
+```
+
+### 7. 黄昏(重)（室内）
+
+```
+; 背景
+setTransform:{"brightness":0.9,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":255,"colorGreen":203,"colorBlue":171,"bloom":0.7,"bloomBrightness":0.9,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.5,"contrast":1.2,"saturation":0.7,"gamma":0.8,"colorRed":255,"colorGreen":208,"colorBlue":176,"bloom":0.5,"bloomBlur":10,"bevel":1,"bevelThickness":18,"bevelRotation":30,"bevelRed":255,"bevelGreen":184,"bevelBlue":148} -target=fig-center -duration=0;
+```
+
+### 8. 面光（黄昏）
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":255,"colorGreen":203,"colorBlue":171,"bloom":0.6,"bloomBrightness":0.8,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.5,"contrast":1,"saturation":0.7,"gamma":1,"colorRed":255,"colorGreen":208,"colorBlue":176,"bloom":0.4,"bloomBrightness":1.8,"bloomBlur":10,"bevel":0.3,"bevelThickness":18,"bevelRotation":30,"bevelRed":255,"bevelGreen":184,"bevelBlue":148} -target=fig-center -duration=0;
+```
+
+### 9. 面光（白天）
+
+```
+; 背景
+setTransform:{"brightness":0.8,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":227,"colorGreen":227,"colorBlue":227,"bloom":0.7,"bloomBrightness":0.8,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.75,"contrast":1,"saturation":0.8,"gamma":0.7,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.5,"bloomBrightness":1,"bloomBlur":10,"bevel":0.5,"bevelThickness":18,"bevelRotation":30,"bevelRed":196,"bevelGreen":185,"bevelBlue":185} -target=fig-center -duration=0;
+```
+
+### 10. 面光[清晨/黄昏（轻）]
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":255,"colorGreen":234,"colorBlue":214,"bloom":1,"bloomBrightness":0.7,"bloomBlur":10} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":0.8,"contrast":1.1,"saturation":0.9,"gamma":0.8,"colorRed":242,"colorGreen":216,"colorBlue":194,"bloom":0.5,"bloomBrightness":0.8,"bloomBlur":10,"bevel":1,"bevelThickness":15,"bevelRotation":30,"bevelRed":255,"bevelGreen":212,"bevelBlue":176} -target=fig-center -duration=0;
+```
+
+### 11. 淡色黄昏
+
+```
+; 背景
+setTransform:{"brightness":0.95,"contrast":0.85,"saturation":1.2,"gamma":0.9,"colorRed":255,"colorGreen":251,"colorBlue":217,"bloom":0.6,"bloomBrightness":0.9,"bloomBlur":5,"blur":1} -target=bg-main -duration=0 -next;
+; 人物
+setTransform:{"brightness":1,"contrast":1,"saturation":1.5,"colorRed":255,"colorGreen":251,"colorBlue":217,"bloomThreshold":10,"bevel":1,"bevelThickness":15,"bevelSoftness":1,"bevelRed":253,"bevelGreen":255,"bevelBlue":181} -target=fig-center -duration=0;
+```
+
+### 12. 室内有光暖色
+
+```
+; 背景
+setTransform:{"brightness":0.9,"contrast":0.8,"saturation":0.5,"gamma":0.6,"colorRed":255,"colorGreen":218,"colorBlue":184,"bloom":1,"bloomBrightness":0.8,"bloomBlur":2,"bevelRed":255,"bevelGreen":194,"bevelBlue":125} -next -target=bg-main -duration=0;
+; 人物
+setTransform:{"brightness":0.75,"contrast":1.1,"saturation":0.8,"gamma":1,"colorRed":255,"colorGreen":234,"colorBlue":217,"bloom":0.6,"bloomBrightness":0.7,"bloomBlur":1,"bevel":2,"bevelThickness":5,"bevelRotation":80,"bevelRed":255,"bevelGreen":201,"bevelBlue":125} -target=fig-center -next -duration=0;
+```
+
+### 13. 清爽版室内白天（虚影没加滤镜）（记得自己改人物名）
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":1.1,"saturation":0.8,"gamma":0.5,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.5,"bloomBrightness":1,"bloomBlur":10} -next -target=bg-main -duration=0;
+; 人物
+setTransform:{"brightness":0.6,"contrast":1.1,"saturation":0.9,"gamma":0.9,"colorRed":255,"colorGreen":234,"colorBlue":217,"bloom":0.7,"bloomBrightness":1,"bloomBlur":2,"bevel":1,"bevelThickness":4,"bevelRotation":30,"bevelRed":255,"bevelGreen":238,"bevelBlue":224} -next -target=fig-center -duration=0;
+```
+
+### 14. 夜晚室内白光
+
+```
+; 背景
+setTransform:{"brightness":0.7,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":1,"bloomBrightness":1,"bloomBlur":2} -next -target=bg-main -duration=500;
+; 人物
+setTransform:{"brightness":0.6,"contrast":1.1,"saturation":0.9,"gamma":0.9,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.5,"bloomBrightness":1,"bloomBlur":2,"bevel":1,"bevelThickness":8,"bevelRotation":30,"bevelRed":204,"bevelGreen":204,"bevelBlue":204} -target=fig-center -next -duration=0;
+```
+
+### 15. 白天室外晴天
+
+```
+; 背景
+setTransform:{"brightness":0.8,"contrast":0.8,"saturation":0.7,"gamma":0.5,"colorRed":227,"colorGreen":227,"colorBlue":227,"bloom":0.7,"bloomBrightness":1,"bloomBlur":10} -next -target=bg-main -duration=500;
+; 人物
+setTransform:{"brightness":0.75,"contrast":1,"saturation":0.8,"gamma":0.7,"colorRed":255,"colorGreen":255,"colorBlue":255,"bloom":0.5,"bloomBrightness":0.85,"bloomBlur":4,"bevel":0.5,"bevelThickness":8,"bevelRotation":30,"bevelRed":196,"bevelGreen":185,"bevelBlue":185} -target=fig-center -next -duration=0;
+```
+
+> 更多（运镜 `setTempAnimation`、故障/老电影/暗角单参数、恋爱场景专用）见附件《WebGAL演出特效参考.md》（用法速查）。

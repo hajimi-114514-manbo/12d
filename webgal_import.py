@@ -60,12 +60,22 @@ _COMMANDS = frozenset((
     "changeScene", "setVar", "unlockCg", "unlockBgm",
     # F2-L3（v3.5）：if 是真实的条件跳转命令（§8-2 实测，jumpIf 不存在）
     "if",
+    # v3.5：画面特效。**必须在白名单里**——否则 `setTransform:{json}` 会被
+    # 当成台词行吃进 dialogue，玩家会看到一大串 JSON 显示在对话框里
+    # （2026-11-15 实测：提示词包教 AI 用滤镜后立刻踩到，滤镜越多越糟）。
+    # 编辑器时间轴模型里没有"滤镜轨"，所以这两个命令是**读到即跳过**
+    # （不记警告：它们是有意的合法指令，不是错误）。
+    "setTransform", "setTempAnimation",
 ))
 # 明确不支持的语句：跳过 + 记警告，不报错。
 _UNSUPPORTED = frozenset((
     "branch", "jumpLabel", "label", "callScene",
     "unlockCg", "unlockBgm", "setTextbox",
 ))
+# 已知且有意跳过的命令：静默跳过，**不记警告**。
+# （编辑器不建模画面特效；用户从 WebGAL 脚本导入时这些指令本就属于
+#  导出目标引擎的执行范畴，不是木偶工作室时间轴要表达的内容。）
+_SILENT_SKIP = frozenset(("setTransform", "setTempAnimation"))
 _SLOT_X = {"left": 0.2, "center": 0.5, "right": 0.8}
 _IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
 _VID_EXT = (".mp4", ".webm", ".mov", ".avi", ".mkv")
@@ -653,6 +663,10 @@ class _Builder:
         self.stmt_n = 0
         self.lib_hits = 0        # G4：素材库回退命中计数（记 info 不进警告）
         self.comments = []       # I3（task-67）：// 与 ;…; 注释行内容载体
+        # v3.5：画面特效载体 [{t, cmd}]。setTransform/setTempAnimation
+        # 编辑器不建模（没有滤镜轨），但**必须留档**——否则「导入 → 导出」
+        # 会把 AI 写的滤镜静默丢掉（导出端按 t 重新 emit）。
+        self.effects = []
         # K1（task-69）：-id 句柄 -> who 映射（none -id 精确退场用）
         self._id_fig = {}
         # 轨道登记：name -> tid
@@ -980,6 +994,17 @@ class _Builder:
                       "if": self.do_if,
                       "changeScene": self.do_change_scene}.get(head)
                 if fn is None:
+                    if head in _SILENT_SKIP:
+                        # 画面特效：**留档但不进时间轴**（编辑器无滤镜轨）。
+                        # 存「原始行」+ 当前时刻，导出端按 t 重新 emit。
+                        # 参数体必须是 JSON（{...} 或 [...]）才收 —— 乱写的
+                        # 指令不该在导出时被原样吐给引擎。
+                        cmd = str(raw or "").strip()
+                        body = cmd.split(":", 1)[1].strip() if ":" in cmd else ""
+                        if cmd and body[:1] in ("{", "["):
+                            self.effects.append(
+                                {"t": round(self.t, 3), "cmd": cmd})
+                        continue
                     if head in _UNSUPPORTED:
                         self.warnings.append("跳过不支持的语句: %s" % head)
                     else:
@@ -1002,6 +1027,9 @@ class _Builder:
         # I3（task-67）：注释载体落工程（sanitize 白名单保留，导出转 ;xxx;）
         if self.comments:
             self.proj["comments"] = list(self.comments)
+        # v3.5：画面特效落工程（导出端按 t emit，否则滤镜在往返中丢失）
+        if self.effects:
+            self.proj["effects"] = list(self.effects)
 
         # K1（task-69）：同屏人数上限撤销——>3 扫描/警告整体移除。
 

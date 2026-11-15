@@ -2125,6 +2125,27 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         events.append((_f(cm.get("t")), -1, seq, [_comment(ctxt)]))
         seq += 1
 
+    # ---- v3.5：画面特效 effects -> 原样 emit 回引擎指令 ----
+    # 导入端把 setTransform/setTempAnimation 留档到 proj["effects"]（编辑器
+    # 没有滤镜轨，不能落时间轴），导出时必须按时刻还原，否则「导入 → 导出」
+    # 会静默丢掉 AI 写的全部滤镜。这些是**引擎原生指令**，不经 _comment()，
+    # 原样直出（prio -0.5：排在注释之后、其他语句之前）。
+    for ef in (proj.get("effects") or []):
+        if not isinstance(ef, dict):
+            continue
+        cmd = str(ef.get("cmd") or "").strip()
+        if not cmd:
+            continue
+        head = cmd.split(":", 1)[0].strip()
+        if head not in ("setTransform", "setTempAnimation"):
+            continue
+        if ":" not in cmd:
+            continue
+        body = cmd.rstrip(";").strip()
+        # 分号已被裁掉，补回语句结束符
+        events.append((_f(ef.get("t")), -0.5, seq, [body + ";"]))
+        seq += 1
+
     # ---- v3.4.4 闪烁修复：none 事件后向判定 ----
     # 引擎 changeFigure 的去重只在「同槽位同内容」时成立（ee=false -> 只换
     # 动作/表情，模型实例不重建）；一旦发出 none，槽位被清空，后续同角色

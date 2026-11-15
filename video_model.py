@@ -160,6 +160,7 @@ def new_act(aid="a1", name=None):
         "choices": [],       # [{cid, t|null, prompt, options:[{text,target,set,when}]}]
         "jumps": [],         # [{jid, t, when, target}]
         "next": None,        # 无分支续幕（导出 changeScene 衔接）
+        "effects": [],       # v3.5：[{t,cmd}] setTransform 等画面特效（按时刻）
     }
 
 
@@ -179,7 +180,8 @@ def act_view(proj, aid=None):
     src = proj if isinstance(proj, dict) else {}
     view = {"type": PROJECT_TYPE, "width": src.get("width", 1920),
             "height": src.get("height", 1080), "fps": src.get("fps", 30.0),
-            "tracks": [], "dialogue": [], "comments": src.get("comments", [])}
+            "tracks": [], "dialogue": [], "comments": src.get("comments", []),
+            "effects": src.get("effects", [])}
     acts = src.get("acts")
     if not isinstance(acts, list) or not acts:
         # v1 单幕：顶层即幕
@@ -189,6 +191,8 @@ def act_view(proj, aid=None):
         view["tracks"] = t if isinstance(t, list) else []
         d = src.get("dialogue")
         view["dialogue"] = d if isinstance(d, list) else []
+        e = src.get("effects")
+        view["effects"] = e if isinstance(e, list) else []
         return view
     act = None
     if aid is not None:
@@ -206,6 +210,9 @@ def act_view(proj, aid=None):
         if "comments" in act:
             c = act.get("comments")
             view["comments"] = c if isinstance(c, list) else []
+        if "effects" in act:
+            e = act.get("effects")
+            view["effects"] = e if isinstance(e, list) else []
     return view
 
 
@@ -227,9 +234,12 @@ def _upgrade_to_v2(proj):
     act["dialogue"] = proj.get("dialogue") or []
     if "comments" in proj:
         act["comments"] = proj.get("comments") or []
+    if "effects" in proj:
+        act["effects"] = proj.get("effects") or []
     proj.pop("tracks", None)
     proj.pop("dialogue", None)
     proj.pop("comments", None)
+    proj.pop("effects", None)
     proj["version"] = PROJECT_VERSION
     proj["vars"] = proj.get("vars") if isinstance(proj.get("vars"), list) else []
     proj["acts"] = [act]
@@ -774,6 +784,44 @@ def _num(x, dft=0.0):
         return dft
 
 
+def _sanitize_effects(raw):
+    """画面特效载体 effects=[{t,cmd}]（v3.5）。
+
+    为什么需要：提示词包教 AI 用 `setTransform` 滤镜后，导入端若把整条
+    指令当台词吞掉，玩家会看到一大串 JSON（实测 bug）。丢掉又会让
+    「导入 → 导出」这条链路**静默丢失 AI 写的全部滤镜**。
+    所以按时刻存原指令，导出时按时刻 emit 回真实指令。
+
+    校验：t 为有限浮点 >=0；cmd 必须是 str 且首 token 属于
+    `setTransform` / `setTempAnimation`（白名单，防脏值被执行）。脏项丢弃。
+    """
+    out = []
+    if not isinstance(raw, list):
+        return out
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        t = _num(it.get("t"), -1.0)
+        cmd = it.get("cmd")
+        if t < 0 or not isinstance(cmd, str):
+            continue
+        s = cmd.strip().rstrip(";").strip()
+        if not s or ":" not in s:
+            continue
+        head, _, body = s.partition(":")
+        head = head.strip()
+        if head not in ("setTransform", "setTempAnimation"):
+            continue
+        body = body.strip()
+        # 参数体必须像样：setTransform 要求是 JSON 对象；
+        # setTempAnimation 要求是 JSON 数组。空的/乱写的一律丢
+        # （否则导出时会把脏指令原样吐给引擎）。
+        if not body or body[0] not in "{[":
+            continue
+        out.append({"t": round(t, 3), "cmd": s})
+    return out
+
+
 def _sanitize_comments(raw):
     """工程级注释载体 comments=[{t,text}]（I3/task-67）：导入端 `//` 与
     `;xxx;` 注释行内容保留，导出端转合法 `;xxx;`。脏项丢弃，绝不抛。"""
@@ -1012,6 +1060,8 @@ def sanitize_project(obj, warn=None):
                 act["tracks"] = new_act()["tracks"]
             if "comments" in a:
                 act["comments"] = _sanitize_comments(a.get("comments"))
+            if "effects" in a:
+                act["effects"] = _sanitize_effects(a.get("effects"))
             if act["next"] and act["next"] not in act_aids and warn is not None:
                 warn.append("续幕目标不存在: %s" % act["next"])
             proj["acts"].append(act)
@@ -1031,6 +1081,8 @@ def sanitize_project(obj, warn=None):
     proj["dialogue"] = _sanitize_dialogue(obj.get("dialogue"))
     # I3（task-67）：工程级注释载体（导入保留 → 导出转合法语法）
     proj["comments"] = _sanitize_comments(obj.get("comments"))
+    # v3.5：画面特效载体（导入保留 → 导出 emit 成真实 setTransform 指令）
+    proj["effects"] = _sanitize_effects(obj.get("effects"))
     return proj
 
 
