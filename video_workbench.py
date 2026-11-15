@@ -34,7 +34,7 @@ from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
                             StrongBodyLabel, BodyLabel, CaptionLabel,
                             LineEdit, ScrollArea, InfoBar, InfoBarPosition,
                             MessageBoxBase, ProgressBar, FluentIcon,
-                            FlowLayout)
+                            FlowLayout, PillPushButton)
 
 import video_model as V
 import video_export as VE
@@ -253,6 +253,15 @@ class VideoWorkbench(QWidget):
         self.act_export.clicked.connect(self._open_export_dialog)
         pl.addWidget(self.act_save)
         pl.addWidget(self.act_export)
+
+        # ---------- F2-L5（v3.5）：幕 TabBar ----------
+        # 多幕工程（v2）才出现；单幕工程（v1）**整行不建**（零 diff）。
+        # 一幕一条独立时间轴，切 tab = 切当前幕游标。
+        self._act_bar = None
+        self._act_tabs = None
+        self._cur_aid = None
+        self._act_buttons = {}
+
         # ---------- 中部三列（QSplitter 可拖拽调宽）----------
         hsplit = QSplitter(Qt.Horizontal, self)
         hsplit.setObjectName("wbHSplit")
@@ -486,12 +495,19 @@ class VideoWorkbench(QWidget):
         hsplit.setSizes(SPLIT_H_DEFAULT)
         self._hsplit = hsplit
 
-        # ---------- 顶部区域（pv + 三列 splitter）----------
+        # ---------- 顶部区域（pv + 幕条 + 三列 splitter）----------
         top = QWidget(self)
         tv = QVBoxLayout(top)
         tv.setContentsMargins(0, 0, 0, 0)
         tv.setSpacing(0)
         tv.addWidget(pv)
+        # F2-L5：幕 TabBar 的宿主（多幕时才建并插入）
+        self._act_bar_host = QWidget(self)
+        self._act_bar_layout = QHBoxLayout(self._act_bar_host)
+        self._act_bar_layout.setContentsMargins(12, 2, 12, 2)
+        self._act_bar_layout.setSpacing(6)
+        self._act_bar_host.setVisible(False)
+        tv.addWidget(self._act_bar_host)
         tv.addWidget(hsplit, 1)
 
         # ---------- 底部：clip 时间轴 ----------
@@ -585,6 +601,9 @@ class VideoWorkbench(QWidget):
     def _apply_project(self, _ignored):
         p = self.proj
         self.timeline.set_project(p)
+        # F2-L5：载入/新建工程后重幕条（幕数可能变了）
+        self._cur_aid = None
+        self._refresh_act_bar()
         self.spin_fps.blockSignals(True)
         self.spin_fps.setValue(int(round(p["fps"])))
         self.spin_fps.blockSignals(False)
@@ -1197,17 +1216,220 @@ class VideoWorkbench(QWidget):
 
     def render_frame(self, t):
         self._sync_preset_sources(t)
-        arr = VE.compose_frame(self.proj, t, self._sources.get)
+        # F2-L5（v3.5）：多幕工程只合成**当前幕**（一幕一条独立时间轴）
+        arr = VE.compose_frame(self.proj, t, self._sources.get,
+                               aid=getattr(self, "_cur_aid", None))
         # 交互门控：播放/逐帧合成中 StageView 跳过鼠标，但照常刷新画面与框
         self.stage.playing = bool(self._playing)
         self.stage.tick_busy = bool(self._tick_busy)
-        self.stage.set_frame(arr, self.proj, t)
+        self.stage.set_frame(arr, self.proj, t,
+                              getattr(self, "_cur_aid", None))
         # F1：台词表当前时刻生效行高亮
         _se = getattr(self, "script_editor", None)
         if _se is not None:
             _se.refresh_highlight()
         # H3：实时预览 diff 同步（非实时态内部零开销直接 return）
         self._sync_real_preview(t)
+
+    # ================= F2-L5（v3.5）：多幕 UI =================
+    # 一幕一条独立时间轴（设计 §2.2）。单幕工程（v1）**整个幕条不出现**
+    # -> 既有 UI 零 diff（564+ 既有测试不受影响）。
+    def _act_ids(self):
+        """当前工程的幕 id 列表（v1 单幕 -> ['a1'] 虚拟幕）。"""
+        try:
+            return V.act_ids(self.proj)
+        except Exception:
+            return ["a1"]
+
+    def _is_multi(self):
+        try:
+            return V.is_multi_act(self.proj)
+        except Exception:
+            return False
+
+    def _act_name(self, aid):
+        try:
+            a = V.find_act(self.proj, aid)
+            if a:
+                return str(a.get("name") or aid)
+        except Exception:
+            pass
+        return str(aid)
+
+    def _refresh_act_bar(self):
+        """按工程当前幕数重建幕条（单幕 -> 隐藏整行）。
+
+        幕 id 变了才重建（增删/改名/载入工程时调用）。"""
+        ids = self._act_ids()
+        if not self._is_multi() or len(ids) <= 1:
+            # 单幕：整行隐藏，不建任何按钮（零 diff）
+            self._act_bar_host.setVisible(False)
+            for b in list(self._act_buttons.values()):
+                self._act_bar_layout.removeWidget(b)
+                b.deleteLater()
+            self._act_buttons = {}
+            self._cur_aid = ids[0] if ids else "a1"
+            self._apply_cur_act()
+            return
+        # **游标归一必须先做**：载入/新建工程会把 _cur_aid 清成 None，
+        # 而下面「幕集合没变」的早退分支不碰游标 -> 游标一直 None，
+        # 分支面板/时间轴拿不到当前幕（实测 bug）。
+        if self._cur_aid not in ids:
+            self._cur_aid = ids[0]
+        # 幕 id 集合没变 -> 只刷新名字（改名场景）
+        if set(self._act_buttons.keys()) == set(ids):
+            for aid, b in self._act_buttons.items():
+                b.setText(self._act_name(aid))
+            self._sync_act_buttons()
+            self._apply_cur_act()
+            return
+        for b in list(self._act_buttons.values()):
+            self._act_bar_layout.removeWidget(b)
+            b.deleteLater()
+        self._act_buttons = {}
+        for aid in ids:
+            b = PillPushButton(self._act_name(aid), self._act_bar_host)
+            b.setCheckable(True)
+            b.setFixedHeight(26)
+            b.setToolTip("切到这一幕（%s）" % aid)
+            b.clicked.connect(lambda _c=False, a=aid: self._switch_act(a))
+            self._act_bar_layout.addWidget(b)
+            self._act_buttons[aid] = b
+        self._act_bar_layout.addStretch(1)
+        self._act_add_btn = PushButton("+ 新增幕", self._act_bar_host)
+        self._act_add_btn.setFixedHeight(26)
+        self._act_add_btn.clicked.connect(self._act_add)
+        self._act_bar_layout.addWidget(self._act_add_btn)
+        # 操作按钮：改名 / 复制 / 删除
+        for text, fn in (("改名", self._act_rename),
+                         ("复制", self._act_duplicate),
+                         ("删除", self._act_remove)):
+            btn = PushButton(text, self._act_bar_host)
+            btn.setFixedHeight(26)
+            btn.clicked.connect(lambda _c=False, f=fn: f())
+            self._act_bar_layout.addWidget(btn)
+        self._act_bar_host.setVisible(True)
+        self._sync_act_buttons()
+        # 重建后同样要同步一次（构造期 / 载入工程时组件内容是旧的）
+        self._apply_cur_act()
+
+    def _sync_act_buttons(self):
+        """让当前幕的按钮处于选中态（其余取消）。"""
+        for aid, b in (self._act_buttons or {}).items():
+            try:
+                b.blockSignals(True)
+                b.setChecked(aid == self._cur_aid)
+                b.blockSignals(False)
+            except Exception:
+                pass
+
+    def _apply_cur_act(self):
+        """把当前幕游标同步给所有幕感知组件（时间轴/剧情编辑器/舞台）。"""
+        aid = self._cur_aid
+        try:
+            self.timeline.set_act(aid)
+        except Exception:
+            pass
+        # 剧情编辑器必须整表重刷：台词表与分支区都是按幕取的数据，
+        # 只 render_frame 不够（那只刷高亮）——切幕后表格会停在旧幕内容。
+        try:
+            self.script_editor.refresh()
+        except Exception:
+            pass
+        try:
+            self.render_frame(self._t)
+        except Exception:
+            pass
+        try:
+            self._fill_clip_props()
+        except Exception:
+            pass
+
+    def _switch_act(self, aid):
+        """切当前幕（时间轴/剧情编辑器/舞台都跟着切）。"""
+        if aid == self._cur_aid:
+            return
+        self._cur_aid = aid
+        self._sync_act_buttons()
+        self._apply_cur_act()
+
+    def _act_add(self):
+        """新增一幕（复用 video_model.add_act，不自己造数据逻辑）。"""
+        try:
+            ok, msg, aid = V.add_act(self.proj, None, self._cur_aid)
+        except Exception as e:
+            InfoBar.warning("新增幕", "失败：%s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return
+        if not ok:
+            InfoBar.warning("新增幕", msg or "失败", parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return
+        self._cur_aid = aid
+        self.push_history()
+        self._refresh_act_bar()
+        self._apply_cur_act()
+        InfoBar.success("新增幕", "已创建 %s" % aid, parent=self,
+                        position=InfoBarPosition.TOP, duration=3000)
+
+    def _act_rename(self, aid=None):
+        """重命名当前幕（弹简单输入框）。"""
+        aid = aid or self._cur_aid
+        old = self._act_name(aid)
+        dlg = _ActNameDialog(self, old)
+        if not dlg.exec():
+            return
+        name = dlg.value().strip()
+        if not name:
+            InfoBar.warning("重命名幕", "幕名不能为空", parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            return
+        try:
+            ok, msg = V.rename_act(self.proj, aid, name)
+        except Exception as e:
+            ok, msg = False, str(e)
+        if not ok:
+            InfoBar.warning("重命名幕", msg or "失败", parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return
+        self.push_history()
+        self._refresh_act_bar()
+
+    def _act_duplicate(self, aid=None):
+        """复制当前幕。"""
+        aid = aid or self._cur_aid
+        try:
+            ok, msg, new_aid = V.duplicate_act(self.proj, aid)
+        except Exception as e:
+            ok, msg, new_aid = False, str(e), None
+        if not ok:
+            InfoBar.warning("复制幕", msg or "失败", parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return
+        self._cur_aid = new_aid
+        self.push_history()
+        self._refresh_act_bar()
+        self._apply_cur_act()
+
+    def _act_remove(self, aid=None):
+        """删除当前幕（级联清引用，提示清理了几处）。"""
+        aid = aid or self._cur_aid
+        try:
+            ok, msg, cleared = V.remove_act(self.proj, aid)
+        except Exception as e:
+            ok, msg, cleared = False, str(e), None
+        if not ok:
+            InfoBar.warning("删除幕", msg or "失败", parent=self,
+                            position=InfoBarPosition.TOP, duration=4000)
+            return
+        self.push_history()
+        self._refresh_act_bar()
+        self._apply_cur_act()
+        # remove_act 返回的是**清理了几处引用**（int），不是列表
+        n = int(cleared or 0)
+        InfoBar.success("删除幕", ("已删除 %s" % aid) +
+                        ("，并清理 %d 处引用" % n if n else ""),
+                        parent=self, position=InfoBarPosition.TOP, duration=4000)
 
     # ================= H3 实时预览（v3.5，设计 §5） =================
     def _preview_runtime_ready(self):
@@ -1690,6 +1912,25 @@ class _ExportDialog(MessageBoxBase):
     def result_values(self):
         scale = (1.0, 0.75, 0.5, 0.33)[max(0, self.cmb_out.currentIndex())]
         return os.path.normpath(self.ed_path.text().strip()), scale
+
+class _ActNameDialog(MessageBoxBase):
+    """F2-L5：幕重命名的单行输入对话框。"""
+
+    def __init__(self, parent, old=""):
+        super().__init__(parent)
+        self.titleLabel.setText("重命名幕")
+        self.contentLabel.setText("给这一幕起个名字：")
+        self.ed = LineEdit(self)
+        self.ed.setText(str(old or ""))
+        self.ed.setPlaceholderText("幕名")
+        self.viewLayout.addWidget(self.ed)
+        self.yesButton.setText("确定")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(360)
+
+    def value(self):
+        return self.ed.text()
+
 
 # 注：窗口壳（FluentWindow 包装）在 l2d_rig_qt.FluentShellWindow 里做，
 # 本模块只出纯 QWidget 工作台，避免双向 import。

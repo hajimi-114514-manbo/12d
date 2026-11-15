@@ -484,7 +484,55 @@ def _cmd_webgal_export(wb, args):
     data = {"out_dir": out_dir}
     if isinstance(stats, dict):
         data["stats"] = stats
+    # F2-L5（v3.5）：导出前预检 —— 分支摘要 + 素材体检，**不阻断**，
+    # 只是把「有什么问题」提前说清楚（用户之前是导出后才发现缺素材）。
+    try:
+        _pre = _branch_export_precheck(wb)
+        if _pre:
+            data["precheck"] = _pre
+            if _pre.get("summary"):
+                msg = ("%s\n%s" % (msg, _pre["summary"])).strip()
+    except Exception:
+        pass
     return bool(ok), str(msg), data
+
+
+def _branch_export_precheck(wb):
+    """导出前预检：多幕分支摘要 + 素材体检缺失。
+
+    返回 {} 表示没问题（单幕无分支且素材齐全）。**绝不抛**——
+    预检是提示，不是闸门。
+    """
+    out = {"acts": 0, "choices": 0, "jumps": 0, "missing": [],
+           "summary": ""}
+    proj = getattr(wb, "proj", None)
+    if not isinstance(proj, dict):
+        return {}
+    try:
+        import video_model as V
+        acts = [a for a in (proj.get("acts") or []) if isinstance(a, dict)]
+        if acts:
+            out["acts"] = len(acts)
+            out["choices"] = sum(len(a.get("choices") or []) for a in acts)
+            out["jumps"] = sum(len(a.get("jumps") or []) for a in acts)
+            out["next"] = sum(1 for a in acts if a.get("next"))
+    except Exception:
+        pass
+    try:
+        import asset_audit as AA
+        rep = AA.audit_project(proj, getattr(wb, "proj_dir", None))
+        out["missing"] = rep.get("missing") or []
+        out["missing_total"] = len(out["missing"])
+    except Exception:
+        pass
+    bits = []
+    if out["acts"] > 1:
+        bits.append("%d 幕 / %d 个选择点 / %d 个条件跳转"
+                    % (out["acts"], out["choices"], out["jumps"]))
+    if out.get("missing_total"):
+        bits.append("素材缺失 %d 个（导出时会跳过）" % out["missing_total"])
+    out["summary"] = "；".join(bits)
+    return out
 
 
 def _cmd_state(wb, _args=None):

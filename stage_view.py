@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """A2 StageView 舞台画布（可拖拽布置 + 选中联动）。
 
 画当前 t 时刻合成帧（QPixmap，由 workbench.render_frame 喂 ndarray），叠加：
@@ -51,13 +51,30 @@ class StageView(QWidget):
         self.tick_busy = False         # workbench 设置：逐帧合成中禁交互
 
     # ---------- 帧 ----------
-    def set_frame(self, arr, proj, t):
-        """喂一帧（画布全分辨率 ndarray）+ 工程 + 时刻。"""
+    def set_frame(self, arr, proj, t, aid=None):
+        """喂一帧（画布全分辨率 ndarray）+ 工程 + 时刻。
+
+        F2-L5（v3.5）：加 aid —— 多幕工程里舞台预览只显示**当前幕**
+        （一幕一条独立时间轴）。v1 单幕传 None 即可，行为与旧版全等。
+        """
         self._frame = arr
         self.proj = proj
+        self._aid = aid
         self.t = float(t)
         self._build_pixmap()
         self.update()
+
+    def _view(self):
+        """当前幕投影（v1 = 顶层，v2 = 该幕的 tracks/dialogue）。
+
+        必须走 act_view：v2 多幕工程顶层没有 tracks/dialogue，
+        直接 proj.get("tracks") 会让舞台预览全空。"""
+        if not self.proj:
+            return {"tracks": [], "dialogue": []}
+        try:
+            return V.act_view(self.proj, getattr(self, "_aid", None))
+        except Exception:
+            return {"tracks": [], "dialogue": []}
 
     def _build_pixmap(self):
         if self._frame is None:
@@ -101,7 +118,7 @@ class StageView(QWidget):
         out = []
         if not self.proj:
             return out
-        for ti, tr in enumerate(self.proj.get("tracks", [])):
+        for ti, tr in enumerate(self._view()["tracks"]):
             if tr.get("kind") != "video" or tr.get("hidden"):
                 continue
             for c in tr.get("clips", []):
@@ -118,7 +135,7 @@ class StageView(QWidget):
         out = []
         if not self.proj:
             return out
-        for d in (self.proj.get("dialogue") or []):
+        for d in (self._view()["dialogue"] or []):
             if not isinstance(d, dict):
                 continue
             try:
@@ -145,7 +162,7 @@ class StageView(QWidget):
     def _clip(self, cid):
         if not self.proj:
             return None
-        for tr in self.proj.get("tracks", []):
+        for tr in self._view()["tracks"]:
             for c in tr.get("clips", []):
                 if c.get("id") == cid:
                     return c
@@ -370,3 +387,4 @@ class StageView(QWidget):
                                         self._HANDLE, self._HANDLE))
         self._draw_subtitle(painter)
         painter.end()
+

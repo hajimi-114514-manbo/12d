@@ -283,6 +283,49 @@ def next_act_id(proj):
     return next_id("a", act_ids(proj))
 
 
+def unreachable_acts(proj, entry=None):
+    """从入口幕出发**沿着分支边**能到达不到的幕 id 列表（按声明顺序）。
+
+    边的来源与导出器一致：choice.options[].target、jumps[].target、next。
+    单幕工程 -> []（没有分支可言）。entry 缺省取第一幕（= a1，导出入口）。
+    """
+    if not isinstance(proj, dict) or not is_multi_act(proj):
+        return []
+    ids = act_ids(proj)
+    if not ids:
+        return []
+    start = entry or ids[0]
+    seen = {start}
+    stack = [start]
+    while stack:
+        cur = stack.pop()
+        a = find_act(proj, cur)
+        if not a:
+            continue
+        outs = []
+        try:
+            for ch in (a.get("choices") or []):
+                if isinstance(ch, dict):
+                    for o in (ch.get("options") or []):
+                        if isinstance(o, dict) and o.get("target"):
+                            outs.append(str(o["target"]))
+        except Exception:
+            pass
+        try:
+            for j in (a.get("jumps") or []):
+                if isinstance(j, dict) and j.get("target"):
+                    outs.append(str(j["target"]))
+        except Exception:
+            pass
+        if a.get("next"):
+            outs.append(str(a["next"]))
+        for t in outs:
+            if t in ids and t not in seen:
+                seen.add(t)
+                stack.append(t)
+    return [i for i in ids if i not in seen]
+
+
 def act_duration(act):
     """幕内时长（该幕 tracks 的最大 clip 结束时刻）。"""
     if not isinstance(act, dict):
@@ -455,9 +498,14 @@ def find_track(proj, track_id):
     return None
 
 
-def project_duration(proj):
+def project_duration(proj, aid=None):
+    """工程时长（秒）。
+
+    F2-L5（v3.5）：加 aid 参数取**指定幕**的时长（多幕工程里一幕一条
+    独立时间轴，总时长是各幕之和，但时间轴面板只显示当前幕）。
+    aid=None 时行为与旧版完全一致（v1 顶层 tracks / v2 第一幕）。"""
     end = 0.0
-    for t in _tracks_of(proj):
+    for t in _tracks_of(proj, aid):
         for c in t["clips"]:
             end = max(end, clip_end(c))
     return round(end, 3)

@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """clip 多轨时间轴面板（v3.0.0 剪辑工作台第一阶段）。
 
 数据模型唯一事实源是 video_model.py：面板**从不直接改 clip 数据**，
@@ -200,6 +200,28 @@ class ClipTimelinePanel(QWidget):
         self._sync_buttons()
         self.refresh()
 
+    def set_act(self, aid):
+        """F2-L5（v3.5）：切当前幕（多幕工程的幕游标）。
+
+        时间轴只显示**当前幕**的轨道 —— 一幕一条独立时间轴（设计 §2.2）。
+        单幕工程（v1）传什么都无影响（act_view 投影回顶层 tracks）。"""
+        self._aid = aid
+        self._sel = None
+        self.refresh()
+
+    def _tracks(self):
+        """当前幕的轨道列表（v1 = 顶层 tracks，v2 = act_view 投影）。
+
+        **必须走 act_view**：v2 多幕工程顶层没有 tracks，直接
+        `proj.get("tracks")` 会拿到空列表 -> 时间轴整个空白。
+        act_view 对 v1 返回顶层**原引用**（旧行为全等），对 v2 返回
+        该幕的真实 list（写入即生效）。"""
+        try:
+            return VM.act_view(self.proj, getattr(self, "_aid", None))["tracks"]
+        except Exception:
+            t = self.proj.get("tracks")
+            return t if isinstance(t, list) else []
+
     def refresh(self):
         self._update_height()
         self._sync_buttons()
@@ -239,7 +261,7 @@ class ClipTimelinePanel(QWidget):
         h = self._row_h_default(track)
         # v3.2.1：面板可用高度不足时按比例压缩行高（下限 14px），
         # 让 splitter 拖小高度后内容自适应，而不是钉死把手。
-        tracks = self.proj.get("tracks", [])
+        tracks = self._tracks()
         if len(tracks) > 1:
             avail = self.height() - HEAD_H - self.scaled_ruler_h() - 4
             total = sum(self._row_h_default(t) for t in tracks)
@@ -258,7 +280,7 @@ class ClipTimelinePanel(QWidget):
         """[(y0, h, track)] —— y 为 area 坐标（刻度尺下方按序铺行）。"""
         y = self.scaled_ruler_h()
         out = []
-        for tr in self.proj.get("tracks", []):
+        for tr in self._tracks():
             h = self.row_h(tr)
             out.append((y, h, tr))
             y += h
@@ -272,7 +294,7 @@ class ClipTimelinePanel(QWidget):
         """全部行按默认（未压缩）行高铺开的理想高度——只作 sizeHint。"""
         return (HEAD_H + self.scaled_ruler_h()
                 + sum(self._row_h_default(t)
-                      for t in self.proj.get("tracks", [])) + 4)
+                      for t in self._tracks()) + 4)
 
     def sizeHint(self):
         return QSize(600, self.ideal_height())
@@ -291,7 +313,8 @@ class ClipTimelinePanel(QWidget):
 
     def content_width(self):
         """外层放滚动容器时建议的面板宽。"""
-        return int(NAME_W + (VM.project_duration(self.proj) + 2.0) * self.pps)
+        return int(NAME_W + (VM.project_duration(
+            self.proj, getattr(self, "_aid", None)) + 2.0) * self.pps)
 
     def zoom_range_seconds(self):
         """当前视口能容纳的秒数。"""
@@ -925,3 +948,5 @@ class _ClipArea(QWidget):
                 p.drawEllipse(keyhole, r * 0.16, r * 0.16)
             else:
                 p.drawPath(path)
+
+

@@ -5070,6 +5070,44 @@ def _video_import_script(win, wb):
     threading.Thread(target=work, daemon=True).start()
 
 
+def _webgal_precheck_text(wb):
+    """导出前预检文案（分支摘要 + 素材体检）；没问题返回空串。
+
+    v3.5 F2-L5：用户之前是**导出完才发现**缺素材 / 分支断线。
+    这里在动手前把已知问题列出来，但**不阻断**——预检是提示不是闸门，
+    任何一步炸了都只丢这行提示，绝不影响正常导出。
+    """
+    bits = []
+    try:
+        import video_model as VVM
+        proj = getattr(wb, "proj", None) or {}
+        acts = [a for a in (proj.get("acts") or []) if isinstance(a, dict)]
+        if len(acts) > 1:
+            nch = sum(len(a.get("choices") or []) for a in acts)
+            njp = sum(len(a.get("jumps") or []) for a in acts)
+            bits.append("分支：%d 幕 / %d 个选择点 / %d 个条件跳转"
+                        % (len(acts), nch, njp))
+            # 只有一幕能被入口 scene 到达时才提醒（孤立幕导出后点不进）
+            try:
+                dead = VVM.unreachable_acts(proj)
+            except Exception:
+                dead = []
+            if dead:
+                bits.append("⚠ %d 幕没有任何分支指向，导出后点不进去（%s）"
+                            % (len(dead), "、".join(str(x) for x in dead[:3])))
+    except Exception:
+        pass
+    try:
+        import asset_audit as AA
+        hint = AA.audit_hint(getattr(wb, "proj", None),
+                             getattr(wb, "proj_dir", None))
+        if hint:
+            bits.append("⚠ " + hint)
+    except Exception:
+        pass
+    return "\n".join(bits)
+
+
 def _video_export_webgal(win, wb):
     """文件 → 导出 WebGAL 工程…：选目录 -> 可选含运行时 -> 后台导出。
 
@@ -5091,6 +5129,21 @@ def _video_export_webgal(win, wb):
     cb = QCheckBox("包含运行时(可双击直接玩)")
     cb.setChecked(False)
     lay.addWidget(cb)
+    # v3.5 F2-L5：预检提示（缺素材 / 分支孤立），无问题则整块不出现
+    pre = _webgal_precheck_text(wb)
+    if pre:
+        try:
+            from PySide6.QtWidgets import QLabel
+            lb = QLabel(pre)
+            lb.setWordWrap(True)
+            lb.setStyleSheet("color:#c8a13a;font-size:12px;"
+                             "background:rgba(200,161,58,0.08);"
+                             "border:1px solid rgba(200,161,58,0.35);"
+                             "border-radius:6px;padding:8px;")
+            lb.setMaximumWidth(520)
+            lay.addWidget(lb)
+        except Exception:
+            pass
     bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
     bb.accepted.connect(dlg.accept)
     bb.rejected.connect(dlg.reject)

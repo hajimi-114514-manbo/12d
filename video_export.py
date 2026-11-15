@@ -184,18 +184,22 @@ def paste_layer(canvas, img, lay):
     return canvas
 
 
-def compose_frame(proj, t, src_get, canvas=None):
+def compose_frame(proj, t, src_get, canvas=None, aid=None):
     """t 时刻一帧 RGB uint8（v3.4.0 起：**自底向上逐可见视频轨 RGBA 叠加**，
     不再只取最上层 clip；上层无 alpha 素材自然覆盖=旧语义，
     带 alpha 素材按 out=fg*a+dst*(1-a) 混合）。
     src_get(source_dict)->FrameSource（外层做缓存）。
-    某轨素材缺失/解码失败 -> 跳过该轨继续合成（不中断导出/预览）。"""
+    某轨素材缺失/解码失败 -> 跳过该轨继续合成（不中断导出/预览）。
+
+    F2-L5（v3.5）：加 aid —— 多幕工程里一幕一条独立时间轴，合成只看
+    **当前幕**的轨道。aid=None 时行为与旧版完全一致（v1 顶层 tracks /
+    v2 第一幕）。"""
     H, W = int(proj["height"]), int(proj["width"])
     if canvas is None:
         canvas = np.zeros((H, W, 3), np.uint8)
     else:
         canvas[...] = 0
-    for tr in proj["tracks"]:                   # 列表序 = 底→顶（后加的在上）
+    for tr in V._tracks_of(proj, aid):          # 列表序 = 底→顶（后加的在上）
         if tr.get("kind") != "video" or tr.get("hidden"):
             continue
         clip = _track_clip_at(tr, t)

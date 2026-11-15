@@ -5,10 +5,47 @@
 
 ---
 
-## v3.5.0（2026-11-15 15:3x）**最后一版**：F2 分支剧情数据层 + H3 实时预览接入（L1/H3 完成，L2-L5 进行中）
+## v3.5.0（2026-11-15 19:5x）**最后一版**：F2 分支剧情全链路（L1-L5）+ H3 实时预览
 
-> 用户拍板："那就开始进攻v3.5"。范围：H3 WebEngine 实时预览 + F2 分支剧情。
-> 本节记录已落地部分；L2/L3/L4/L5 完成后补记。
+> 用户拍板："那就开始进攻v3.5"，且这是**最后一版**。范围：H3 WebEngine 实时预览
+> + F2 分支剧情。下面按"已落地"记录，L1-L5 全部完成、25 套回归零红。
+
+### F2-L5 多幕 UI——**完成（本轮收尾）**
+数据层 L1-L4 此前已通，本轮把"用户在界面里能不能真的编辑分支"补齐。
+
+- **幕 TabBar**（`video_workbench._refresh_act_bar`）：每幕一个 PillPushButton +
+  「+ 新增幕 / 改名 / 复制 / 删除」；**单幕工程整行隐藏、一个按钮都不建**
+  （既有 UI 零 diff，实测 `isVisible=False 按钮=0`）。
+- **分支编辑区**（`script_editor._BranchPanel`）：选择点表（提示/选项文本/→幕/
+  副作用/条件）+ 表单 + 条件跳转 + 幕尾续接；只在多幕工程出现。
+- **幕感知投影**：`clip_timeline.set_act`、`script_editor._dialogue`、
+  `stage_view.set_frame(aid)`、`video_export.compose_frame(aid)`、
+  `video_model.project_duration(aid)` 全部按当前幕取数。
+
+### 实机截图暴露的三个真 bug（都修了）
+1. **分支区在左列被挤成 `...`**：面板挂在素材库列（默认 300px，最小 180），
+   而 5 列表格 + 5 个横排表单的实际最小宽度 505 > 可用 321 ——
+   每个控件被压到几十像素，文本全是 `...`，**面板实际不可用**。
+   改：表格列宽 Interactive 定窄值（52/Stretch/44/62/52）、表单/跳转/续接
+   **全部纵向堆叠**、控件压到 28px 高、面板 `setMinimumWidth(150)`；
+   实测 341px 宽下完整可用（截图 `f2_l5_shots/`）。
+2. **幕尾续接下拉撒谎**：`next=None`（播完即停）时 ComboBox 停在 index 0，
+   显示「幕一（a1）」——用户以为已经设成 a1，一点保存就真把 a1 写进去了。
+   改：空值回落 placeholder（`setCurrentIndex(-1)`）。
+3. **测试脚本手写幕 id 导致假红**：`add_act` 首次调用会把 v1 懒升级
+   （占掉 a1），在 `new_project()` 后按"第一个幕就是 a1"手写断言会全部错位。
+   测试侧改为一律 `act_ids()` 实取。（顺带把回归跑批脚本 `run_regression.py`
+   重写成能识别 4 种输出形态：stdout 汇总 / `[OK]` 标记 / 同名 `.log` 明细
+   / `PASS COUNT`，此前 12 套测试因判定正则太窄被误判成红。）
+
+### 导出前置预检：把"导出完才发现"变成"动手前就说清"
+- 新增 `video_model.unreachable_acts(proj, entry=None)`：按分支边
+  （choice.options[].target / jumps[].target / next）从入口幕做可达性分析，
+  返回**点不进去的幕**（有环不死循环、脏数据不抛）。
+- `l2d_rig_qt._webgal_precheck_text`（导出 WebGAL 工程对话框）：选完目录后
+  列出「N 幕 / N 个选择点 / N 个条件跳转」+ 孤立幕警告 + 素材体检摘要；
+  **不阻断**，任何一步炸了只丢这行提示。
+- WebGAL 导出对话框加了黄色提示条（`rgba(200,161,58,...)`），无问题整块不出现。
 
 ### H3 实时预览——**已接入工作台并真实出画面**
 `webgal_preview.py`（video-source 交付的 H3a）此前**完全没被 workbench 引用**，
