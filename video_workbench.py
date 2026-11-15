@@ -333,7 +333,10 @@ class VideoWorkbench(QWidget):
         try:
             import webgal_preview as WP
             self._wp = WP
-            if WP.available():
+            # v3.5：角标创建条件 = WebEngine 可用 **且** WebGAL 运行时已就位。
+            # 只查 available() 会出现「开关常亮但页面空白」（装了 WebEngine
+            # 可选件但运行时素材没下载 -> 点开只有 no_runtime 错误页）。
+            if self._preview_runtime_ready():
                 self._make_preview_badge(stack_host)
         except Exception:
             self._wp = None
@@ -1207,8 +1210,29 @@ class VideoWorkbench(QWidget):
         self._sync_real_preview(t)
 
     # ================= H3 实时预览（v3.5，设计 §5） =================
+    def _preview_runtime_ready(self):
+        """WebGAL 运行时是否已就位（决定要不要给「实时预览」角标）。
+
+        v3.5：只查 WebEngine（available()）会出现「开关常亮但页面空白」——
+        用户装了 WebEngine 可选件但**运行时素材没下载**（当前发行形态
+        运行时与安装包分离），点开只能得到 no_runtime 错误页。
+        所以这里额外查运行时是否存在，查不到就**连开关都不出现**
+        （与 available()==False 同等对待：宁可不出现，也不要一个点不动的开关）。"""
+        WP = getattr(self, "_wp", None)
+        if WP is None or not WP.available():
+            return False
+        fn = getattr(WP, "runtime_ready", None)
+        if callable(fn):
+            try:
+                return bool(fn())
+            except Exception:
+                return True
+        # 没有 runtime_ready()（旧版预览模块）-> 不阻断（保持兼容）
+        return True
+
     def _make_preview_badge(self, host):
-        """预览区右上角「实时预览」角标开关。仅 available() 为真时创建。"""
+        """预览区右上角「实时预览」角标开关。
+        仅在「WebEngine 可用 + WebGAL 运行时已就位」时创建。"""
         btn = PushButton("实时预览", host)
         btn.setCheckable(True)
         btn.setFixedHeight(26)
@@ -1234,6 +1258,12 @@ class VideoWorkbench(QWidget):
             # 就绪再推首帧状态（v3.5 实测根因）。
             self._preview_ready = False
             v.pageReady.connect(self._on_preview_page_ready)
+            # J3 §8-7：连续机制级 error 达阈值 -> 引擎自动降级，
+            # UI 侧取消勾选 + 置灰（会话内不再弹，置灰保持）。
+            try:
+                v.previewDisabled.connect(self._on_preview_disabled)
+            except Exception:
+                pass
             v.start()
             self._webview = v
             self._stack.addWidget(v)
@@ -1242,6 +1272,28 @@ class VideoWorkbench(QWidget):
             InfoBar.warning("实时预览", "初始化失败：%s" % e, parent=self,
                             position=InfoBarPosition.TOP, duration=4000)
             return None
+
+    def _on_preview_disabled(self):
+        """J3 §8-7：预览引擎降级（连续机制级 error）-> 取消勾选 + 置灰。"""
+        try:
+            if getattr(self, "_preview_real", False):
+                self._preview_real = False
+                if self._stack is not None:
+                    self._stack.setCurrentIndex(0)   # 回 StageView
+                b = getattr(self, "_preview_badge", None)
+                if b is not None:
+                    b.blockSignals(True)
+                    b.setChecked(False)
+                    b.blockSignals(False)
+        except Exception:
+            pass
+        b = getattr(self, "_preview_badge", None)
+        if b is not None:
+            b.setEnabled(False)
+            b.setToolTip("实时预览已自动停用：引擎连续报错（多半是模型文件缺失）"
+                         "，修好模型后可重新开启")
+        InfoBar.warning("实时预览", "引擎连续报错，已自动停用实时预览",
+                        parent=self, position=InfoBarPosition.TOP, duration=8000)
 
     def _on_preview_page_ready(self, ok):
         """宿主页 loadFinished：module script 还需一点时间求值，延迟推首帧。"""

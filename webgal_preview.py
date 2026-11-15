@@ -77,6 +77,27 @@ def available():
     return HAS_WEBENGINE
 
 
+def runtime_ready(runtime_dir=None):
+    """WebGAL 运行时是否已就位（v3.5，H3b 接线用）。
+
+    为什么需要单独一个判断：`available()` 只看 WebEngine 可选件在不在，
+    但**运行时素材（templates/webgal_runtime）是与安装包分离下载的**。
+    只查 available() 会出现「实时预览开关亮着 -> 点开只有 no_runtime
+    错误页 / 全空白」的坏体验（用户实测反馈）。
+
+    判定标准（与 runtime_pack 的目录约定一致）：
+      存在 index.html **且** 存在 game/config.txt（引擎必需文件）
+    返回 bool；不抛。
+    """
+    d = runtime_dir or RUNTIME_DIR
+    try:
+        if not os.path.isfile(os.path.join(d, "index.html")):
+            return False
+        return os.path.isfile(os.path.join(d, "game", "config.txt"))
+    except OSError:
+        return False
+
+
 def recommended_chromium_flags():
     """离屏/无 GPU 环境（CI、offscreen 测试）出真画面的 Chromium 旗标。
     实测矩阵（Qt 6.12 内嵌 Chromium，offscreen 平台）：
@@ -263,7 +284,16 @@ if HAS_WEBENGINE:
         eventReceived = Signal(str)          # 页面事件 json（测试/上层观测口）
         pageReady = Signal(bool)             # 宿主页 loadFinished 透传
         jsLog = Signal(str)                  # 页面 console 转发（诊断用）
+        previewDisabled = Signal()           # J3 §8-7：连续机制级 error
+                                             # 达阈值 -> 会话内自动降级
+                                             # （UI 收信号后关开关置灰，
+                                             # 会话内不再弹，见 disabled()）
         DEBOUNCE_MS = 80
+        ERROR_STREAK_LIMIT = 3               # §8-7 阈值：连续机制级 error 数
+        # 机制级 = 装载/执行故障（用户改参数救不回来）；unknownMotion/
+        # unknownExpression/cmdUnsupported 属参数级，不计数也不重置
+        # （避免正常试错误降级）；no_runtime 走 start() 既有降级路径。
+        MECHANISM_ERROR_CODES = ("boot_failed", "no_live2d_sdk", "cmd_failed")
 
         def __init__(self, runtime_dir=None, lib_dir=None, parent=None):
             super().__init__(parent)
@@ -277,7 +307,9 @@ if HAS_WEBENGINE:
             self._figstate = {}               # clip_id -> 已下发状态（diff 基）
             self._pending_apply = None
             self._ids = 0
-            self._degraded = None             # 不可恢复降级原因（no_runtime）
+            self._degraded = None             # 不可恢复降级原因（no_runtime /
+                                              # error_streak，J3 §8-7）
+            self._err_streak = 0              # 连续机制级 error 计数（ready 清零）
             lay = QVBoxLayout(self)
             lay.setContentsMargins(0, 0, 0, 0)
             self.view = QWebEngineView(self)
@@ -502,6 +534,35 @@ if HAS_WEBENGINE:
         def _record_event(self, e):
             self._events.append(e)
             self.eventReceived.emit(json.dumps(e, ensure_ascii=False))
+            # J3 §8-7（缺口补齐，cpu-engine，lead 批准动本文件）：连续
+            # 机制级 error 达阈值 -> 置降级标志 + 发 previewDisabled 一次。
+            # 降级后 start()/apply_state 走 _degraded 既有零流量分支，
+            # 会话内不重试不重弹（UI 侧收信号后置灰开关，用 disabled() 查询）。
+            try:
+                if not isinstance(e, dict):
+                    return
+                evt = e.get("evt")
+                if evt == "error":
+                    code = str((e.get("data") or {}).get("code") or "")
+                    if code in self.MECHANISM_ERROR_CODES:
+                        self._err_streak += 1
+                    else:
+                        return              # 参数级：不计数不重置
+                elif evt == "ready":
+                    self._err_streak = 0    # 任一模型装载成功即重置
+                    return
+                else:
+                    return
+                if (self._err_streak >= self.ERROR_STREAK_LIMIT
+                        and not self._degraded):
+                    self._degraded = "error_streak"
+                    self.previewDisabled.emit()
+            except Exception:
+                pass                        # 降级机制自身绝不抛
+
+        def disabled(self):
+            """UI 侧置灰查询（J3 §8-7）：True=本会话实时预览已降级。"""
+            return bool(self._degraded)
 
         def events_of(self, evt):
             return [e for e in self._events if e.get("evt") == evt]
