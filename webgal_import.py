@@ -430,6 +430,85 @@ def _parse_literal(v):
         return s
 
 
+def _strip_say_args(rest):
+    """台词行的「正文 / 行尾参数」切分（复刻官方 4.6.6 引擎规则）。
+
+    引擎源码（index-Dcp3ZA1M.js 的 i0e + GU）：
+        const b = / -/.exec(g);            // **第一个「空格+减号」**= 参数起点
+        if (b) { 参数段 = g[b.index:]; 正文 = g[:b.index]; }
+        GU: e.split(" -")  -> 每段按 "=" 切 key/value（无 "=" 则 key=整段）
+
+    v3.5 修的两个真实 bug（用户实拍）：
+      1. **参数被当成正文**："-fontSize=small" 被存进台词内容 ->
+         剧情编辑器里看到参数混在台词里。
+      2. **正文含「空格+减号」被引擎误切**："正文 A - B 这样的内容" ->
+         引擎切成 正文="正文 A" + 参数="B 这样的内容;"，**后半段消失**。
+
+    本函数的规则（比引擎更保守，避免误伤正文）：
+      - 只有**合法参数形态**的片段才当参数：
+        `-key=value` 或 `-key`（key 为纯标识符）。像 " - B 这样的内容"
+        这种明显是正文/自然语言的内容**保留在正文里**，不吞字。
+      - 零宽字符 U+200B 是我们导出端插入的保护符（见
+        webgal_export._escape_say_body），导入时还原成普通空格。
+
+    返回 (正文, 参数dict)。参数 dict 供后续扩展（如 fontSize 透传）。
+    """
+    s = str(rest or "")
+    # 还原导出端的零宽保护符
+    s = s.replace("\u200b", "")
+    m = re.search(r" -", s)
+    if not m:
+        return s.strip(), {}
+    body = s[:m.start()]
+    argpart = s[m.start():]
+    # 逐段判定：只有合法参数形态才剥离；其余并回正文
+    args = {}
+    tail = []
+    for seg in argpart.split(" -"):
+        seg = seg.strip()
+        if not seg:
+            continue
+        mm = re.match(r"^([A-Za-z_]\w*)(?:=(.*))?$", seg, re.S)
+        if mm is None:
+            # 不是合法参数 -> 属于正文（引擎会吞字，我们不吞）
+            tail.append(seg)
+            continue
+        k, v = mm.group(1), mm.group(2)
+        if v is not None:
+            v = v.strip()
+            if v.endswith(";"):
+                v = v[:-1].strip()
+            if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
+                v = v[1:-1]
+            if v.lower() == "true":
+                v = True
+            elif v.lower() == "false":
+                v = False
+            else:
+                try:
+                    v = int(v)
+                except (TypeError, ValueError):
+                    try:
+                        v = float(v)
+                    except (TypeError, ValueError):
+                        pass
+        else:
+            v = True
+        args[k] = v
+    if tail:
+        body = body + " - " + " - ".join(tail)
+    return body.strip(), args
+
+
+def _escape_say_body(text):
+    """台词正文转义：把「空格+减号」写成「空格+反斜杠+减号」。
+
+    引擎的切句/切参数都认反斜杠转义（\\- 不算参数起点），这样正文里
+    本来就有 " - " 的内容导出后不会被引擎误切成参数而丢失后半段。
+    """
+    return re.sub(r"(?<!\\) -", r" \\-", str(text or ""))
+
+
 def _split_line(raw):
     """一行 -> (head, rest, err)。注释/空行/无冒号行分别处理。"""
     line = raw.strip()
@@ -911,9 +990,8 @@ class _Builder:
                 except Exception as e:
                     self.warnings.append("语句处理异常 %s: %r" % (head, e))
             else:
-                # 台词行
-                self.do_dialogue(head, rest)
-
+                # 台词行：按引擎规则剥离行尾参数（-fontSize=small 等）
+                self.do_dialogue(head, _strip_say_args(rest)[0])
         if self.stmt_n == 0:
             return False, "脚本为空或无可识别语句: %s" % script_path, None
 

@@ -67,6 +67,36 @@ _EMPTY_SCRIPT = (";空白 WebGAL 工程;\n"
                 "intro:你好|欢迎使用木偶工作室导出;\n")
 
 
+# 台词正文里的「空格+减号」保护符（U+200B 零宽空格）。
+# 官方 4.6.6 引擎的台词参数切分（index js 的 i0e）：
+#     const b = / -/.exec(g);   // 第一个「空格+减号」= 参数起点
+#     GU: e.split(" -")         // 按「空格+减号」切参数段
+# 后果：台词正文里若含 "A - B"，引擎会把 "B" 当成**参数名**，
+# 正文只剩 "A"，**后半段整段消失**（实测真 bug，用户实拍可见）。
+#
+# 为什么用零宽字符而不是反斜杠：
+#   - 引擎只对 "\\;" 做反转义（g.replaceAll("\\;",";")），
+#     "\\-" **不会**被还原 -> 正文会显示成 "A \- B"（带反斜杠，脏）
+#   - 引擎对零宽/全角字符**不做任何清洗**（实测 js 里 0 处引用），
+#     所以 U+200B 原样进 Text 渲染，但视觉上完全不可见
+#   - 引擎的 / -/ 只匹配 ASCII 半角减号 -> 插了零宽就匹配不上，
+#     整句安全地当正文显示
+# 代价：导出文件里含不可见字符（调试时用 show 参数展开看）。
+_ZWSP = "\u200b"
+
+
+def _escape_say_body(text):
+    """台词正文转义：把「空格+减号」写成「空格+零宽+减号」。
+
+    配套：导入端 webgal_import._strip_say_args 按同一规则识别并还原，
+    保证工程里存的是**用户原文**，导出/导入往返不丢字、不变形。
+    """
+    s = str(text or "")
+    if _ZWSP in s:
+        return s                      # 已保护过，不重复插
+    return re.sub(r"(?<!\\) -", " " + _ZWSP + "-", s)
+
+
 def _comment(text):
     """H1d（task-61）注释行合法化——官方 4.6.6 合法独立注释 = `;xxx;`
     （首尾都带分号）。两轮实测教训（2026-11-14 headless 实拍 + 引擎 i0e
@@ -1814,7 +1844,15 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     # BG 命名轨直接是背景（WebGAL changeBg 为 cover 模式，
                     # 4:3 图进 16:9 画布也是合法背景，不做几何覆盖率否决）
                     nm = pool.alloc("background", safe_name(raw_name) or "bg.png")
-                    copy_in("background", path, nm)
+                    if not copy_in("background", path, nm):
+                        # v3.5：源文件缺失（素材库没命中 / 脚本里是占位名）
+                        # -> **不 emit 坏引用**。emit 出去引擎会去找一个
+                        # 不存在的文件，背景加载失败（黑屏/残留旧背景），
+                        # 用户看到的现象就是"背景不对"。
+                        # copy_in 已记警告，这里再补一条更明确的原因。
+                        warn.append("背景素材缺失，已跳过该背景: %s"
+                                    % (raw_name or path))
+                        continue
                     if first_bg is None:
                         first_bg = nm
                     events.append((t0, 0, seq, ["changeBg:%s -next;" % nm]))
@@ -1823,7 +1861,12 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     # 非底轨/非满幅 image -> 立绘
                     slot = _slot(lay.get("x"))
                     nm = pool.alloc("figure", safe_name(raw_name) or "fig.png")
-                    copy_in("figure", path, nm)
+                    if not copy_in("figure", path, nm):
+                        # v3.5：素材缺失 -> 不 emit 坏引用（同背景逻辑：
+                        # emit 出去引擎找不到文件，人物不显示）
+                        warn.append("立绘素材缺失，已跳过该立绘: %s"
+                                    % (raw_name or path))
+                        continue
                     figure_event(c, t0, t1, lay, nm, slot,
                                  fid=_fig_id(_who_export(path)))
             elif sk == "puppet":
@@ -1929,13 +1972,17 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             elif sk == "video":
                 # ---- 规则 4 ----
                 nm = pool.alloc("video", safe_name(raw_name) or "clip.mp4")
-                copy_in("video", path, nm)
+                if not copy_in("video", path, nm):
+                    warn.append("视频素材缺失，已跳过: %s" % (raw_name or path))
+                    continue
                 events.append((t0, 2, seq, ["video:%s -next;" % nm]))
                 seq += 1
             elif sk == "audio" and tr_kind == "audio":
                 # ---- 规则 3 ----
                 nm = pool.alloc("bgm", safe_name(raw_name) or "a.mp3")
-                copy_in("bgm", path, nm)
+                if not copy_in("bgm", path, nm):
+                    warn.append("音频素材缺失，已跳过: %s" % (raw_name or path))
+                    continue
                 if dur >= AUDIO_BGM_MIN:
                     if first_bgm is None:
                         first_bgm = nm
@@ -2023,7 +2070,10 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     events.append((t, 3.5, seq, [line + ";"]))
                     seq += 1
                     dialogue_prev_action[slot] = key
-        events.append((t, 4, seq, ["%s:%s;" % (who or "旁白", text)]))
+        # v3.5：台词正文里的「空格+减号」要转义——引擎用 / -/ 切参数，
+        # 不转义的话 "A - B" 会被误切，B 段整段消失（实测真 bug）。
+        events.append((t, 4, seq,
+                       ["%s:%s;" % (who or "旁白", _escape_say_body(text))]))
         seq += 1
 
     # K1（task-69）：同屏人数上限撤销——原 I1 >3 警告扫描整体移除。
