@@ -5,6 +5,90 @@
 
 ---
 
+## v3.4.8（2026-11-15 10:0x）WebGAL 滤镜实测可用：推翻「不保证支持」旧结论，文档解禁
+
+> 用户问："目前webgal滤镜可以做了吗"。v3.4.6 收录特效表时标注
+> 「官方 WebGAL 4.6.6 不保证支持」——那是未实测的保守判断。本次实测推翻。
+
+### 实测证据（三层）
+1. **引擎代码层**（grep `index-Dcp3ZA1M.js`，1517KB）：
+   - `setTransform` 是官方命令枚举第 29 号（`e[e.setTransform=29]`），
+     `setTempAnimation=27` 同在；
+   - 滤镜工厂注册表：oldFilm / dotFilm / reflectionFilm / glitchFilm /
+     rgbFilm / godray / bloom / vignetting / bevel / blur / pixelSize /
+     shockwave / radiusAlpha 各有实现类；
+   - 默认参数表与 effect_table.json 的参数一一对应（bevelRed/
+     bloomThreshold/oldFilm…），目标槽位 `fig-center/left/right` 原生支持。
+2. **真实运行层**：用导出包真实引擎跑
+   `setTransform:{"brightness":0.7,"saturation":0.2,"colorRed":180,
+   "colorGreen":190,"colorBlue":255} -target=bg-main`——画面肉眼可见地
+   变暗、降饱和、偏蓝（对比原画暖橙黄昏），截图
+   `D:\scripts\temp\ui_shots\f_C_filtered.png`。
+3. **作者背书**：教程原文要求「WebGAL 4.5.13+」——滤镜语法从 4.5.13 起
+   就是官方引擎能力，4.6.6 自然携带。
+
+### 附带发现（测试方法学）
+flicker_test 一系 CDP 测试的 JS 合成点击（dispatchEvent）**从未真正
+推进过 WebGAL 场景**（React 合成事件 + 引擎自管输入拦截）——此前那些
+「推进 N 句后实例不变」的断言实际是在验证「未推进」。真实推进要用
+CDP `Input.dispatchMouseEvent`。本次 filter_probe.py 已用真输入事件。
+
+### 文档解禁（templates/webgal/）
+- `WebGAL演出特效参考.md`：兼容性章节改「✅ 实测可用」，附实测方式
+  与截图路径；`setTempAnimation` 仍按需验证。
+- `网页端AI提示词包.md` 第 8 条：「默认不写画面特效」→「画面滤镜可用
+  但克制」（氛围需要时用 + 场景结束必须重置 + 电影感滤镜 bg/fig 成对）。
+- `WebGAL脚本编写规范.md` 第 7 节末条同步解禁滤镜语法。
+
+### 验证
+- effect_table_test / video_integration / webgal_export 等回归 rc=0；
+- 导出链本身零改动（滤镜指令走脚本原文透传，无需导出器支持）。
+
+---
+
+## v3.4.7（2026-11-15 09:1x）视频编辑 UI 三处打磨：轨道头显隐按钮 / 深色主题露白 / 下载对话框配色
+
+> 用户要求原话："对视频编辑的UI进行优化,例如隐藏图层的按钮,模块内的字体问题,还有下载资源界面的颜色问题"。
+
+### 1. 时间轴轨道头「隐藏图层/锁定」按钮重绘（clip_timeline.py）
+- **根因**：轨道头 👁/🔒 是 12px 的 emoji 文字绘制——依赖系统 emoji 字体，
+  部分机器渲染成黑白单色甚至方块；未激活态 alpha=90 太暗几乎看不见；
+  命中区 20px 偏窄。
+- **修法**：换成 QPainter 矢量自绘（不依赖任何字体）——
+  - 眼睛=贝塞尔杏仁形+实心瞳孔；**隐藏态降透明并画红色「闭眼」斜杠**，一眼区分
+  - 锁=上半圆锁梁+圆角锁体；**锁定态金色填充**，未锁灰描边
+  - **新增 hover 反馈**：悬停的按钮画半透明圆角底（_ClipArea 已有
+    MouseTracking，新增 `_hover_at`/`_hover_icon` 状态，离开面板清空）
+  - 命中区 EYE_W 20→24
+- **附带**：时间轴工具条 ✂🗑▶ emoji 按钮（同款字体依赖问题）换成
+  FluentIcon.CUT/DELETE/PLAY 图标按钮，与工作台其它按钮风格统一。
+
+### 2. 「下载资源界面」颜色修复（asset_downloader.py）
+- **根因**：`AssetDownloadDialog` 是裸 QDialog，不吃 qfluentwidgets 深色
+  主题——系统默认浅底；而其内部的 BodyLabel/CaptionLabel/ProgressBar 在
+  深色主题下全是浅色 → **白底白字**，标题/进度/已下载字节全部看不见
+  （offscreen 截图实测确认）。
+- **修法**：对话框铺工作台深色底 `QDialog{background:#20232a;}`，
+  浅色文字恢复可读；进度条轨道在深底上正常显色。
+
+### 3. 「模块内字体/露白」修复（script_editor.py + video_workbench.py）
+- **剧情编辑器**：QTableWidget 与 QPlainTextEdit 是裸 Qt 控件——深色
+  主题下表格/内容框是**系统默认白底**+ 系统默认 12px 小字，与 fluent
+  组件拼在一起突兀。统一铺 `#1b1e24` 深底 + 圆角描边 + fluent 13px
+  字号（表头 12px），选中高亮沿用生效行配色 #2f3d5c。
+- **素材库滚动区**：`asset_scroll` viewport 默认浅底——素材面板中部
+  露一整块白（属性面板 pscroll 之前修过同款，素材库漏了）。viewport 与
+  host 统一 `#20232a`；host 用 objectName 限定而非通配选择器，避免
+  盖掉 CardWidget 自绘底色。
+
+### 验证
+- offscreen 截图对照：下载对话框白底白字→深底白字清晰；表格/内容框
+  露白消失；时间轴轨道头矢量眼睛/锁（睁眼+瞳孔 / 红斜杠闭眼 / 金锁）
+  渲染正确。
+- 既有回归全绿（video_integration / timeline 系列 rc=0）。
+
+---
+
 ## v3.4.6（2026-11-14 23:0x）资产管理按当前编辑页过滤：不再列无关资产
 
 > 用户要求原话："资产管理里面和当前编辑页无关的资产就不显示了"。

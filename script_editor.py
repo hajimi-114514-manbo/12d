@@ -31,10 +31,33 @@ except Exception:                              # pragma: no cover
     MT = None
 
 _HL_COLOR = "#2f3d5c"          # 当前时刻生效行高亮
+# v3.4.7：QTableWidget / QPlainTextEdit 是裸 Qt 控件，不吃 qfluentwidgets
+# 深色主题 —— 深色工作台里是一整块系统默认白底 + 小号系统默认字体，
+# 与 fluent 组件（深底、14px）拼在一起又白又字小。统一铺深色 + 字号。
+_PANEL_QSS = (
+    "QTableWidget{background:#1b1e24;color:#e8ecf4;gridline-color:#262b34;"
+    "border:1px solid #262b34;border-radius:6px;"
+    "selection-background-color:#2f3d5c;selection-color:#f2f6fa;}"
+    "QTableWidget::item{padding:2px 4px;}"
+    "QHeaderView::section{background:#23262e;color:#c8d1dc;"
+    "border:none;border-right:1px solid #262b34;border-bottom:1px solid #262b34;"
+    "padding:4px 6px;font-size:12px;}"
+    "QTableCornerButton::section{background:#23262e;border:none;}")
+_EDITOR_QSS = (
+    "QPlainTextEdit{background:#1b1e24;color:#e8ecf4;"
+    "border:1px solid #262b34;border-radius:6px;"
+    "selection-background-color:#2f3d5c;selection-color:#f2f6fa;}")
 _COL_T, _COL_WHO, _COL_TEXT, _COL_DUR = 0, 1, 2, 3
 _COL_MOTION, _COL_EXPR = 4, 5
 _NCOL = 6
 _HEADERS = ("时刻(s)", "名字", "内容", "时长(s)", "动作", "表情")
+
+
+def _fluent_font(w, px=13):
+    """裸控件对齐 fluent 视觉字号（BodyLabel 默认 14px 略大，表格 13 合适）。"""
+    f = w.font()
+    f.setPixelSize(px)
+    return f
 
 
 class ScriptEditor(QWidget):
@@ -58,6 +81,8 @@ class ScriptEditor(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.verticalHeader().setVisible(False)
+        self.table.setStyleSheet(_PANEL_QSS)          # v3.4.7 深色适配
+        self.table.setFont(_fluent_font(self.table))  # v3.4.7 字体统一
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(_COL_T, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(_COL_WHO, QHeaderView.ResizeToContents)
@@ -102,6 +127,8 @@ class ScriptEditor(QWidget):
         self.ed_content = QPlainTextEdit(self)
         self.ed_content.setPlaceholderText("台词内容（不能为空）")
         self.ed_content.setMaximumHeight(110)
+        self.ed_content.setStyleSheet(_EDITOR_QSS)          # v3.4.7 深色适配
+        self.ed_content.setFont(_fluent_font(self.ed_content))
         lay.addWidget(self.ed_content, 1)
 
         f2 = QHBoxLayout()

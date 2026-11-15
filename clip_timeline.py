@@ -8,11 +8,11 @@
 
 布局：
     ┌───────────────────────────────────────────────┐
-    │ [✂ 切分] [🗑 删除] [▶ 跟随]  80px/s   ...提示 │  ← 34px 工具条
+    │ [切分] [删除] [跟随]  80px/s   ...提示 │  ← 34px 工具条（FluentIcon 图标）
     ├──────────┬────────────────────────────────────┤
     │ (头列)   │  0s   1s   2s   3s  ← 22px 刻度尺  │
     │ 视频轨1  │ ▓▓clip▓▓   ▓▓clip▓▓    │  44px/行  │
-    │   👁 🔒  │  ← 150px 固定轨道头列             │
+    │   👁 🔒  │  ← 150px 固定轨道头列（v3.4.7 起为矢量自绘图标）             │
     │ 音频轨1  │ ▒▒▒波形▒▒▒             │  26px/行  │
     └──────────┴────────────────────────────────────┘
 
@@ -79,7 +79,7 @@ NAME_W = 150                # 左侧轨道头列宽（固定）
 ROW_VIDEO = 44              # 视频轨行高基准（×ui_scale）
 ROW_AUDIO = 26              # 音频轨行高基准（×ui_scale）
 EDGE_GRAB = 6               # clip 两端 trim 命中宽度（px，×ui_scale）
-EYE_W = 20                  # 头列按钮宽度
+EYE_W = 24                  # 头列按钮宽度（v3.4.7：20→24，点击更好命中）
 PPS_DEFAULT = 80.0
 PPS_MIN = 0.5
 PPS_MAX = 400.0
@@ -139,7 +139,9 @@ class ClipTimelinePanel(QWidget):
         lay.setSpacing(0)
 
         # ---- 34px 工具条 ----
-        from qfluentwidgets import PushButton, CaptionLabel
+        # v3.4.7：emoji（✂🗑▶）在部分 Windows 字体配置下渲染成方块或黑白
+        # 单色字形，与 Fluent 按钮风格不齐；统一换成 FluentIcon 图标按钮。
+        from qfluentwidgets import PushButton, CaptionLabel, FluentIcon
         head = QWidget(self)
         head.setObjectName("clipTlHead")
         head.setStyleSheet("QWidget#clipTlHead{background:%s;}" % C_HEAD_BG.name())
@@ -150,13 +152,13 @@ class ClipTimelinePanel(QWidget):
 
         f_btn = QFont()
         f_btn.setPixelSize(11)
-        self.btn_split = PushButton("✂ 切分", head)
+        self.btn_split = PushButton(FluentIcon.CUT, "切分", head)
         self.btn_split.setToolTip("在播放头位置切分选中的 clip")
         self.btn_split.clicked.connect(self.split_selected_at_playhead)
-        self.btn_delete = PushButton("🗑 删除", head)
+        self.btn_delete = PushButton(FluentIcon.DELETE, "删除", head)
         self.btn_delete.setToolTip("删除选中的 clip")
         self.btn_delete.clicked.connect(self.remove_selected)
-        self.btn_follow = PushButton("▶ 跟随", head)
+        self.btn_follow = PushButton(FluentIcon.PLAY, "跟随", head)
         self.btn_follow.setCheckable(True)
         self.btn_follow.setToolTip("播放头移动时自动横向滚动跟随")
         self.btn_follow.toggled.connect(self._on_follow_toggled)
@@ -404,6 +406,9 @@ class _ClipArea(QWidget):
         self.panel = panel
         self._drag = None                # 拖拽状态 dict
         self._scrub = False
+        # v3.4.7：头列眼睛/锁按钮 hover 反馈（"eye"/"lock"，None=无）
+        self._hover_icon = None
+        self._hover_row = None           # (y0, h) hover 所在行
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -429,6 +434,27 @@ class _ClipArea(QWidget):
         """头列 👁 / 🔒 命中矩形。"""
         x = NAME_W - 2 * EYE_W
         return (QRectF(x, y0, EYE_W, h), QRectF(x + EYE_W, y0, EYE_W, h))
+
+    def _hover_at(self, x, y):
+        """悬停点落在哪个头列按钮上 -> ("eye"/"lock", (y0,h))；无则 (None,None)。"""
+        if x >= NAME_W:
+            return None, None
+        row = self._row_at(y)
+        if row is None:
+            return None, None
+        tr, y0, h = row
+        r_eye, r_lock = self._icon_rects(y0, h)
+        if r_eye.contains(QPointF(x, y)):
+            return "eye", (y0, h)
+        if r_lock.contains(QPointF(x, y)):
+            return "lock", (y0, h)
+        return None, None
+
+    def leaveEvent(self, ev):
+        self._hover_icon = None
+        self._hover_row = None
+        self.update()
+        super().leaveEvent(ev)
 
     def _hit_clip(self, x, y):
         """命中 clip（不筛 hidden/locked）-> (track, clip, zone) 或 None。"""
@@ -545,6 +571,12 @@ class _ClipArea(QWidget):
             self.panel.seeked.emit(self._scrub_t(x))
             self.update()
             return
+        # v3.4.7：头列按钮 hover 反馈（眼睛/锁高亮）
+        key, row = self._hover_at(x, y)
+        if key != self._hover_icon or row != self._hover_row:
+            self._hover_icon = key
+            self._hover_row = row
+            self.update()
         # 悬停光标
         hit = self._hit_clip(x, y)
         if hit is not None and not hit[0].get("hidden") and not hit[0].get("locked") \
@@ -821,10 +853,75 @@ class _ClipArea(QWidget):
         p.drawText(QRectF(8, y0, NAME_W - 58, rh), Qt.AlignVCenter | Qt.AlignLeft,
                    fm2.elidedText(label, Qt.ElideRight, NAME_W - 62))
         r_eye, r_lock = self._icon_rects(y0, rh)
-        fi = QFont()
-        fi.setPixelSize(max(10, int(round(12 * s))))
-        p.setFont(fi)
-        p.setPen(QPen(QColor(242, 246, 250, 255 if not hidden else 90)))
-        p.drawText(r_eye, Qt.AlignCenter, "👁")
-        p.setPen(QPen(QColor(242, 246, 250, 255 if tr.get("locked") else 90)))
-        p.drawText(r_lock, Qt.AlignCenter, "🔒")
+        # v3.4.7：emoji（👁🔒）换成矢量自绘——不依赖系统 emoji 字体，
+        # 状态对比更清晰；hover 行画淡色圆角底 + 图标提亮。
+        hover_key, hover_row = self._hover_icon, self._hover_row
+        on_row = (hover_row == (y0, rh))
+        # 眼睛 active = 轨道可见（hidden=False）——睁眼亮态；隐藏时暗态+红斜杠
+        self._draw_track_icon(p, r_eye, "eye", not hidden,
+                              "eye" if on_row else None)
+        self._draw_track_icon(p, r_lock, "lock", bool(tr.get("locked")),
+                              "lock" if on_row else None)
+
+    def _draw_track_icon(self, p, rect, key, active, hover):
+        """轨道头按钮矢量图标。active=该状态生效；hover="eye"/"lock" 时画底。"""
+        s = self.panel.ui_scale
+        if hover:
+            p.fillRect(QRectF(rect.x() + 2, rect.y() + 3,
+                              rect.width() - 4, rect.height() - 6),
+                       QColor(255, 255, 255, 36))
+        cx = rect.x() + rect.width() / 2.0
+        cy = rect.y() + rect.height() / 2.0
+        r = 5.5 * s                      # 图标基准半径
+        if key == "eye":
+            # 眼形：两条二次贝塞尔构成的杏仁形 + 实心瞳孔；隐藏态降透明
+            # 并画一条「闭眼」斜杠，与睁眼对比明显（不依赖 emoji 字体）。
+            base = QColor(242, 246, 250)
+            base.setAlpha(235 if active else 120)
+            pen = QPen(base, max(1.2, 1.3 * s))
+            pen.setCapStyle(Qt.RoundCap)
+            pen.setJoinStyle(Qt.RoundJoin)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            w, hh = r * 1.25, r * 0.95
+            eye = QPainterPath()
+            eye.moveTo(cx - w, cy)
+            eye.quadTo(cx, cy - hh * 2.0, cx + w, cy)
+            eye.quadTo(cx, cy + hh * 2.0, cx - w, cy)
+            p.drawPath(eye)
+            if active:
+                p.setBrush(QBrush(base))
+                p.drawEllipse(QPointF(cx, cy), r * 0.42, r * 0.42)
+            else:
+                cut = QPen(QColor(255, 120, 120, 220), max(1.2, 1.3 * s))
+                cut.setCapStyle(Qt.RoundCap)
+                p.setPen(cut)
+                p.drawLine(QPointF(cx - w * 0.85, cy + r * 0.75),
+                           QPointF(cx + w * 0.85, cy - r * 0.75))
+        else:
+            # 锁：上半圆锁梁 + 圆角锁体；锁定态金色，未锁灰且锁体开口
+            # （描边不填充），一眼区分。
+            body_w = r * 1.5
+            body_h = r * 1.15
+            body_y = cy - r * 0.15
+            col = QColor(255, 209, 102) if active else QColor(242, 246, 250)
+            col.setAlpha(235 if active else 130)
+            pen = QPen(col, max(1.2, 1.3 * s))
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            shank_w = r * 0.85
+            shank = QRectF(cx - shank_w / 2.0, cy - r * 1.35,
+                           shank_w, r * 1.35)
+            p.drawArc(shank, 0, 180 * 16)
+            body = QRectF(cx - body_w / 2.0, body_y, body_w, body_h)
+            path = QPainterPath()
+            path.addRoundedRect(body, 2.2 * s, 2.2 * s)
+            if active:
+                p.setBrush(QBrush(QColor(255, 209, 102, 60)))
+                p.drawPath(path)
+                keyhole = QPointF(cx, body_y + body_h * 0.5)
+                p.setBrush(QBrush(col))
+                p.drawEllipse(keyhole, r * 0.16, r * 0.16)
+            else:
+                p.drawPath(path)

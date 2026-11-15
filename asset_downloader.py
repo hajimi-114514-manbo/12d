@@ -751,7 +751,13 @@ class AssetDownloadThread(QThread):
         self.finished_ok.emit(target + note)
 
 class AssetDownloadDialog(QDialog):
-    """下载进度对话框：进度条 + 速度 + 取消。"""
+    """下载进度对话框：进度条 + 速度 + 取消。
+
+    v3.4.7 修颜色问题：裸 QDialog 不吃 qfluentwidgets 主题，深色模式下
+    是系统默认浅底，而 BodyLabel/CaptionLabel/ProgressBar 深色主题下
+    全是浅色文字/浅色轨道 —— 白底白字完全看不清。给对话框与内部
+    QDialog 级控件统一铺工作台深色底（#20232a），文字恢复可读。
+    """
 
     def __init__(self, asset, base_dir, parent=None):
         super().__init__(parent)
@@ -761,6 +767,8 @@ class AssetDownloadDialog(QDialog):
         self.setWindowTitle("下载 %s" % asset.get("name", asset.get("id", "")))
         self.setFixedSize(460, 180)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setStyleSheet(
+            "QDialog{background:#20232a;}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 16)
         lay.setSpacing(10)

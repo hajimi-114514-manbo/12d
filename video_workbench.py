@@ -284,6 +284,13 @@ class VideoWorkbench(QWidget):
         self.asset_scroll = ScrollArea(left)
         self.asset_scroll.setWidgetResizable(True)
         self.asset_host = QWidget()
+        # v3.4.7：viewport 默认浅底，深色面板中间露一整块白（属性面板
+        # pscroll 修过同款问题，素材库这里漏了）；host 用 objectName 限定，
+        # 不用通配选择器，避免盖掉 CardWidget 卡片自绘底色。
+        self.asset_host.setObjectName("assetHost")
+        self.asset_scroll.setStyleSheet(
+            "QScrollArea::viewport{background:#20232a;}"
+            "QWidget#assetHost{background:#20232a;}")
         self.asset_flow = FlowLayout(self.asset_host, needAni=False)
         self.asset_flow.setContentsMargins(0, 0, 0, 0)
         self.asset_scroll.setWidget(self.asset_host)
