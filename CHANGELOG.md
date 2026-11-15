@@ -5,6 +5,45 @@
 
 ---
 
+## v3.4.9（2026-11-15 12:0x）WebGAL 播放卡顿根治：导出包动作池按引用瘦身，请求数 2722→36
+
+> 用户报障："webgal播放太卡了"（场景切换卡、人物重新加载卡）。
+
+### 根因（CDP Network 实测，timing_probe/mtn_detail）
+引擎（pixi-live2d-display）加载模型时会**全量预载 model.json 里定义的
+全部动作/表情文件**——而 v3 动作池架构把 664 条动作 + 232 条表情全写进
+每个 model.json，于是：
+- 每个模型加载 = **~897 个 HTTP 请求**（664 mtn + 233 exp，全唯一无缓存）
+- 三人同屏 + 场景切换重载 = **2688 个请求**；Chrome 6 并发排队，长尾
+  单请求 4101ms，人物上屏要等十几秒，场景切换再卡一遍
+- 请求全部由 model.json 的 file 字段驱动（定义瘦身即可根治）
+
+### 修法（webgal_export.py，v3.4.9）
+1. 新增 `_collect_puppet_motion_refs(proj)`：预扫工程收集每个 Cubism2
+   模型**实际引用**的动作/表情（puppet clip 的 motion/expression +
+   台词级动作规则 10 全量并入每个模型，保守并集）。
+2. `_copy_cubism2_model` 增加瘦身分支（used=None 保持旧行为逐字节兼容）：
+   - 角色根全树拷但**排除 .mtn_exp 动作池**（.chara/多服装结构保持）
+   - model.json 的 motions/expressions 重写为「剧本引用 + idle01/default
+     保底」子集（`_slim_cubism2_json`，两种 json 形态都处理）
+   - 池文件按瘦身后定义逐文件拷贝（防路径逃逸校验）
+3. 素材库本体**不动**（全池照旧，Studio 编辑全量可用）；只有导出包瘦身。
+
+### 实测效果（同一工程，timing_probe 前后对比）
+| 指标 | 瘦身前 | 瘦身后 |
+|---|---|---|
+| 总请求数 | 2722 | **36** |
+| mtn 动作请求 | 2688 | **12** |
+| 最慢单请求 | 4101 ms | **28 ms** |
+| 池文件/模型 | ~897 | 6 |
+
+### 附带
+- `game_server.exe` 启动器 / bat 未动；首次加载即快，无需缓存头补丁。
+- blackscreen_test 环境性失败（glob 用户目录剧本文件已移走），与本次
+  无关；export 154/0、flicker、import、integration 全绿。
+
+---
+
 ## v3.4.8（2026-11-15 10:0x）WebGAL 滤镜实测可用：推翻「不保证支持」旧结论，文档解禁
 
 > 用户问："目前webgal滤镜可以做了吗"。v3.4.6 收录特效表时标注

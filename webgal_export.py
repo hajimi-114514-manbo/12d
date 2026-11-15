@@ -417,20 +417,211 @@ def _match_motion_name(want, names):
     return None
 
 
-def _copy_cubism2_model(model_dir, figure_root, stats, warn):
-    """把 Cubism2 角色根整棵拷进 figure/，返回目标子目录名（相对 figure/）。
+def _collect_puppet_motion_refs(proj):
+    """预扫工程：收集 Cubism2 puppet clip 实际引用的 motion/expression。
 
-    - 角色根含 model.json 服装目录 + .chara/ + .mtn_exp/（隐藏目录
-      shutil 默认会拷，dirs_exist_ok=True 幂等去重：同角色根多服装只拷一次）
-    - 返回形如 "anon/school_summer-2023"（start.txt 里
-      changeFigure:anon/school_summer-2023/model.json 引用）"""
+    返回 {model_dir 绝对规范路径: {"motions": set(原始值), "expressions": set}}。
+    v3.4.9 性能修复的输入：引擎加载模型会**全量预载 model.json 里定义的
+    全部动作/表情文件**（664 动作池 = 每模型 ~900 个 HTTP 请求，实测
+    timing_probe），场景切换重载时再来一遍 —— 导出时按剧本引用瘦身
+    model.json + 按需拷池文件，把请求量从 ~900/模型 降到个位数。
+    """
+    refs = {}
+    if not isinstance(proj, dict):
+        return refs
+    for tr in proj.get("tracks") or []:
+        if not isinstance(tr, dict):
+            continue
+        for c in tr.get("clips") or []:
+            if not isinstance(c, dict):
+                continue
+            src = c.get("source") or {}
+            if src.get("kind") != "puppet":
+                continue
+            path = str(src.get("path") or "")
+            if not path or not _is_cubism2_dir(path):
+                continue
+            key = os.path.normpath(os.path.abspath(path))
+            slot = refs.setdefault(key, {"motions": set(),
+                                         "expressions": set()})
+            if c.get("motion"):
+                slot["motions"].add(str(c["motion"]))
+            if c.get("expression"):
+                slot["expressions"].add(str(c["expression"]))
+    # 台词级动作（规则 10：dialogue 项自带 motion/expression，导出时按
+    # fig_intervals 落到对应立绘）——who->模型映射是动态的，保守做法：
+    # 把全部台词动作并入**每个** Cubism2 模型的引用集（通常几十条，
+    # 仍远小于全池 897；瘦身收益不受实质影响）。
+    dlg_m, dlg_e = set(), set()
+    for d in proj.get("dialogue") or []:
+        if isinstance(d, dict):
+            if d.get("motion"):
+                dlg_m.add(str(d["motion"]))
+            if d.get("expression"):
+                dlg_e.add(str(d["expression"]))
+    if dlg_m or dlg_e:
+        for slot in refs.values():
+            slot["motions"] |= dlg_m
+            slot["expressions"] |= dlg_e
+    return refs
+
+
+def _slim_cubism2_json(obj, used, warn, tag):
+    """按 used（原始动作/表情值集合）瘦身 Cubism2 model.json 定义。
+
+    - motions：标准形态 FileReferences.Motions 或顶层扁平 motions，
+      键名表经 _match_motion_name 三级匹配选中真实键；保底 idle01
+      （末段前缀匹配）防止剧本漏写 -motion 时引擎无动作可播。
+    - expressions：dict / list-of-{name} 两种形态同法；保底 default。
+    - 返回 True=有瘦身（写入新 json）；False=结构不认识，保持原样。
+    选中键的**文件拷贝**由 _copy_cubism2_model 按重写后的定义执行。"""
+    try:
+        fr = obj.get("FileReferences") if isinstance(obj, dict) else None
+        mo = (fr or {}).get("Motions") if fr else obj.get("motions")
+        mo_is_fr = bool(fr and isinstance(fr.get("Motions"), dict))
+        if not isinstance(mo, dict) or not mo:
+            return False
+        keys = [str(k) for k in mo.keys()]
+
+        def _pick(raws, fallback):
+            sel = set()
+            for raw in raws or ():
+                k = _match_motion_name(raw, keys)
+                if k:
+                    sel.add(k)
+            if not sel and fallback:          # 保底：idle01 / default
+                k = _match_motion_name(fallback, keys)
+                if k:
+                    sel.add(k)
+            return sel
+
+        sel_m = _pick(used.get("motions"), "idle01")
+        new_mo = {k: mo[k] for k in mo.keys() if k in sel_m}
+        if not new_mo:                        # 一个都没选中：保底首个键
+            first = next(iter(mo.keys()))
+            new_mo = {first: mo[first]}
+        if mo_is_fr:
+            fr["Motions"] = new_mo
+        else:
+            obj["motions"] = new_mo
+
+        # expressions：dict 或 list-of-{name} 两种形态
+        ex = (fr or {}).get("Expressions") if fr else obj.get("expressions")
+        ex_is_fr = bool(fr and "Expressions" in fr)
+        if isinstance(ex, dict) and ex:
+            ekeys = [str(k) for k in ex.keys()]
+            sel_e = _pick(used.get("expressions"), "default")
+            new_ex = {k: ex[k] for k in ex.keys() if k in sel_e}
+            if ex_is_fr:
+                fr["Expressions"] = new_ex
+            else:
+                obj["expressions"] = new_ex
+        elif isinstance(ex, list) and ex:
+            names = [str(e.get("name")) for e in ex
+                     if isinstance(e, dict) and e.get("name")]
+            sel_e = _pick(used.get("expressions"), "default")
+            new_ex = [e for e in ex if isinstance(e, dict)
+                      and str(e.get("name")) in sel_e]
+            if ex_is_fr:
+                fr["Expressions"] = new_ex
+            else:
+                obj["expressions"] = new_ex
+        return True
+    except Exception as e:
+        warn.append("Cubism2 model.json 瘦身失败 %s: %r（保持原样）" % (tag, e))
+        return False
+
+
+def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None):
+    """把 Cubism2 角色根拷进 figure/，返回目标子目录名（相对 figure/）。
+
+    v3.4.9 两种模式：
+    - used=None（默认，向后兼容）：整棵 copytree（含 .mtn_exp 全量池），
+      旧行为逐字节不变——Studio 预览/未预扫路径用。
+    - used=引用集合（export_game 预扫传入）：**瘦身导出**——
+      只拷服装目录（model.json + .chara）+ 按引用逐文件拷 .mtn_exp，
+      model.json 的 motions/expressions 重写为选中子集。
+      引擎加载模型会全量预载定义里全部动作/表情文件（每模型 ~900 请求），
+      瘦身后每模型降到个位数请求，人物加载/场景切换不再卡。
+
+    返回形如 "anon/school_summer-2023"（start.txt 里
+    changeFigure:anon/school_summer-2023/model.json 引用）"""
     role_root = _cubism2_role_root(model_dir)
     rel = os.path.relpath(model_dir, role_root).replace("\\", "/")
     rel_root = os.path.relpath(role_root,
                                os.path.dirname(role_root)).replace("\\", "/")
     dst_root = os.path.join(figure_root, safe_name(rel_root) or "model")
     try:
-        shutil.copytree(role_root, dst_root, dirs_exist_ok=True)
+        if used is None:
+            shutil.copytree(role_root, dst_root, dirs_exist_ok=True)
+        else:
+            # ---- 瘦身导出 ----
+            # 1) 角色根全树拷，**排除 .mtn_exp 动作池**（池按需拷）——
+            #    .chara / 多服装目录等共享文件保持原结构（.chara 可能在
+            #    角色根，也可能在服装目录内，两种真实形态都覆盖）
+            shutil.copytree(role_root, dst_root,
+                            ignore=shutil.ignore_patterns(_C2_MTN_EXP),
+                            dirs_exist_ok=True)
+            dst_costume = os.path.join(dst_root, *(
+                safe_name(p) for p in rel.split("/") if p not in (".", ""))) \
+                if rel not in (".", "") else dst_root
+            # 2) 瘦身 model.json（读源 -> 改写 -> 写目标）
+            src_json = os.path.join(model_dir, "model.json")
+            try:
+                obj = json.load(open(src_json, "r", encoding="utf-8"))
+            except Exception as e:
+                warn.append("Cubism2 model.json 读取失败 %s: %r" %
+                            (src_json, e))
+                obj = None
+            if isinstance(obj, dict):
+                if _slim_cubism2_json(obj, used or {}, warn,
+                                      os.path.relpath(src_json, role_root)):
+                    with open(os.path.join(dst_costume, "model.json"),
+                              "w", encoding="utf-8") as f:
+                        json.dump(obj, f, ensure_ascii=False, indent=2)
+                    stats["slimmed_models"] = stats.get(
+                        "slimmed_models", 0) + 1
+            # 3) 池文件按需拷：遍历**瘦身后的** motions/expressions 定义
+            #    （此时 obj 已是子集；未瘦身则保持整树兜底拷）
+            if isinstance(obj, dict):
+                fr = obj.get("FileReferences") or {}
+                def _iter_defs():
+                    mo_d = fr.get("Motions") or obj.get("motions") or {}
+                    if isinstance(mo_d, dict):
+                        for arr in mo_d.values():
+                            for it in (arr or []):
+                                yield it.get("file")
+                    ex_d = fr.get("Expressions") or obj.get(
+                        "expressions") or {}
+                    if isinstance(ex_d, dict):
+                        for it in ex_d.values():
+                            yield it.get("file")
+                    elif isinstance(ex_d, list):
+                        for it in ex_d:
+                            if isinstance(it, dict):
+                                yield it.get("file")
+                defs = [f_ for f_ in _iter_defs() if f_]
+                n_pool = 0
+                for f_ in defs:
+                    # file 相对**服装目录**（如 ../.mtn_exp/motions/x.mtn）
+                    src_f = os.path.normpath(os.path.join(model_dir, f_))
+                    dst_f = os.path.normpath(os.path.join(dst_costume, f_))
+                    # 防路径逃逸：源必须在角色根内，目标必须在 dst_root 内
+                    try:
+                        if not os.path.abspath(src_f).startswith(
+                                os.path.abspath(role_root) + os.sep):
+                            continue
+                        if not os.path.abspath(dst_f).startswith(
+                                os.path.abspath(dst_root) + os.sep):
+                            continue
+                        if os.path.isfile(src_f):
+                            os.makedirs(os.path.dirname(dst_f),
+                                        exist_ok=True)
+                            shutil.copy2(src_f, dst_f)
+                            n_pool += 1
+                    except OSError as e:
+                        warn.append("池文件拷贝失败 %s: %r" % (f_, e))
+                stats["pool_files"] = stats.get("pool_files", 0) + n_pool
         stats["files"] += 1
     except Exception as e:
         warn.append("Cubism2 模型目录拷贝失败 %s: %r" % (role_root, e))
@@ -1045,6 +1236,10 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 "figure": os.path.join(game_root, "figure"),
                 "bgm": os.path.join(game_root, "bgm"),
                 "video": os.path.join(game_root, "video")}
+    # v3.4.9 性能修复：预扫 Cubism2 puppet clip 实际引用的动作/表情，
+    # 导出时按引用瘦身 model.json + 按需拷池文件（引擎会全量预载定义，
+    # 664 动作池 = 每模型 ~900 请求，场景切换重载再一遍 —— 播放卡顿根源）。
+    puppet_refs = _collect_puppet_motion_refs(proj)
 
     def copy_in(cat, src_path, out_name):
         dst = os.path.join(copy_map[cat], out_name)
@@ -1155,8 +1350,10 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 # 直接可玩——不写 Cubism导入指引.txt、不插 .moc3 注释。
                 if _is_cubism2_dir(path):
                     slot = _slot(lay.get("x"))
+                    used = puppet_refs.get(
+                        os.path.normpath(os.path.abspath(path)))
                     rel_ref = _copy_cubism2_model(path, copy_map["figure"],
-                                                  stats, warn)
+                                                  stats, warn, used=used)
                     if rel_ref:
                         stats["model_dirs"] = stats.get("model_dirs", 0) + 1
                         mdir = os.path.join(path, "model.json")
