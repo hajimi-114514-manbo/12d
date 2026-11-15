@@ -558,6 +558,20 @@ class VideoWorkbench(QWidget):
         QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.undo)
         QShortcut(QKeySequence("Ctrl+Y"), self, activated=self.redo)
         QShortcut(QKeySequence(Qt.Key_Space), self, activated=self.toggle_play)
+        # v3.5.2：时间轴键盘导航（之前只有空格/Del，左右全靠鼠标拖）
+        # 左右 = ±1 帧（1/fps）；Shift = ±1 秒；Home/End = 首尾。
+        # QShortcut 是 WindowShortcut：焦点在输入框里时 Qt 先发
+        # ShortcutOverride 给输入框（它 accept 自己要的键），不会抢光标键。
+        for keys, fn in (
+                ("Left", lambda: self._seek_relative(-1)),
+                ("Right", lambda: self._seek_relative(1)),
+                ("Shift+Left", lambda: self._seek_relative(-1.0, True)),
+                ("Shift+Right", lambda: self._seek_relative(1.0, True)),
+                ("Home", lambda: self.seek(0.0)),
+                ("End", lambda: self.seek(V.project_duration(
+                    self.proj, getattr(self, "_cur_aid", None)))),
+        ):
+            QShortcut(QKeySequence(keys), self, activated=fn)
 
         self._apply_project(None)
         self._seed_history()
@@ -1589,6 +1603,15 @@ class VideoWorkbench(QWidget):
         self.timeline.set_time(self._t)
         self.render_frame(self._t)
         self._update_transport()
+
+    def _seek_relative(self, direction, seconds=False):
+        """v3.5.2：←/→ 逐帧走，Shift+←/→ ±1 秒，Home/End 由 seek() 直达。
+
+        direction ±1；seconds=True 时步长 1 秒，否则 1 帧（1/fps）。
+        播放中同样生效（时间轴/预览跟着跳）。"""
+        step = 1.0 if seconds else 1.0 / max(1.0, float(
+            self.proj.get("fps") or 30.0))
+        self.seek(self._t + direction * step)
 
     def _advance(self):
         if self._tick_busy:

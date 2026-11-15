@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """clip 多轨时间轴面板（v3.0.0 剪辑工作台第一阶段）。
 
 数据模型唯一事实源是 video_model.py：面板**从不直接改 clip 数据**，
@@ -44,7 +44,7 @@ from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QSize, Signal
 from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QPainterPath,
                            QFont)
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                               QSizePolicy, QAbstractScrollArea)
+                               QSizePolicy, QAbstractScrollArea, QScrollBar)
 
 import video_model as VM
 import timeline_panel as TP          # 复用配色 / _nice_step，无循环依赖
@@ -76,6 +76,7 @@ CLIP_COLORS = {
 HEAD_H = 34                 # 工具条高度
 RULER_H = 22                # 刻度尺高度
 NAME_W = 150                # 左侧轨道头列宽（固定）
+HSCROLL_H = 12              # v3.5.2：水平滚动条高度（内容超视口时出现）
 ROW_VIDEO = 44              # 视频轨行高基准（×ui_scale）
 ROW_AUDIO = 26              # 音频轨行高基准（×ui_scale）
 EDGE_GRAB = 6               # clip 两端 trim 命中宽度（px，×ui_scale）
@@ -85,6 +86,7 @@ PPS_MIN = 0.5
 PPS_MAX = 400.0
 WHEEL_UP_FACTOR = 1.25
 WHEEL_DOWN_FACTOR = 0.8
+WHEEL_SCROLL_FACTOR = 3.0      # v3.5.2：无 Ctrl 滚轮的横向滚动速度（像素/格）
 DRAG_THRESHOLD = 2          # 超过 2px 才算拖动（区分点选）
 SNAP_EPS = VM.SNAP_STEP * 3     # 与 video_model.snap_time 默认 eps 一致
 
@@ -172,9 +174,19 @@ class ClipTimelinePanel(QWidget):
         hl.addWidget(self.lbl_pps)
 
         hl.addStretch(1)
+        # v3.5.2：hint 文案**不能长**——它是最小宽度的隐形推手（实测：
+        # 加长到 80 字后 sizeHint 宽从 1100 涨到 1506，把整个窗口撑宽，
+        # 连带 clip_timeline_test 的 grab 宽度断言红）。快捷键明细放
+        # tooltip，标题行只留最要紧的几个。
         self.hint = CaptionLabel(
-            "拖播放头 scrub ｜ 拖 clip 移动 ｜ 拖两端 trim ｜ Ctrl+滚轮缩放 ｜ Del 删除", head)
+            "拖播放头 ｜ 拖 clip 移动 ｜ Ctrl+滚轮缩放 ｜ ←→ 帧 ｜ Del 删除",
+            head)
         self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
+        self.hint.setToolTip(
+            "拖播放头 scrub；拖 clip 移动；拖两端 trim；Ctrl+滚轮缩放；\n"
+            "无 Ctrl 滚轮 / 底部滑块 = 横向滚动（内容超视口时出现）；\n"
+            "← → = 前后 1 帧；Shift+← → = 前后 1 秒；Home / End = 首尾；\n"
+            "Del / Backspace = 删除选中 clip；空格 = 播放/暂停。")
         hl.addWidget(self.hint)
 
         lay.addWidget(head)
@@ -182,6 +194,21 @@ class ClipTimelinePanel(QWidget):
         # ---- 自绘时间区 ----
         self.area = _ClipArea(self)
         lay.addWidget(self.area, 1)
+
+        # ---- v3.5.2：水平滚动条（滑块）----
+        # 之前注释写"横向滚动由外层负责"，但工作台里时间轴是直接放在
+        # QSplitter 上的，**根本没有外层滚动容器** —— 内容超过视口时
+        # 既没有滑块可拖，无 Ctrl 滚轮也滚不动（实测 bug）。
+        # 现在面板自带一条水平滚动条：内容宽超过视口宽时出现，
+        # 值域 0..(content_width - viewport)，单位像素。
+        from PySide6.QtWidgets import QStyle, QStyleFactory
+        self.hbar = QScrollBar(Qt.Horizontal, self)
+        self.hbar.setStyle(QStyleFactory.create("Fusion"))
+        self.hbar.setFixedHeight(HSCROLL_H)
+        self.hbar.setRange(0, 0)            # 内容不足时整条隐藏/禁用
+        self.hbar.valueChanged.connect(self._on_hscroll)
+        lay.addWidget(self.hbar)
+        self._hbar_busy = False             # 防递归（程序设置时同步回来）
 
         head.setFixedHeight(HEAD_H)
         self._update_height()
@@ -224,6 +251,7 @@ class ClipTimelinePanel(QWidget):
 
     def refresh(self):
         self._update_height()
+        self._sync_hbar()           # v3.5.2：内容/视口变化后重算滑块
         self._sync_buttons()
         self.area.update()
 
@@ -232,6 +260,10 @@ class ClipTimelinePanel(QWidget):
         if self.follow_playhead:
             self.maybe_scroll_to(self._t)
         self.area.update()          # 只 update，量小
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._sync_hbar()           # 视口宽变了，滑块范围/可见性要重算
 
     def current_time(self):
         return float(self._t)
@@ -247,6 +279,7 @@ class ClipTimelinePanel(QWidget):
         self.pps = v
         self.lbl_pps.setText("%.0f px/s" % v)
         self.scale_changed.emit(v)
+        self._sync_hbar()           # 缩放后内容宽变了，滑块跟着重算
         self.area.update()
 
     def set_ui_scale(self, s):
@@ -263,7 +296,9 @@ class ClipTimelinePanel(QWidget):
         # 让 splitter 拖小高度后内容自适应，而不是钉死把手。
         tracks = self._tracks()
         if len(tracks) > 1:
-            avail = self.height() - HEAD_H - self.scaled_ruler_h() - 4
+            # v3.5.2：可用高度扣掉水平滚动条（12px），别把它挤进行里
+            avail = (self.height() - HEAD_H - self.scaled_ruler_h()
+                     - HSCROLL_H - 4)
             total = sum(self._row_h_default(t) for t in tracks)
             if avail > 0 and total > avail:
                 h = max(14, int(round(h * avail / total)))
@@ -292,7 +327,7 @@ class ClipTimelinePanel(QWidget):
 
     def ideal_height(self):
         """全部行按默认（未压缩）行高铺开的理想高度——只作 sizeHint。"""
-        return (HEAD_H + self.scaled_ruler_h()
+        return (HEAD_H + self.scaled_ruler_h() + HSCROLL_H
                 + sum(self._row_h_default(t)
                       for t in self._tracks()) + 4)
 
@@ -301,9 +336,10 @@ class ClipTimelinePanel(QWidget):
 
     def _update_height(self):
         # v3.2.1：高度交给 splitter/用户拖。minimumHeight 只保证
-        # 「工具条+刻度尺+一行(14px)」可读；不再强制 resize 回内容高度
-        # （旧逻辑把 splitter 把手钉死，时间轴完全拖不动）。
-        self.setMinimumHeight(HEAD_H + self.scaled_ruler_h() + 14 + 4)
+        # 「工具条+刻度尺+滚动条+一行(14px)」可读；不再强制 resize 回
+        # 内容高度（旧逻辑把 splitter 把手钉死，时间轴完全拖不动）。
+        self.setMinimumHeight(HEAD_H + self.scaled_ruler_h()
+                              + HSCROLL_H + 14 + 4)
 
     def t_to_x(self, t):
         return NAME_W + (float(t) - self.view_t0) * self.pps
@@ -321,7 +357,7 @@ class ClipTimelinePanel(QWidget):
         return max(0.5, (max(1, self.area.width()) - NAME_W) / self.pps)
 
     def scroll_host(self):
-        """最近的滚动宿主（横向滚动由外层负责，这里只做跟随）。"""
+        """兼容保留：横向滚动现在由面板自带的 hbar 负责。"""
         p = self.parentWidget()
         while p is not None:
             if isinstance(p, QAbstractScrollArea):
@@ -329,20 +365,88 @@ class ClipTimelinePanel(QWidget):
             p = p.parentWidget()
         return None
 
+    # ================= v3.5.2：水平滚动条（滑块） =================
+    def _viewport_w(self):
+        """视口宽 = 面板宽。未布局（宽度 0/未 show）时退回 sizeHint 宽度，
+        否则 hbar 的 span 恒为 0（脱机测试/刚构造时滚不动）。"""
+        w = self.width()
+        if w < NAME_W + 40:
+            w = max(int(self.sizeHint().width()), NAME_W + 600)
+        return w
+
+    def _sync_hbar(self):
+        """把 view_t0 / 内容宽同步到滚动条（程序设置，不触发回环）。"""
+        bar = getattr(self, "hbar", None)
+        if bar is None:
+            return
+        cw = self.content_width()
+        vw = self._viewport_w()
+        span = max(0, cw - vw)
+        self._hbar_busy = True
+        try:
+            bar.setRange(0, span)
+            bar.setPageStep(max(1, vw * 3 // 4))
+            bar.setSingleStep(max(1, int(self.pps)))     # 一秒一格
+            bar.setValue(int(round(self.view_t0 * self.pps)))
+            bar.setVisible(span > 0)
+        finally:
+            self._hbar_busy = False
+
+    def _on_hscroll(self, v):
+        """拖滑块 -> view_t0 跟着走。"""
+        if getattr(self, "_hbar_busy", False):
+            return
+        self.view_t0 = max(0.0, v / max(1e-9, self.pps))
+        self.area.update()
+
+    def _hscroll_px(self, dx):
+        """滚轮/外部的像素级横向滚动（dx>0 右移）。带值域钳位。"""
+        bar = getattr(self, "hbar", None)
+        if bar is None:
+            return
+        bar.setValue(int(_in(bar.value() + int(dx),
+                             bar.minimum(), bar.maximum())))
+
     def maybe_scroll_to(self, t):
-        """把时刻 t 滚进可视区（外层可调；follow 开关打开时 set_time 自动调）。"""
+        """把时刻 t 滚进可视区（follow 模式下 set_time 自动调）。
+
+        v3.5.2：走自带 hbar。注意**先算目标 view_t0 再套到滑块**，
+        不要反过来用 bar.value() 反推 —— 未布局时 width 为 0，
+        hbar 的 max 会被算成 0，反推会把 view_t0 截回原值（滚不动）。"""
         t = max(0.0, float(t))
+        bar = getattr(self, "hbar", None)
+        if bar is not None:
+            vw = self._viewport_w()
+            # 可用内容宽 = 面板宽 - 左侧轨道头列（NAME_W）。忘了减它会让
+            # 播放头停在视口右侧外（实测：x=1210 > 宽 1100）。
+            lane = max(1.0, vw - NAME_W)
+            x = self.t_to_x(t)                 # 屏坐标（已含 view_t0）
+            new_t0 = self.view_t0
+            if x > vw - 40:
+                new_t0 = max(0.0, t - (lane - 40) / self.pps)
+            elif x < NAME_W + 40:
+                new_t0 = max(0.0, t - 40 / self.pps)
+            # 不越内容末尾（避免滚到空白区）
+            max_t0 = max(0.0, (self.content_width() - vw) / self.pps)
+            new_t0 = min(new_t0, max_t0)
+            if abs(new_t0 - self.view_t0) < 1e-9:
+                return
+            self.view_t0 = new_t0
+            self._sync_hbar()                  # 滑块跟上（含值域重算）
+            self.area.update()
+            return
+        # 兜底：无 hbar 的旧形态（外部滚动宿主）
         host = self.scroll_host()
         win = self.zoom_range_seconds()
         edge = win * 0.1
         if host is not None and host.width() > 0:
-            bar = host.horizontalScrollBar()
-            if bar is not None:
-                x = self.t_to_x(t)            # 面板坐标 == 内容坐标
-                if x > bar.value() + host.viewport().width() - 40:
-                    bar.setValue(int(x - host.viewport().width() + 40))
-                elif x < bar.value() + 40:
-                    bar.setValue(max(0, int(x - 40)))
+            hb = host.horizontalScrollBar()
+            if hb is not None:
+                x = self.t_to_x(t)
+                if x > hb.value() + host.viewport().width() - 40:
+                    hb.setValue(int(x - host.viewport().width() + 40))
+                elif x < hb.value() + 40:
+                    hb.setValue(max(0, int(x - 40)))
                 return
         if t > self.view_t0 + win - edge:
             self.view_t0 = max(0.0, t - win + edge)
@@ -578,6 +682,20 @@ class _ClipArea(QWidget):
         self.panel.seeked.emit(self._scrub_t(x))
         self.panel.area.update()
 
+    def _edge_autoscroll(self, x):
+        """v3.5.2：拖拽/scrub 中光标贴左右缘 -> 内容自动横向滚。
+
+        返回 True 表示滚了（调用方随后基于新 view_t0 重算时刻）。"""
+        w = self.width()
+        edge = 24
+        if x >= w - edge:
+            self.panel._hscroll_px(12)
+            return True
+        if x <= NAME_W + edge:
+            self.panel._hscroll_px(-12)
+            return True
+        return False
+
     def _scrub_t(self, x):
         return round(max(0.0, self.x_to_t(x)), 2)   # 吸附到 0.01
 
@@ -588,9 +706,13 @@ class _ClipArea(QWidget):
             if not d["moved"] and abs(x - d["x0px"]) > DRAG_THRESHOLD:
                 d["moved"] = True
             if d["moved"]:
+                # v3.5.2：贴边自动横滚（光标在左/右缘时内容跟着走，
+                # 否则拖超出视口的 clip 根本看不见 -> 必须有滑块+自动滚）
+                self._edge_autoscroll(x)
                 self._update_preview(d, x)
             return
         if self._scrub:
+            self._edge_autoscroll(x)
             self.panel.seeked.emit(self._scrub_t(x))
             self.update()
             return
@@ -671,7 +793,9 @@ class _ClipArea(QWidget):
             self.panel.clip_activated.emit(hit[1]["id"])
 
     def wheelEvent(self, ev):
-        """Ctrl+滚轮：以鼠标时刻为锚缩放 pps（0.5~400）。"""
+        """Ctrl+滚轮：以鼠标时刻为锚缩放 pps（0.5~400）。
+        v3.5.2：无 Ctrl = 横向滚动（内容超视口时；以前这句被"交给外层
+        滚动容器"注释接住，但外层根本没有滚动容器 -> 白滚）。"""
         if ev.modifiers() & Qt.ControlModifier:
             dy = ev.angleDelta().y()
             if dy == 0:
@@ -692,7 +816,13 @@ class _ClipArea(QWidget):
             self.panel.refresh()
             ev.accept()
             return
-        ev.ignore()         # 无 Ctrl：交给外层滚动容器
+        # v3.5.2：横向滚动（Shift 竖滚轮 / 触摸板横滚 / 普通竖滚轮都算）
+        dy = ev.angleDelta().y()
+        dx = ev.angleDelta().x()
+        px = int((dx if abs(dx) >= abs(dy) else dy)
+                 * WHEEL_SCROLL_FACTOR * -1)
+        self.panel._hscroll_px(px)
+        ev.accept()
 
     def keyPressEvent(self, ev):
         if ev.key() in (Qt.Key_Delete, Qt.Key_Backspace):
