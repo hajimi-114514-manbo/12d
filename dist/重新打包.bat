@@ -26,9 +26,14 @@ copy /y "%HERE%installer.cs" "%TMPDIR%\" >nul
 rem - inject app version from l2d_rig_qt.py VERSION into the installer title
 "D:\Python312\python.exe" "%HERE%inject_version.py" "%APP%\l2d_rig_qt.py" "%TMPDIR%\installer.cs"
 rem - capture version for the output filename (installer name carries the version)
-for /f "delims=" %%v in ('"%D:\Python312\python.exe%" "%HERE%get_version.py" "%APP%\l2d_rig_qt.py"') do set "VER=%%v"
+rem   NOTE: do NOT use "for /f ... in ('"quoted\path.exe" args')" here. cmd fails
+rem   with "> was unexpected at this time" when the first token inside ('') is a
+rem   quoted path. set /p from a temp file sidesteps the quoting entirely.
+"D:\Python312\python.exe" "%HERE%get_version.py" "%APP%\l2d_rig_qt.py" > "%TMPDIR%\ver.txt" 2>nul
+set "VER="
+set /p VER=<"%TMPDIR%\ver.txt"
 if "%VER%"=="" goto :err
-set "OUTEXE=MuppetStudio-Setup-%VER%.exe"
+set "OUTEXE=MuppetStudio-Setup-v%VER%.exe"
 
 copy /y "%APP%\anon_sewing_icon.ico" "%TMPDIR%\" >nul
 copy /y "%HERE%installer_banner.png" "%TMPDIR%\" >nul
