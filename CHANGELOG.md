@@ -5,6 +5,63 @@
 
 ---
 
+## v3.5.6（2026-11-16 20:4x）滤镜映射立项一期：setTransform 调色参数 → numpy 逐帧
+
+> 用户拍板「启动立项」。目标：视频导出也带滤镜（与引擎 target 语义一致），
+> 补齐「导出 = WebGAL 实际画面」的最后一块。
+
+### 一、数据链（`video_export.py`）
+
+- `_parse_effect_cmd`：解析留档的 setTransform 指令
+  （`{json 参数} -target=bg-main -duration=2000`），坏 JSON/非 setTransform → None
+- `_active_fx`：t 时刻生效状态 {target: params}——引擎语义为同 target
+  后者覆盖、持续到再被覆盖；`-duration` 过渡动画本版忽略（直接切换）
+- 220 预设参数全集合：调色系（brightness/contrast/saturation/gamma/
+  colorRGB/sepia）、光效系（bloom/bloomBlur/bloomBrightness/bloomThreshold）、
+  几何系（blur/pixelSize）、暗角（vignetting/vignettingAlpha）、
+  噪点（noise）、透明度（alpha，fig 层）、特效开关（glitchFilm/rgbFilm/
+  oldFilm）
+
+### 二、分层合成重构（compose_frame）
+
+有活跃滤镜时走**三层画布**：背景层（cover/BG 轨，黑底 RGB）→ `bg-main`
+滤镜 → 立绘层（`FIG-*` 轨，非预乘 RGBA 透明底，`_paste_rgba` alpha-over
+累积）→ `fig-*` 滤镜 → 其余轨按列表序叠上 → 字幕。与引擎 target 语义
+一致（bg-main=背景、fig-*=立绘，互不波及）。**无活跃滤镜 = 旧逐轨叠加
+路径，逐像素零 diff**（老工程/手动工程零影响）。
+
+### 三、滤镜实现（`_fx_chain`，全部 numpy/cv2 逐帧）
+
+pixelSize 马赛克 → glitchFilm 行错位（按帧种子确定性）→ rgbFilm 通道
+分离 → blur 高斯 → sepia → 调色链（gamma→brightness→contrast→colorRGB→
+saturation）→ bloom（亮区提取+模糊+叠加，系数 `_FX_BLOOM_K=1.1` 对照
+引擎校准）→ noise 噪点 → oldFilm 亮度颤动 → vignetting 暗角（按尺寸缓存
+falloff）。fig 层 alpha 参数乘 alpha 通道（灵体化/淡出语义）。
+
+### 四、引擎对照校准（验收）
+
+`fx_compare.py`：临时 runtime 注入测试剧本（changeBg + setTransform 复古
+胶片预设 15）→ 引擎真实截图 → compose_frame 同参数同背景 → 并排 +
+分区数值统计（避开引擎 UI 条）。校准迭代：sepia 全强度混入会吃掉原色相
+（引擎 SepiaFilter 是部分混合）→ 折半；链序调整为 sepia 先于调色；bloom
+系数定 1.1。结果：色调/构图与引擎一致，亮度差 ~10%（引擎闭源 filter
+精确公式属逆向范畴，当前为可交付近似）。
+
+### 五、验证
+
+`fx_map_test.py`（26 项）：cmd 解析/时间线覆盖/各参数语义断言/噪点确定性/
+分层合成互不波及/fig alpha 半透明/无滤镜零 diff。字幕 27 项 + 全量回归
+28 套全绿。
+
+### 六、下一期（未做）
+
+- 引擎截图对照下的逐滤镜精调（当前亮度/饱和与引擎差 ~10%）
+- 其余特效开关：godrayFilm（光束）/reflectionFilm（水波）/bevel（浮雕）/
+  shockwave/shake/dotFilm——出现频率低，出现时按需补
+- `-duration` 过渡动画（滤镜切换的渐变过程）
+
+---
+
 ## v3.5.5（2026-11-16 18:2x）视频字幕对齐 WebGAL 引擎画面 + 背景铺满语义
 
 > 用户拍板：「只需要导出和 WebGAL 实际画面一样即可」+「字幕要和 WebGAL

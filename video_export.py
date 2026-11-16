@@ -10,8 +10,10 @@
 
 约定：第一阶段预览**无声**（QTimer 逐帧合成画面），声音在导出里体现。
 """
+import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -413,6 +415,274 @@ def clear_subtitle_cache():
     _FONT_CACHE.clear()
 
 
+# ---------------- 滤镜映射（v3.5.6 立项：setTransform → numpy 逐帧） ----------------
+# 数据链：webgal_import 把 setTransform 原样留档到 proj["effects"]（[{t, cmd}]），
+# cmd 形如 `setTransform:{...json 参数...} -target=bg-main -duration=2000`。
+# 引擎语义：同 target 的新 setTransform 覆盖旧状态并持续到再被覆盖；
+# -duration 是过渡动画时长（本版忽略过渡，直接切换）。
+# 视频分层合成：背景层（cover/BG 轨，黑底）→ bg-main 滤镜 → 立绘层（FIG-*
+# 轨，透明底）→ fig-* 滤镜 → 其余轨按列表序叠上 → 字幕。
+# 无活跃滤镜时走旧逐轨叠加路径（逐像素零 diff 保证）。
+# 参数语义按常见 pixi filter 近似；验收 = 引擎截图对照（webgal_engine_shot.py）。
+
+_FX_PARSE_CACHE = {}
+
+
+def _parse_effect_cmd(cmd):
+    """`setTransform:{json} -target=xx -duration=N` → (target, params)；非法 None。"""
+    key = str(cmd or "")
+    hit = _FX_PARSE_CACHE.get(key)
+    if hit is not None:
+        return hit if hit != "bad" else None
+    try:
+        head, rest = key.split(":", 1)
+        if head.strip() != "setTransform":
+            _FX_PARSE_CACHE[key] = "bad"
+            return None
+        rest = rest.strip()
+        end = rest.find(" -")
+        js = rest[:end] if end >= 0 else rest.rstrip(";").strip()
+        params = json.loads(js)
+        target = "bg-main"
+        m = re.search(r"-target=(\S+)", rest)
+        if m:
+            target = m.group(1).rstrip(";").strip()
+        if not isinstance(params, dict):
+            raise ValueError
+        out = (target, dict(params))
+    except Exception:
+        _FX_PARSE_CACHE[key] = "bad"
+        return None
+    if len(_FX_PARSE_CACHE) > 512:
+        _FX_PARSE_CACHE.clear()
+    _FX_PARSE_CACHE[key] = out
+    return out
+
+
+def _active_fx(proj, t, aid):
+    """t 时刻生效的滤镜状态 {target: params}（t 之前最后一条同 target 覆盖）。"""
+    out = {}
+    try:
+        eff = proj.get("effects") or []
+    except Exception:
+        return out
+    eps = 1e-6
+    for ef in eff:
+        if not isinstance(ef, dict):
+            continue
+        try:
+            et = float(ef.get("t"))
+        except Exception:
+            continue
+        if et > t + eps:
+            continue
+        parsed = _parse_effect_cmd(ef.get("cmd"))
+        if parsed:
+            out[parsed[0]] = parsed[1]
+    return out
+
+
+def _fx_num(v, d=0.0):
+    if isinstance(v, bool):
+        return d
+    try:
+        return float(v)
+    except Exception:
+        return d
+
+
+def _fx_glitch(rgb, ctx):
+    """glitchFilm：随机行块水平错位（按帧种子确定性）。"""
+    rng = np.random.default_rng(ctx["seed"] ^ 0x5EED)
+    h = rgb.shape[0]
+    for _ in range(6):
+        y = int(rng.integers(0, max(1, h - 16)))
+        hh = int(rng.integers(3, 16))
+        dx = int(rng.integers(-24, 25))
+        if dx:
+            rgb[y:y + hh] = np.roll(rgb[y:y + hh], dx, axis=1)
+
+
+def _fx_rgb_shift(rgb, ctx):
+    """rgbFilm：R/B 通道水平分离（色差重影）。"""
+    off = 2 + int(round(2 * math.sin(ctx["t"] * 9.0)))
+    if off == 0:
+        return
+    rgb[..., 0] = np.roll(rgb[..., 0], off, axis=1)
+    rgb[..., 2] = np.roll(rgb[..., 2], -off, axis=1)
+
+
+def _fx_noise(rgb, ns, ctx):
+    rng = np.random.default_rng(ctx["seed"] ^ 0xC0FFEE)
+    rgb[:] += rng.normal(0.0, 30.0 * ns, rgb.shape).astype(np.float32)
+
+
+def _fx_oldfilm(rgb, ctx):
+    """oldFilm：亮度轻微闪烁（老电影颤动）。噪点由 noise 参数单独控制。"""
+    rgb[:] *= 0.93 + 0.07 * math.sin(ctx["t"] * 12.0)
+
+
+def _fx_sepia(rgb, k):
+    """sepia：向褐色调偏移。引擎（pixi SepiaFilter blend）只偏移一部分原色，
+    全强度混入会吃掉原有色相（对照实测），这里折半再混。"""
+    m = np.array([[0.393, 0.769, 0.189],
+                  [0.349, 0.686, 0.168],
+                  [0.272, 0.534, 0.131]], np.float32)
+    sep = rgb @ m.T * 1.07 + 8.0
+    rgb[:] = rgb * (1 - k * 0.5) + sep * (k * 0.5)
+
+
+_VIGN_CACHE = {}
+
+
+def _fx_vignette(rgb, va):
+    key = (rgb.shape[0], rgb.shape[1], round(va, 3))
+    fall = _VIGN_CACHE.get(key)
+    if fall is None:
+        h, w = rgb.shape[:2]
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        cx, cy = w / 2.0, h / 2.0
+        r = np.sqrt(((xx - cx) / max(1.0, cx)) ** 2 +
+                    ((yy - cy) / max(1.0, cy)) ** 2) / 1.4142
+        fall = 1.0 - min(1.0, max(0.0, va)) * np.clip((r - 0.55) / 0.45, 0, 1)
+        fall = fall.astype(np.float32)[..., None]
+        if len(_VIGN_CACHE) > 16:
+            _VIGN_CACHE.clear()
+        _VIGN_CACHE[key] = fall
+    rgb[:] *= fall
+
+
+def _fx_color(rgb, p):
+    """brightness / contrast / saturation / gamma / colorRGB 调色链。"""
+    ga = _fx_num(p.get("gamma"), 1.0)
+    if ga != 1.0:
+        g = max(0.1, ga)
+        rgb[:] = 255.0 * np.power(np.clip(rgb / 255.0, 0.0, 1.0), g)
+    br = _fx_num(p.get("brightness"), 1.0)
+    if br != 1.0:
+        rgb *= br
+    ct = _fx_num(p.get("contrast"), 1.0)
+    if ct != 1.0:
+        rgb[:] = (rgb - 127.5) * ct + 127.5
+    cr = _fx_num(p.get("colorRed"), 255.0) / 255.0
+    cg = _fx_num(p.get("colorGreen"), 255.0) / 255.0
+    cb = _fx_num(p.get("colorBlue"), 255.0) / 255.0
+    if (cr, cg, cb) != (1.0, 1.0, 1.0):
+        rgb[..., 0] *= cr
+        rgb[..., 1] *= cg
+        rgb[..., 2] *= cb
+    sa = _fx_num(p.get("saturation"), 1.0)
+    if sa != 1.0:
+        gray = rgb @ np.array([0.299, 0.587, 0.114], np.float32)[..., None]
+        rgb[:] = gray * (1 - sa) + rgb * sa
+    np.clip(rgb, 0, 255, out=rgb)
+
+
+_FX_BLOOM_K = 1.1          # bloom 校准系数（对照引擎实测调整）
+
+
+def _fx_bloom(rgb, p):
+    """bloom：亮区提取 → 高斯模糊 → 叠加泛光。"""
+    import cv2
+    b = _fx_num(p.get("bloom"))
+    if b <= 0:
+        return
+    bb = max(1, int(round(_fx_num(p.get("bloomBlur"), 4))))
+    bt = min(0.95, max(0.01, _fx_num(p.get("bloomThreshold"), 0.5)))
+    bri = max(0.2, _fx_num(p.get("bloomBrightness"), 0.5))
+    lum = rgb @ np.array([0.299, 0.587, 0.114], np.float32)[..., None]
+    thr = bt * 255.0
+    mask = np.clip((lum - thr) / max(1.0, 255.0 - thr), 0.0, 1.0)
+    k = bb * 2 + 1
+    glow = cv2.GaussianBlur(rgb * mask, (k, k), 0)
+    rgb[:] += glow * (b * bri * 0.5 * _FX_BLOOM_K)
+    np.clip(rgb, 0, 255, out=rgb)
+
+
+def _fx_chain(rgb, p, ctx):
+    """bg 层滤镜链（rgb: float32 0..255，就地修改）。"""
+    import cv2
+    px = _fx_num(p.get("pixelSize"))
+    if px >= 2:
+        k = int(px)
+        h, w = rgb.shape[:2]
+        small = cv2.resize(rgb, (max(1, w // k), max(1, h // k)),
+                           interpolation=cv2.INTER_LINEAR)
+        rgb[:] = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
+    if p.get("glitchFilm"):
+        _fx_glitch(rgb, ctx)
+    if p.get("rgbFilm"):
+        _fx_rgb_shift(rgb, ctx)
+    b = _fx_num(p.get("blur"))
+    if b > 0:
+        k = max(1, int(round(b))) * 2 + 1
+        rgb[:] = cv2.GaussianBlur(rgb, (k, k), 0)
+    sp = _fx_num(p.get("sepia"))
+    if sp > 0:
+        _fx_sepia(rgb, min(1.0, sp))
+    _fx_color(rgb, p)
+    _fx_bloom(rgb, p)
+    ns = _fx_num(p.get("noise"))
+    if ns > 0:
+        _fx_noise(rgb, min(1.0, ns), ctx)
+    if p.get("oldFilm"):
+        _fx_oldfilm(rgb, ctx)
+    if p.get("vignetting"):
+        _fx_vignette(rgb, _fx_num(p.get("vignettingAlpha"), 0.5))
+    np.clip(rgb, 0, 255, out=rgb)
+
+
+def _fx_chain_rgba(frgba, p, ctx):
+    """fig 层滤镜（非预乘 RGBA：调色作用于 rgb，alpha 参数乘 alpha 通道）。"""
+    rgb = frgba[..., :3].astype(np.float32)
+    _fx_chain(rgb, p, ctx)
+    frgba[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+    al = _fx_num(p.get("alpha"), 1.0)
+    if al != 1.0:
+        al = min(1.0, max(0.0, al))
+        frgba[..., 3] = (frgba[..., 3].astype(np.float32) * al).astype(np.uint8)
+
+
+def _paste_rgba(frgba, img, lay):
+    """把素材帧（RGB/RGBA）按 layout 以 alpha-over 累积进透明立绘层。"""
+    import cv2
+    H, W = frgba.shape[:2]
+    x, y, sc, rot = lay["x"], lay["y"], lay["scale"], lay["rot"]
+    if img.ndim == 2:
+        img = np.dstack([img] * 3)
+    h, w = img.shape[:2]
+    if img.shape[2] == 3:
+        img = np.dstack([img, np.full((h, w), 255, np.uint8)])
+    s0 = min(W / w, H / h)
+    s = s0 * sc
+    nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
+    interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
+    rgb = cv2.resize(img[..., :3], (nw, nh), interpolation=interp)
+    a = cv2.resize(img[..., 3], (nw, nh), interpolation=interp)
+    ox, oy, rw, rh = layer_rect(w, h, W, H, lay)
+    if abs(rot) > 1e-6:
+        M = cv2.getRotationMatrix2D((nw / 2.0, nh / 2.0), rot, 1.0)
+        M[0, 2] += rw / 2.0 - nw / 2.0
+        M[1, 2] += rh / 2.0 - nh / 2.0
+        rgb = cv2.warpAffine(rgb, M, (rw, rh),
+                             flags=cv2.INTER_LINEAR, borderValue=(0, 0, 0))
+        a = cv2.warpAffine(a, M, (rw, rh),
+                           flags=cv2.INTER_LINEAR, borderValue=0)
+    dx0, dy0 = max(0, ox), max(0, oy)
+    dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
+    if dx1 <= dx0 or dy1 <= dy0:
+        return
+    sx0, sy0 = dx0 - ox, dy0 - oy
+    sub_rgb = rgb[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)].astype(np.float32)
+    sub_a = a[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)].astype(np.float32)[..., None] / 255.0
+    dst = frgba[dy0:dy1, dx0:dx1].astype(np.float32)
+    dst_rgb, dst_a = dst[..., :3], dst[..., 3:4] / 255.0
+    out_a = sub_a + dst_a * (1 - sub_a)
+    rgb_over = (sub_rgb * sub_a + dst_rgb * dst_a * (1 - sub_a)) / np.maximum(1e-3, out_a)
+    frgba[dy0:dy1, dx0:dx1, :3] = np.clip(rgb_over, 0, 255).astype(np.uint8)
+    frgba[dy0:dy1, dx0:dx1, 3] = np.clip(out_a[..., 0] * 255, 0, 255).astype(np.uint8)
+
+
 # ffmpeg 候选（与 l2d_rig_qt.FFMPEG_CANDIDATES 同步；勿 import 那边）
 _HERE = os.path.dirname(os.path.abspath(__file__))
 FFMPEG_CANDIDATES = [os.path.join(_HERE, "ffmpeg.exe"),
@@ -591,28 +861,82 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True):
     **当前幕**的轨道。aid=None 时行为与旧版完全一致（v1 顶层 tracks /
     v2 第一幕）。
 
-    v3.5.4：subtitle=True（默认）在合成末尾**烧录当前幕的活跃台词**
-    （MyGO 风皮肤，与工作台预览 / 实时预览页同规格）。工作台预览调用点
-    显式传 subtitle=False（Qt paintEvent 自己画，避免双重字幕）。"""
+    v3.5.4：subtitle=True（默认）在合成末尾**烧录当前幕的活跃台词**。
+    工作台预览调用点显式传 subtitle=False（Qt paintEvent 自己画）。
+
+    v3.5.6：滤镜映射——proj["effects"] 里有 t 时刻生效的 setTransform 时，
+    走**分层合成**：背景层（cover/BG 轨）→ bg-main 滤镜 → 立绘层（FIG-*
+    轨，透明底）→ fig-* 滤镜 → 其余轨按列表序叠上。与引擎 target 语义
+    一致（bg-main=背景、fig-*=立绘，互不波及）。无活跃滤镜 = 旧逐轨叠加
+    路径，逐像素零 diff。"""
     H, W = int(proj["height"]), int(proj["width"])
     if canvas is None:
         canvas = np.zeros((H, W, 3), np.uint8)
     else:
         canvas[...] = 0
-    for tr in V._tracks_of(proj, aid):          # 列表序 = 底→顶（后加的在上）
-        if tr.get("kind") != "video" or tr.get("hidden"):
-            continue
-        clip = _track_clip_at(tr, t)
-        if clip is None:
-            continue
-        try:
-            src = src_get(clip["source"])
-            img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
-        except Exception:
-            continue
-        if img is None or img.size == 0:
-            continue
-        paste_layer(canvas, img, V.layout_at(clip))
+    fx = _active_fx(proj, t, aid)
+    if not fx:
+        # ---- 旧逐轨叠加路径（无滤镜：逐像素零 diff 保证）----
+        for tr in V._tracks_of(proj, aid):      # 列表序 = 底→顶（后加的在上）
+            if tr.get("kind") != "video" or tr.get("hidden"):
+                continue
+            clip = _track_clip_at(tr, t)
+            if clip is None:
+                continue
+            try:
+                src = src_get(clip["source"])
+                img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
+            except Exception:
+                continue
+            if img is None or img.size == 0:
+                continue
+            paste_layer(canvas, img, V.layout_at(clip))
+    else:
+        # ---- v3.5.6 分层合成（滤镜按 target 作用层）----
+        ctx = {"t": t,
+               "seed": int(t * max(1.0, float(proj.get("fps") or 30))) & 0x7FFFFFFF}
+        bgc = np.zeros((H, W, 3), np.float32)       # 背景层（黑底 RGB）
+        fig = np.zeros((H, W, 4), np.uint8)         # 立绘层（非预乘 RGBA）
+        bg_jobs, fig_jobs, main_jobs = [], [], []
+        for tr in V._tracks_of(proj, aid):
+            if tr.get("kind") != "video" or tr.get("hidden"):
+                continue
+            clip = _track_clip_at(tr, t)
+            if clip is None:
+                continue
+            lay = V.layout_at(clip)
+            is_fig = str(tr.get("name") or "").startswith("FIG")
+            try:
+                src = src_get(clip["source"])
+                img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
+            except Exception:
+                continue
+            if img is None or img.size == 0:
+                continue
+            if bool(lay.get("cover")):
+                bg_jobs.append((img, lay))
+            elif is_fig:
+                fig_jobs.append((img, lay))
+            else:
+                main_jobs.append((img, lay))
+        for img, lay in bg_jobs:
+            paste_layer(bgc, img, lay)
+        bg_fx = fx.get("bg-main") or fx.get("bg")
+        if bg_fx:
+            _fx_chain(bgc, bg_fx, ctx)
+        canvas[...] = np.clip(bgc, 0, 255).astype(np.uint8)
+        for img, lay in fig_jobs:
+            _paste_rgba(fig, img, lay)
+        fig_fx = None
+        for k, v in fx.items():
+            if k.startswith("fig"):
+                fig_fx = v
+        if fig_fx:
+            _fx_chain_rgba(fig, fig_fx, ctx)
+        a = fig[..., 3:4].astype(np.float32) / 255.0
+        canvas[...] = (fig[..., :3] * a + canvas * (1 - a)).astype(np.uint8)
+        for img, lay in main_jobs:                  # 其余轨仍在最上层
+            paste_layer(canvas, img, lay)
     if subtitle:
         _draw_dialogue(canvas, proj, t, aid)
     return canvas
