@@ -522,16 +522,6 @@ def _fx_oldfilm(rgb, ctx):
     rgb[:] *= 0.93 + 0.07 * math.sin(ctx["t"] * 12.0)
 
 
-def _fx_sepia(rgb, k):
-    """sepia：向褐色调偏移。引擎（pixi SepiaFilter blend）只偏移一部分原色，
-    全强度混入会吃掉原有色相（对照实测），这里折半再混。"""
-    m = np.array([[0.393, 0.769, 0.189],
-                  [0.349, 0.686, 0.168],
-                  [0.272, 0.534, 0.131]], np.float32)
-    sep = rgb @ m.T * 1.07 + 8.0
-    rgb[:] = rgb * (1 - k * 0.5) + sep * (k * 0.5)
-
-
 _VIGN_CACHE = {}
 
 
@@ -552,29 +542,83 @@ def _fx_vignette(rgb, va):
     rgb[:] *= fall
 
 
+_GAMMA_LUTS = {}
+
+# sepia 基础矩阵（pixi SepiaFilter 色调）。引擎只偏移一部分原色，
+# 全强度混入会吃掉原有色相（对照实测），在 _fx_color 里折半混入。
+_FX_SEPIA_M = np.array([[0.393, 0.769, 0.189],
+                        [0.349, 0.686, 0.168],
+                        [0.272, 0.534, 0.131]], np.float32)
+
+
+def _gamma_lut(g):
+    """gamma 256 级 LUT（缓存；255*(i/255)^g，替代全帧 np.power）。"""
+    g = max(0.1, g)
+    lut = _GAMMA_LUTS.get(g)
+    if lut is None:
+        if len(_GAMMA_LUTS) > 32:
+            _GAMMA_LUTS.clear()
+        i = np.arange(256, dtype=np.float32)
+        lut = (255.0 * np.power(np.clip(i / 255.0, 0.0, 1.0), g)
+               ).astype(np.float32)
+        _GAMMA_LUTS[g] = lut
+    return lut
+
+
 def _fx_color(rgb, p):
-    """brightness / contrast / saturation / gamma / colorRGB 调色链。"""
-    ga = _fx_num(p.get("gamma"), 1.0)
-    if ga != 1.0:
-        g = max(0.1, ga)
-        rgb[:] = 255.0 * np.power(np.clip(rgb / 255.0, 0.0, 1.0), g)
+    """sepia / brightness / contrast / saturation / gamma / colorRGB 调色链。
+
+    v3.5.7 提速：①sepia 折半混入本身也是仿射
+    （rgb*(1-0.5k) + (rgb@S.T*1.07+8)*(0.5k) = rgb@M_sep.T + c_sep），与
+    brightness/contrast/colorRGB/saturation 全部合并成单个 3x3 矩阵 +
+    偏移，一次 matmul 替代原来的 5 趟全帧扫描；②gamma 用 256 级 LUT
+    查表替代全帧 np.power。gamma 从链中间挪到仿射之后（仅 sepia/gamma
+    **同时**使用时像素与 v3.5.6 有微小观感差，其余情况逐像素等价）。"""
+    sp = _fx_num(p.get("sepia"))
     br = _fx_num(p.get("brightness"), 1.0)
-    if br != 1.0:
-        rgb *= br
     ct = _fx_num(p.get("contrast"), 1.0)
-    if ct != 1.0:
-        rgb[:] = (rgb - 127.5) * ct + 127.5
     cr = _fx_num(p.get("colorRed"), 255.0) / 255.0
     cg = _fx_num(p.get("colorGreen"), 255.0) / 255.0
     cb = _fx_num(p.get("colorBlue"), 255.0) / 255.0
-    if (cr, cg, cb) != (1.0, 1.0, 1.0):
-        rgb[..., 0] *= cr
-        rgb[..., 1] *= cg
-        rgb[..., 2] *= cb
     sa = _fx_num(p.get("saturation"), 1.0)
-    if sa != 1.0:
-        gray = rgb @ np.array([0.299, 0.587, 0.114], np.float32)[..., None]
-        rgb[:] = gray * (1 - sa) + rgb * sa
+    if sp <= 0 and br == 1.0 and ct == 1.0 \
+            and (cr, cg, cb) == (1.0, 1.0, 1.0) and sa == 1.0:
+        ga = _fx_num(p.get("gamma"), 1.0)
+        if ga != 1.0:
+            rgb[:] = _gamma_lut(ga)[
+                np.clip(rgb, 0.0, 255.0).astype(np.uint8)]
+            np.clip(rgb, 0, 255, out=rgb)
+        return
+    M = np.eye(3, dtype=np.float32)
+    c = np.zeros(3, np.float32)
+    if sp > 0:                          # sepia：折半混入褐色调（引擎校准）
+        k = min(1.0, sp) * 0.5
+        M = M * (1.0 - k) + (_FX_SEPIA_M.T * 1.07) * k
+        c += 8.0 * k
+    if br != 1.0:
+        M *= br
+        c *= br                         # 偏移同受后续算子作用
+    if ct != 1.0:                       # (x-127.5)*ct+127.5 = ct*x + (1-ct)*127.5
+        M *= ct
+        c *= ct
+        c += (1.0 - ct) * 127.5
+    M[0] *= cr                          # colorRGB：逐通道乘 → 行缩放
+    M[1] *= cg
+    M[2] *= cb
+    c[0] *= cr                          # 偏移同受通道乘作用（v3.5.7 修复：
+    c[1] *= cg                          # 合并时漏缩放 c，contrast+colorRGB
+    c[2] *= cb                          # 组合偏色 ~2.5 灰阶，qa-runner 坐实）
+    if sa != 1.0:                       # 饱和：向 luma(当前结果) 收缩
+        W = np.array([0.299, 0.587, 0.114], np.float32)
+        M = sa * M + (1.0 - sa) * np.outer(np.ones(3, np.float32), W @ M)
+        c = sa * c + (1.0 - sa) * float(W @ c) * np.ones(3, np.float32)
+    rgb[:] = rgb @ M.T
+    if c.any():
+        rgb += c
+    ga = _fx_num(p.get("gamma"), 1.0)
+    if ga != 1.0:
+        rgb[:] = _gamma_lut(ga)[
+            np.clip(rgb, 0.0, 255.0).astype(np.uint8)]
     np.clip(rgb, 0, 255, out=rgb)
 
 
@@ -582,7 +626,11 @@ _FX_BLOOM_K = 1.1          # bloom 校准系数（对照引擎实测调整）
 
 
 def _fx_bloom(rgb, p):
-    """bloom：亮区提取 → 高斯模糊 → 叠加泛光。"""
+    """bloom：亮区提取 → 高斯模糊 → 叠加泛光。
+
+    v3.5.7 提速：整条管线在 **1/4 分辨率**上做（亮区提取/模糊本来就是要
+    大团低频的泛光，降采样视觉等效），模糊核同比例缩小再放大叠加，
+    全帧只留最后一次加法。"""
     import cv2
     b = _fx_num(p.get("bloom"))
     if b <= 0:
@@ -590,11 +638,17 @@ def _fx_bloom(rgb, p):
     bb = max(1, int(round(_fx_num(p.get("bloomBlur"), 4))))
     bt = min(0.95, max(0.01, _fx_num(p.get("bloomThreshold"), 0.5)))
     bri = max(0.2, _fx_num(p.get("bloomBrightness"), 0.5))
-    lum = rgb @ np.array([0.299, 0.587, 0.114], np.float32)[..., None]
+    h, w = rgb.shape[:2]
+    qw, qh = max(1, w // 4), max(1, h // 4)
+    small = cv2.resize(rgb, (qw, qh), interpolation=cv2.INTER_AREA)
+    lum = small @ np.array([0.299, 0.587, 0.114], np.float32)[..., None]
     thr = bt * 255.0
     mask = np.clip((lum - thr) / max(1.0, 255.0 - thr), 0.0, 1.0)
-    k = bb * 2 + 1
-    glow = cv2.GaussianBlur(rgb * mask, (k, k), 0)
+    k = max(1, (bb * 2 + 1) // 4)
+    if k % 2 == 0:
+        k += 1
+    glow = cv2.resize(cv2.GaussianBlur(small * mask, (k, k), 0), (w, h),
+                      interpolation=cv2.INTER_LINEAR)
     rgb[:] += glow * (b * bri * 0.5 * _FX_BLOOM_K)
     np.clip(rgb, 0, 255, out=rgb)
 
@@ -616,10 +670,20 @@ def _fx_chain(rgb, p, ctx):
     b = _fx_num(p.get("blur"))
     if b > 0:
         k = max(1, int(round(b))) * 2 + 1
-        rgb[:] = cv2.GaussianBlur(rgb, (k, k), 0)
-    sp = _fx_num(p.get("sepia"))
-    if sp > 0:
-        _fx_sepia(rgb, min(1.0, sp))
+        h, w = rgb.shape[:2]
+        # v3.5.7：大核模糊在 1/2 分辨率做（核同比例缩小再放大），视觉等效；
+        # 小核（k<9）直接全帧，省两次 resize。
+        if k >= 9 and h >= 4 and w >= 4:
+            kh = max(1, k // 2)
+            if kh % 2 == 0:
+                kh += 1
+            small = cv2.resize(rgb, (w // 2, h // 2),
+                               interpolation=cv2.INTER_AREA)
+            rgb[:] = cv2.resize(cv2.GaussianBlur(small, (kh, kh), 0), (w, h),
+                                interpolation=cv2.INTER_LINEAR)
+        else:
+            rgb[:] = cv2.GaussianBlur(rgb, (k, k), 0)
+    # v3.5.7：sepia 已并入 _fx_color 的合并矩阵（见其 docstring）
     _fx_color(rgb, p)
     _fx_bloom(rgb, p)
     ns = _fx_num(p.get("noise"))
@@ -694,6 +758,47 @@ def ffmpeg_path():
 
 
 # ---------------- 单帧合成 ----------------
+_BG_CACHE = {}
+
+
+def _bg_cache_key(jobs, W, H):
+    """静态背景缓存键（仅 image 源：路径+mtime+布局+画布尺寸）。
+    视频/puppet 源逐帧变化，一律不缓存。"""
+    ks = []
+    for img, lay, srcd in jobs:
+        if not isinstance(srcd, dict) or srcd.get("kind") != "image":
+            return None
+        pth = str(srcd.get("path") or "")
+        try:
+            mt = os.path.getmtime(pth)
+        except OSError:
+            return None
+        ks.append((os.path.normpath(pth), round(mt, 3),
+                   round(float(lay["x"]), 4), round(float(lay["y"]), 4),
+                   round(float(lay["scale"]), 5), round(float(lay["rot"]), 3),
+                   bool(lay.get("cover")), img.shape[:2]))
+    return (W, H, tuple(ks))
+
+
+def _paste_bg_layer(bgc, jobs, W, H):
+    """bg_jobs 贴满背景层（v3.5.7：image 源的贴底结果按键缓存，跳过
+    每帧重复的 resize+blend；滤镜在 bgc 副本上就地改，不污染缓存）。"""
+    if not jobs:
+        return
+    key = _bg_cache_key(jobs, W, H)
+    if key is not None:
+        cached = _BG_CACHE.get(key)
+        if cached is not None:
+            bgc[...] = cached
+            return
+    for img, lay, _sd in jobs:
+        paste_layer(bgc, img, lay)
+    if key is not None:
+        if len(_BG_CACHE) >= 2:
+            _BG_CACHE.clear()          # 上限 2 份（float32 1080p ≈ 25MB/份）
+        _BG_CACHE[key] = bgc.copy()
+
+
 def source_key(src):
     return (src.get("kind"), os.path.normpath(str(src.get("path") or "")))
 
@@ -850,7 +955,8 @@ def paste_layer(canvas, img, lay):
     return canvas
 
 
-def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True):
+def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
+                  fx=True):
     """t 时刻一帧 RGB uint8（v3.4.0 起：**自底向上逐可见视频轨 RGBA 叠加**，
     不再只取最上层 clip；上层无 alpha 素材自然覆盖=旧语义，
     带 alpha 素材按 out=fg*a+dst*(1-a) 混合）。
@@ -868,14 +974,20 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True):
     走**分层合成**：背景层（cover/BG 轨）→ bg-main 滤镜 → 立绘层（FIG-*
     轨，透明底）→ fig-* 滤镜 → 其余轨按列表序叠上。与引擎 target 语义
     一致（bg-main=背景、fig-*=立绘，互不波及）。无活跃滤镜 = 旧逐轨叠加
-    路径，逐像素零 diff。"""
+    路径，逐像素零 diff。
+
+    v3.5.7：fx=False —— 工作台普通预览快路径，**不解析不渲染滤镜**
+    （滤镜链逐帧 numpy ~330ms/帧卡爆预览），恒走旧逐轨叠加路径；滤镜
+    效果看实时预览（引擎 GPU 渲染）或导出成片。默认 fx=True（导出/
+    引擎对照不受影响）。另：image 源的背景贴层加了静态缓存
+    （_paste_bg_layer），同工程逐帧导出只算一次 resize+blend。"""
     H, W = int(proj["height"]), int(proj["width"])
     if canvas is None:
         canvas = np.zeros((H, W, 3), np.uint8)
     else:
         canvas[...] = 0
-    fx = _active_fx(proj, t, aid)
-    if not fx:
+    fx_map = _active_fx(proj, t, aid) if fx else None
+    if not fx_map:
         # ---- 旧逐轨叠加路径（无滤镜：逐像素零 diff 保证）----
         for tr in V._tracks_of(proj, aid):      # 列表序 = 底→顶（后加的在上）
             if tr.get("kind") != "video" or tr.get("hidden"):
@@ -914,21 +1026,21 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True):
             if img is None or img.size == 0:
                 continue
             if bool(lay.get("cover")):
-                bg_jobs.append((img, lay))
+                bg_jobs.append((img, lay, clip.get("source")))
             elif is_fig:
                 fig_jobs.append((img, lay))
             else:
                 main_jobs.append((img, lay))
-        for img, lay in bg_jobs:
-            paste_layer(bgc, img, lay)
-        bg_fx = fx.get("bg-main") or fx.get("bg")
+        _paste_bg_layer(bgc, bg_jobs, W, H)
+        bg_fx = fx_map.get("bg-main") or fx_map.get("bg")
         if bg_fx:
             _fx_chain(bgc, bg_fx, ctx)
-        canvas[...] = np.clip(bgc, 0, 255).astype(np.uint8)
+        np.clip(bgc, 0, 255, out=bgc)
+        canvas[...] = bgc
         for img, lay in fig_jobs:
             _paste_rgba(fig, img, lay)
         fig_fx = None
-        for k, v in fx.items():
+        for k, v in fx_map.items():
             if k.startswith("fig"):
                 fig_fx = v
         if fig_fx:

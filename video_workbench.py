@@ -24,7 +24,7 @@ import time
 
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer, QSize, QSettings
+from PySide6.QtCore import Qt, QTimer, QSize, QSettings, QEvent
 from PySide6.QtGui import QImage, QPixmap, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
                                QFileDialog, QStackedLayout, QFrame, QSplitter,
@@ -1230,13 +1230,24 @@ class VideoWorkbench(QWidget):
 
     def render_frame(self, t):
         self._sync_preset_sources(t)
+        # v3.5.7：实时态引擎自绘，跳过重型合成（numpy 帧纯浪费）
+        if getattr(self, "_preview_real", False):
+            self.stage.playing = bool(self._playing)
+            self.stage.tick_busy = bool(self._tick_busy)
+            _se = getattr(self, "script_editor", None)
+            if _se is not None:
+                _se.refresh_highlight()
+            self._sync_real_preview(t)
+            return
         # F2-L5（v3.5）：多幕工程只合成**当前幕**（一幕一条独立时间轴）
         # v3.5.4：subtitle=False —— 工作台预览的台词由 StageView.paintEvent
         # 画（widget 自适应字号）；视频导出走 compose_frame 的烧录版。
         # 两条路同规格（MyGO 风），但各画各的，避免预览双重字幕。
+        # v3.5.7：fx=False —— 预览不渲染滤镜链（逐帧 numpy ~330ms/帧卡爆预览；
+        # 滤镜效果看实时预览或导出成片）。
         arr = VE.compose_frame(self.proj, t, self._sources.get,
                                aid=getattr(self, "_cur_aid", None),
-                               subtitle=False)
+                               subtitle=False, fx=False)
         # 交互门控：播放/逐帧合成中 StageView 跳过鼠标，但照常刷新画面与框
         self.stage.playing = bool(self._playing)
         self.stage.tick_busy = bool(self._tick_busy)
@@ -1479,8 +1490,29 @@ class VideoWorkbench(QWidget):
         btn.setToolTip("用 WebGAL 引擎实时渲染立绘（布置辅助，不影响导出画质）")
         btn.toggled.connect(self._toggle_real_preview)
         self._preview_badge = btn
-        btn.move(host.width() - btn.width() - 12, 12)
+        self._badge_host = host
+        host.installEventFilter(self)
+        # v3.5.7：创建时容器还没布局（宽 0），且实时页会盖住先创建的角标；
+        # 用 _place_preview_badge（含 raise_）统一摆放。
+        self._place_preview_badge()
         btn.show()
+
+    def _place_preview_badge(self):
+        """角标随容器 resize 重摆 + 常驻顶层（v3.5.7：实时态页面会盖住
+        先创建的角标，必须 raise_；创建时容器还没布局，宽度 0 定位错）。"""
+        b = getattr(self, "_preview_badge", None)
+        h = getattr(self, "_badge_host", None)
+        if b is None or h is None:
+            return
+        b.adjustSize()
+        b.move(max(6, h.width() - b.width() - 12), 12)
+        b.raise_()
+
+    def eventFilter(self, obj, ev):
+        if obj is getattr(self, "_badge_host", None) \
+                and ev.type() == QEvent.Resize:
+            self._place_preview_badge()
+        return super().eventFilter(obj, ev)
 
     def _ensure_webview(self):
         """懒创建 WebPreviewView（首次开实时预览时才建，避免启动开销）。"""
@@ -1507,6 +1539,8 @@ class VideoWorkbench(QWidget):
             v.start()
             self._webview = v
             self._stack.addWidget(v)
+            # v3.5.7：实时页加入后会盖住角标，重新摆到顶层
+            self._place_preview_badge()
             return v
         except Exception as e:
             InfoBar.warning("实时预览", "初始化失败：%s" % e, parent=self,
@@ -1572,6 +1606,10 @@ class VideoWorkbench(QWidget):
             if self._webview is not None:
                 self._webview.clear_all()           # 清掉页面侧模型
             self.render_frame(self._t)              # 立即回填当前帧，不闪白
+            btn = getattr(self, "_preview_badge", None)
+            if btn is not None:
+                btn.setToolTip("用 WebGAL 引擎实时渲染立绘（布置辅助，不影响导出画质）")
+            self._place_preview_badge()
             return
         v = self._ensure_webview()
         if v is None:
@@ -1587,6 +1625,10 @@ class VideoWorkbench(QWidget):
             return
         self._preview_real = True
         self._stack.setCurrentIndex(1)
+        btn = getattr(self, "_preview_badge", None)
+        if btn is not None:
+            btn.setToolTip("正在实时预览：再点一次返回普通预览（更快，不渲染滤镜）")
+        self._place_preview_badge()
         # 页面已就绪就立刻推；否则等 pageReady 回调（见 _on_preview_page_ready）
         if getattr(self, "_preview_ready", False):
             self._push_preview_state(force=True)

@@ -5,7 +5,59 @@
 
 ---
 
+## v3.5.7（2026-11-16 深夜）导出提速 2.25x：滤镜链矩阵合并 + 预览减负
+
+> 实测 1080p 全开导出 **412 → ~185-210 ms/帧**（滤镜净成本 ~330 →
+> ~85-110ms，随机器负载波动），普通预览/实时预览不再被滤镜链拖死。
+
+### 一、导出提速（`video_export.py`）
+
+- **调色链合并**（`_fx_color`）：sepia 折半混入本身也是仿射
+  （`rgb*(1-0.5k) + (rgb@S.T*1.07+8)*(0.5k)`），与 brightness/contrast/
+  colorRGB/saturation 全部合并成**单个 3x3 矩阵 + 偏移**，一次 matmul
+  替代原来 5 趟全帧扫描；gamma 用 256 级 LUT（`_gamma_lut` 缓存）替代
+  全帧 np.power。gamma 从链中间挪到仿射之后——仅 sepia+gamma **同时**
+  使用时像素有微小观感差，其余情况逐像素等价。
+- **bloom 1/4 分辨率**：亮区提取/模糊整条管线降到 w/4,h/4（INTER_AREA
+  下行、模糊核同比例缩小、INTER_LINEAR 放回），全帧只留最后一次加法。
+- **blur 半分辨率**：核 ≥9 时 1/2 分辨率模糊（视觉等效），小核保持全帧。
+- **背景静态层缓存**（`_paste_bg_layer`/`_BG_CACHE`）：FX 路径里 image
+  源的贴底结果按（路径+mtime+布局+画布尺寸）缓存 float32 结果（上限 2
+  份），逐帧导出只算一次 resize+blend；视频/puppet 源逐帧变化不缓存。
+- 编码器调查结论：本机 ffmpeg 是纯音频裁剪版（只有 aac/pcm，无任何
+  视频编码器），libx264 方案不可落地，编码器维持 cv2 mp4v
+  （compose 是大头，编码占比小）。
+
+### 二、预览减负（`video_workbench.py`）
+
+- **普通预览不渲染滤镜**：`compose_frame(..., fx=False)` 新快路径，恒走
+  旧逐轨叠加（~53ms/帧）——滤镜效果看实时预览（引擎 GPU 渲染）或导出
+  成片。默认 fx=True，导出/引擎对照不受影响。
+- **实时预览跳过逐帧合成**：实时态引擎自绘画面，render_frame 早退分支
+  跳过 compose_frame + set_frame（此前每帧几百 ms 纯浪费，即用户说的
+  「实时预览也好卡」）；保留台词表高亮与引擎 diff 同步。
+
+### 三、实时预览返回入口修复（`video_workbench.py`）
+
+- 角标 bug：实时态页面 widget 盖住先创建的「实时预览」角标，切进去就
+  找不到返回按钮；创建时容器未布局宽度 0，定位也错。修复：`eventFilter`
+  监听容器 Resize → `_place_preview_badge()`（adjustSize + 重摆 +
+  `raise_()` 常驻顶层）；进出实时态分别切换 tooltip（实时态提示「再点
+  一次返回普通预览」）。
+
+### 四、测试与验证
+
+- `fx_map_test.py` 扩到 32 项：合并矩阵 vs 逐趟参考实现等价（无 gamma
+  tol 0.5 / gamma LUT tol 2 / 组合顺序 tol 2.5）、fx=False 预览路径
+  逐像素忽略滤镜、背景缓存命中/布局变化换键。
+- `export_bench.py` 复测：旧路径 ~51ms / 滤镜净 ~85-110ms / 字幕净
+  ~31-51ms / 全开 ~185-210ms（多轮有 CPU 负载波动）。
+- subtitle_burn_test 27 项回归全绿。
+
+---
+
 ## v3.5.6（2026-11-16 20:4x）滤镜映射立项一期：setTransform 调色参数 → numpy 逐帧
+
 
 > 用户拍板「启动立项」。目标：视频导出也带滤镜（与引擎 target 语义一致），
 > 补齐「导出 = WebGAL 实际画面」的最后一块。

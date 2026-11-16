@@ -1,29 +1,29 @@
 {
-  "version": "3.5.5",
+  "version": "3.5.6",
   "installer_sha256": "d4f9b55679ee945004a8b0f4c933f8558b26ea3b4080106b7638a4879512a3e1",
   "patches": [
     {
-      "from": "3.5.2",
-      "to": "3.5.3",
-      "file": "MuppetStudio-Update-v3.5.3-from-v3.5.2.zip",
-      "sha256": "d694b44d39fe3ab22596892326348b25e9dc4de37a0182ee84a6481bcd15c6aa",
-      "size": 181853,
-      "files": 6
+      "from": "3.5.5",
+      "to": "3.5.6",
+      "file": "MuppetStudio-Update-v3.5.6-from-v3.5.5.zip",
+      "sha256": "15fdbb23266f58b38b38f4bc8e3e8cf604d2924bd32e8387ad5ec9ca9ab08717",
+      "size": 173629,
+      "files": 4
     },
     {
       "from": "3.5.3",
-      "to": "3.5.5",
-      "file": "MuppetStudio-Update-v3.5.5-from-v3.5.3.zip",
-      "sha256": "da6d45ad847480683ef7f675a945b8544a1bba56fb5c5c95d2af0aefd11b725e",
-      "size": 212325,
-      "files": 5
+      "to": "3.5.6",
+      "file": "MuppetStudio-Update-v3.5.6-from-v3.5.3.zip",
+      "sha256": "3cd7e5b9b3df8cdd32b682155f8b9569b82ec4d93271dd5f06e1cd440f33d428",
+      "size": 217495,
+      "files": 6
     },
     {
       "from": "3.5.2",
-      "to": "3.5.5",
-      "file": "MuppetStudio-Update-v3.5.5-from-v3.5.2.zip",
-      "sha256": "b86f9d10db8e3450392a045c71094e53ea477ee9b340854e6916b3ad60a85212",
-      "size": 239636,
+      "to": "3.5.6",
+      "file": "MuppetStudio-Update-v3.5.6-from-v3.5.2.zip",
+      "sha256": "b0064775320abfa0ae3da105982e30dcf2a6c92648c519e391c17176e29f2aeb",
+      "size": 244779,
       "files": 9
     }
   ],
