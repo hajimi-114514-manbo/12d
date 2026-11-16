@@ -157,42 +157,106 @@ def _patch_items(meta):
     return out
 
 
+def _valid_patch_entry(item, remote_ver):
+    """增量包条目公共校验（find_patch / find_patch_chain 共用，fail-closed）。
+
+    remote_ver 是远端最新版三元组（仅用于缺 to 时回填）。校验 sha256 声明
+    （清单被整体伪造时至少挡掉无声明包）、zip 后缀、size/files 可解析。
+    返回标准化 dict 或 None。"""
+    frm = str(item.get("from") or "")
+    to = str(item.get("to") or "") or (
+        "" if remote_ver == (0, 0, 0) else
+        "%d.%d.%d" % remote_ver)
+    if parse_ver(frm) == (0, 0, 0) or parse_ver(to) == (0, 0, 0):
+        return None
+    sha = str(item.get("sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha):
+        return None
+    name = os.path.basename(str(item.get("file") or "").strip()
+                            or patch_name(to, frm))
+    if not name.lower().endswith(".zip"):
+        return None
+    try:
+        size = int(item.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    try:
+        nfiles = int(item.get("files") or 0)
+    except (TypeError, ValueError):
+        nfiles = 0
+    return {"from": frm, "to": to, "file": name, "sha256": sha,
+            "size": size, "files": nfiles}
+
+
 def find_patch(meta, local_version):
     """在本机版本对应的增量包条目；没有/不合法返回 None。
 
     只认 **from 与本机版本完全相等** 的条目（跨版本不拼链路，直接回落到整包）。
     条目必须自带 sha256（fail-closed：清单被代理整体伪造时至少挡掉无声明包）。
-    """
+    v3.5.8 起客户端走 find_patch_chain（逐跳爬到最新），本函数保留为
+    「单跳直达最新」特例，供旧测试与兼容判断使用。"""
     local = parse_ver(local_version)
     if local == (0, 0, 0):
         return None
     remote = str(meta.get("version") or "") if isinstance(meta, dict) else ""
     for item in _patch_items(meta):
-        frm = str(item.get("from") or "")
-        if parse_ver(frm) != local:
+        entry = _valid_patch_entry(item, parse_ver(remote))
+        if entry is None:
             continue
-        to = str(item.get("to") or remote or "")
         # to 必须等于远端最新版，防止清单里残留的旧条目被误用
-        if parse_ver(to) != parse_ver(remote) or parse_ver(to) == (0, 0, 0):
+        if parse_ver(entry["from"]) != local or \
+                parse_ver(entry["to"]) != parse_ver(remote):
             continue
-        sha = str(item.get("sha256") or "").strip().lower()
-        if not re.fullmatch(r"[0-9a-f]{64}", sha):
-            continue
-        name = os.path.basename(str(item.get("file") or "").strip()
-                                or patch_name(to, frm))
-        if not name.lower().endswith(".zip"):
-            continue
-        try:
-            size = int(item.get("size") or 0)
-        except (TypeError, ValueError):
-            size = 0
-        try:
-            nfiles = int(item.get("files") or 0)
-        except (TypeError, ValueError):
-            nfiles = 0
-        return {"from": frm, "to": to, "file": name, "sha256": sha,
-                "size": size, "files": nfiles}
+        return entry
     return None
+
+
+def find_patch_chain(meta, local_version, max_hops=12):
+    """v3.5.8 链式增量：从本机版本出发逐跳爬到远端最新版。
+
+    思路（用户定）：点更新后拉取「此版本之后的所有增量包」，按序逐个
+    安装，装完删掉下载的包。好处是发版只需出**相邻一跳**，不再为每个
+    历史版本铺直跳包。
+
+    规则（fail-closed）：
+    - 每跳条目 from == 链上当前版本，且 to > from（严格递增，天然无环）
+    - 同一 from 有多条时选 to 最高的（跳数最少）
+    - **末跳 to 必须等于远端最新版**——爬不到最新就是链断，返回 None
+      （调用方回落整包，绝不半途下载装一半）
+    - 条目校验同 find_patch（sha256 声明/zip 后缀，坏条目直接跳过）
+    返回 {"hops": [entry...], "total_size": int, "final_to": str}；
+    本机已最新/无路可走/链断 -> None。"""
+    local = parse_ver(local_version)
+    if not isinstance(meta, dict):
+        return None
+    remote = parse_ver(meta.get("version") or "")
+    if local == (0, 0, 0) or remote == (0, 0, 0) or local >= remote:
+        return None
+    by_from = {}                       # from 版本三元组 -> to 最高的合法条目
+    for item in _patch_items(meta):
+        entry = _valid_patch_entry(item, remote)
+        if entry is None:
+            continue
+        k = parse_ver(entry["from"])
+        t = parse_ver(entry["to"])
+        if t <= k:                     # 非递增跳（环/倒退）一律无视
+            continue
+        cur = by_from.get(k)
+        if cur is None or t > parse_ver(cur["to"]):
+            by_from[k] = entry
+    hops = []
+    cur = local
+    while cur != remote and len(hops) < max_hops:
+        nxt = by_from.get(cur)
+        if nxt is None:
+            return None                # 链断：不半途下载，回落整包
+        hops.append(nxt)
+        cur = parse_ver(nxt["to"])
+    if cur != remote or not hops:
+        return None
+    return {"hops": hops,
+            "total_size": sum(int(h["size"] or 0) for h in hops),
+            "final_to": hops[-1]["to"]}
 
 
 # ---------------- 版本 ----------------
@@ -547,27 +611,40 @@ def launch_update(install_dir):
 
 
 # ---------------- 增量包：待应用状态 + 退出时覆盖 ----------------
+# v3.5.8 起支持**链式**：_pending_patch 内部统一为 list（按序逐跳应用），
+# 单跳 = 链长 1。set_pending_patch 仍接受旧的单跳 dict（自动包装成 list）。
 _pending_patch = None
 
 
 def pending_patch():
-    """已下载并解包好、等应用退出就覆盖的增量包信息；无则 None。
-    返回 dict：{zip, stage, from, to, files}。"""
+    """已下载并解包好、等应用退出就覆盖的增量包链；无则 None。
+
+    返回 list（按应用顺序）：[{zip, stage, from, to, files}, ...]。
+    链上任何一环的 zip/stage 丢失 -> 整链作废（半截链绝不应用）。"""
     global _pending_patch
-    st = _pending_patch
-    if not st:
+    hops = _pending_patch
+    if not hops:
         return None
-    if not os.path.isfile(st.get("zip") or "") or \
-            not os.path.isdir(st.get("stage") or ""):
-        _pending_patch = None             # 临时目录被清了：状态作废
-        return None
-    return dict(st)
+    for h in hops:
+        if not os.path.isfile(h.get("zip") or "") or \
+                not os.path.isdir(h.get("stage") or ""):
+            _pending_patch = None      # 临时目录被清了：状态作废
+            return None
+    return [dict(h) for h in hops]
 
 
 def set_pending_patch(st):
-    """测试/恢复用；None 清空。"""
+    """测试/恢复用；None 清空。接受单跳 dict（旧格式，包装成 list）
+    或按序 list。"""
     global _pending_patch
-    _pending_patch = dict(st) if st else None
+    if st is None:
+        _pending_patch = None
+    elif isinstance(st, dict):
+        _pending_patch = [dict(st)]
+    elif isinstance(st, (list, tuple)) and all(isinstance(x, dict) for x in st):
+        _pending_patch = [dict(x) for x in st]
+    else:
+        _pending_patch = None
 
 
 def clear_pending_patch():
@@ -577,18 +654,32 @@ def clear_pending_patch():
 # 退出时执行的覆盖脚本。注意：**纯 ASCII**（cmd 按控制台代码页读它，中文会乱），
 # 安装目录/启动器中文名全部走命令行参数（命令行是 Unicode，不受此限）。
 # 用 ping 代替 timeout 做等待：stdin 被重定向时 timeout 会直接报错退出。
+#
+# v3.5.8 改为**多段链式**：参数 6 起每两个是一对 (stage 目录, 增量包 zip)，
+# bat 按 shift 循环逐段「备份->robocopy->失败即整链回滚」，全部成功才重启，
+# 最后**删掉下载的 zip 与 stage 目录**（用户定的：装完删包）。
 _APPLY_BAT = "_apply_patch.bat"
 
-_APPLY_BAT_TEXT = r"""@echo off
+
+def _apply_bat_text():
+    return r"""@echo off
 rem Muppet Studio incremental patch applier (generated by update_checker.py).
-rem args: 1=parent pid 2=stage dir 3=install dir 4=backup dir 5=launcher exe 6=log
+rem args: 1=parent pid 2=install dir 3=backup dir 4=launcher exe 5=log
+rem       6.. = (stage dir, patch zip) pairs, applied in order
 setlocal enabledelayedexpansion
+set "SELF=%~f0"
+rem remember self BEFORE any shift: cmd's shift moves %0 too, so the
+rem (goto)&del "%%~f0" self-delete trick breaks in a shifted script
 set "PID=%~1"
-set "STAGE=%~2"
-set "DST=%~3"
-set "BAK=%~4"
-set "EXE=%~5"
-set "LOG=%~6"
+set "DST=%~2"
+set "BAK=%~3"
+set "EXE=%~4"
+set "LOG=%~5"
+shift
+shift
+shift
+shift
+shift
 set /a TRIES=0
 >>"%LOG%" echo [%DATE% %TIME%] wait for pid %PID% to exit
 :wait
@@ -602,10 +693,15 @@ if not errorlevel 1 (
 :apply
 rem grace period: let the app's child processes release file handles
 >nul ping -n 3 127.0.0.1
->>"%LOG%" echo [%DATE% %TIME%] applying patch
-if not exist "%STAGE%\" goto relaunch
+>>"%LOG%" echo [%DATE% %TIME%] applying patch chain
 if not exist "%DST%\" goto relaunch
-set /a N=0
+set /a TOTAL=0
+:pair
+if "%~1"=="" goto applied
+set "STAGE=%~1"
+set "ZIPF=%~2"
+if not exist "%STAGE%\" goto nextpair
+rem ---- backup old files this stage will overwrite ----
 for /r "%STAGE%" %%f in (*) do (
   set "REL=%%f"
   set "REL=!REL:%STAGE%\=!"
@@ -614,27 +710,35 @@ for /r "%STAGE%" %%f in (*) do (
     for %%d in ("!BDIR!") do set "BDIR=%%~dpd"
     if not exist "!BDIR!" mkdir "!BDIR!" >nul 2>&1
     copy /y "%DST%\!REL!" "%BAK%\!REL!" >nul 2>&1
-    set /a N+=1
+    set /a TOTAL+=1
   )
 )
->>"%LOG%" echo [%DATE% %TIME%] backed up !N! old file^(s^) to "%BAK%"
+>>"%LOG%" echo [%DATE% %TIME%] stage %STAGE%: backup total !TOTAL!
 robocopy "%STAGE%" "%DST%" /E /IS /IT /NFL /NDL /NJH /NJS /R:1 /W:1 /XF UPDATE.txt _apply_update.bat >nul
 set "RC=%ERRORLEVEL%"
->>"%LOG%" echo [%DATE% %TIME%] robocopy exit code %RC%
+>>"%LOG%" echo [%DATE% %TIME%] stage %STAGE% robocopy exit code %RC%
 if %RC% GEQ 8 (
   >>"%LOG%" echo [%DATE% %TIME%] copy failed, restoring backup
   robocopy "%BAK%" "%DST%" /E /IS /IT /NFL /NDL /NJH /NJS /R:1 /W:1 >nul
   >>"%LOG%" echo [%DATE% %TIME%] restore exit code !ERRORLEVEL!
-) else (
-  >>"%LOG%" echo [%DATE% %TIME%] patch applied ok
+  goto relaunch
 )
+rem this hop applied: delete its downloaded zip + stage dir right away
+if exist "%ZIPF%" del /q "%ZIPF%" >nul 2>&1
+if exist "%STAGE%\" rmdir /s /q "%STAGE%" >nul 2>&1
+goto nextpair
+:nextpair
+shift
+shift
+goto pair
+:applied
+>>"%LOG%" echo [%DATE% %TIME%] patch chain applied ok
 :relaunch
-if not exist "%EXE%" goto cleanup
+if not exist "%EXE%" goto done
 >>"%LOG%" echo [%DATE% %TIME%] relaunch "%EXE%"
 start "" "%EXE%"
-:cleanup
-if exist "%STAGE%\" rmdir /s /q "%STAGE%" >nul 2>&1
-(goto) 2>nul & del "%~f0"
+:done
+(goto) 2>nul & del "%SELF%"
 """
 
 
@@ -644,35 +748,39 @@ def _patch_backup_dir(install_dir, to_ver):
 
 
 def launch_patch(install_dir):
-    """DETACHED 拉起覆盖脚本：等本进程退出 -> 备份旧文件 -> 覆盖安装目录 ->
-    重启程序。成功 True；调用方随后负责退出应用。
+    """DETACHED 拉起覆盖脚本：等本进程退出 -> 按链逐段「备份->覆盖（失败即
+    整链回滚）-> 成功一段立即删掉该段的 zip 与 stage」-> 重启程序。
+    成功 True；调用方随后负责退出应用。
 
     为什么不在进程内直接覆盖：运行中的 .exe/.pyd 会被锁；而且覆盖到一半崩了
-    就装坏了。脚本里先备份、失败自动回滚。
+    就装坏了。脚本里先备份、失败自动回滚。v3.5.8 起 pending_patch() 是链
+    （单跳 = 链长 1），bat 按 (stage, zip) 参数对逐段应用。
     """
-    st = pending_patch()
-    if not st:
+    hops = pending_patch()
+    if not hops:
         return False
     dst = os.path.abspath(str(install_dir or "")).rstrip("\\/")
     if not dst or not os.path.isdir(dst):
         return False
-    stage = st.get("stage") or ""
-    if not os.path.isdir(stage):
-        return False
+    for h in hops:
+        if not os.path.isdir(h.get("stage") or ""):
+            return False
     d = update_dir()
     bat = os.path.join(d, _APPLY_BAT)
     log = os.path.join(d, "patch_apply.log")
-    bak = _patch_backup_dir(dst, st.get("to"))
-    # 启动器中文名只走命令行参数，绝不写进 bat 正文（见 _APPLY_BAT_TEXT 注释）
+    bak = _patch_backup_dir(dst, hops[0].get("to"))
+    # 启动器中文名只走命令行参数，绝不写进 bat 正文（见 _apply_bat_text 注释）
     exe = os.path.join(dst, "木偶工作室.exe")
     try:
         with open(bat, "w", encoding="ascii", newline="\r\n") as f:
-            f.write(_APPLY_BAT_TEXT)
+            f.write(_apply_bat_text())
     except OSError:
         return False
     comspec = os.environ.get("COMSPEC") or "cmd.exe"
     argv = [comspec, "/d", "/c", bat, str(os.getpid()),
-            stage.rstrip("\\/"), dst, bak, exe, log]
+            dst, bak, exe, log]
+    for h in hops:
+        argv += [h["stage"].rstrip("\\/"), h["zip"]]
     try:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -688,14 +796,17 @@ class UpdateThread(QThread):
     """点「检查更新」后的全流程后台线程（主线程零阻塞）。
 
     信号：status(str 人话) / progressed(int done, int total) /
-          ready(str 安装包路径) / patch_ready(str zip 路径, str 目标版本) /
-          failed(str) / uptodate(str 远端版本)。
-    v3.5.3 起优先发 patch_ready（增量包），只有增量包不可用时才发 ready（整包）。"""
+          ready(str 安装包路径) / patch_ready(str 首包zip, str 最终版本,
+          list 链节点) / failed(str) / uptodate(str 远端版本)。
+    v3.5.3 起优先发 patch_ready（增量包），只有增量包不可用时才发 ready
+    （整包）。v3.5.8 起增量走**链式**（find_patch_chain）：逐包下载校验
+    解包，全链就绪后一次 patch_ready（progressed 是全链总体进度）。
+    兼容：旧 list 未尾元素即旧单跳语义。"""
 
     status = Signal(str)
     progressed = Signal(int, int)
     ready = Signal(str)
-    patch_ready = Signal(str, str)
+    patch_ready = Signal(str, str, list)
     failed = Signal(str)
     uptodate = Signal(str)
 
@@ -733,14 +844,14 @@ class UpdateThread(QThread):
             self.uptodate.emit(remote)
             return
         self.status.emit("发现新版本 v%s，开始后台下载…" % remote)
-        # ---- 增量包优先（v3.5.3）：清单里有本机版本的增量包就只下几十~几百 KB ----
-        patch = find_patch(meta, self.local_version)
-        if patch is not None:
+        # ---- 增量链优先（v3.5.8）：从本机版本逐跳爬到最新，装完删包 ----
+        chain = find_patch_chain(meta, self.local_version)
+        if chain is not None:
             handled = False
             try:
-                handled = self._try_patch(meta, remote, patch)
+                handled = self._try_patch_chain(meta, remote, chain)
             except Exception as e:
-                self.status.emit("增量包处理异常，改下完整安装包：%s" % str(e)[:60])
+                self.status.emit("增量链处理异常，改下完整安装包：%s" % str(e)[:60])
             if handled:
                 return
             if self._cancelled():
@@ -841,7 +952,7 @@ class UpdateThread(QThread):
         return self._finish_patch(target, to, patch)
 
     def _finish_patch(self, target, to_ver, patch):
-        """解包到暂存目录并登记待应用状态；成功 True。"""
+        """解包到暂存目录并登记待应用状态（单跳兼容路径）；成功 True。"""
         ok, msg, stage, n = stage_patch(target, to_ver)
         if not ok:
             self.status.emit("%s，改下完整安装包…" % msg)
@@ -849,8 +960,108 @@ class UpdateThread(QThread):
         set_pending_patch({"zip": target, "stage": stage,
                            "from": patch.get("from"), "to": to_ver, "files": n})
         self.status.emit("增量包就绪（%d 个文件）" % n)
-        self.patch_ready.emit(target, to_ver)
+        self.patch_ready.emit(target, to_ver,
+                              [{"zip": target, "stage": stage,
+                                "from": patch.get("from"), "to": to_ver,
+                                "files": n}])
         return True
+
+    # ---------------- 增量链（v3.5.8：逐包下载校验解包，全链就绪一次上报） ----------------
+    def _try_patch_chain(self, meta, remote, chain):
+        """按序处理整条增量链。True = 已处理（成功或用户取消），
+        False = 让上层下整包。任何一环失败：清掉已解包的 stage（zip 保留
+        可复用），绝不留半截链待应用。"""
+        hops = chain["hops"]
+        total = int(chain.get("total_size") or 0)
+        path_str = " -> ".join("v%s" % h["to"] for h in hops)
+        self.status.emit("发现新版本 v%s，按序下载 %d 个增量包（共 %s）：%s"
+                         % (remote, len(hops), _human_size(total), path_str))
+        done = []
+        got = 0
+        try:
+            for i, h in enumerate(hops):
+                if self._cancelled():
+                    self.status.emit("已取消下载（已下的包保留，可续传复用）")
+                    self._cleanup_chain(done)
+                    return True
+                frm, to = h["from"], h["to"]
+                try:
+                    target = patch_path(to, frm)
+                except OSError:
+                    self._cleanup_chain(done)
+                    return False
+                # 上一轮已下好且校验通过：直接复用，不重复下载
+                reuse = False
+                if os.path.isfile(target) and os.path.getsize(target) > 0:
+                    try:
+                        reuse = self._verify_patch(target, h) \
+                            and self._cross_patch_ok(h)
+                    except OSError:
+                        reuse = False
+                if not reuse:
+                    url = patch_url(to, frm)
+                    urls = [url, MIRROR_PREFIX + url]
+                    base = got
+                    ok = _download_installer(
+                        urls, target,
+                        lambda g, t, b=base: self.progressed.emit(
+                            int(b + g), int(total or max(1, t))),
+                        self._cancelled)
+                    if self._cancelled():
+                        self.status.emit("已取消下载（已下的包保留，可续传复用）")
+                        self._cleanup_chain(done)
+                        return True
+                    if not ok or not os.path.isfile(target):
+                        self.status.emit("增量包 v%s 下载失败，改下完整安装包…" % to)
+                        self._cleanup_chain(done)
+                        return False
+                    if not _zip_head_ok(target):
+                        self._drop(target)
+                        self.status.emit("增量包 v%s 格式异常（非 zip），已删除，"
+                                         "改下完整安装包…" % to)
+                        self._cleanup_chain(done)
+                        return False
+                    if not self._verify_patch(target, h):
+                        self._drop(target)
+                        self.status.emit("增量包 v%s sha256 校验不符，坏包已删除，"
+                                         "改下完整安装包…" % to)
+                        self._cleanup_chain(done)
+                        return False
+                    if not self._cross_patch_ok(h):
+                        self._drop(target)
+                        self.status.emit("多源增量包校验不一致（v%s，镜像可能被篡改），"
+                                         "包已删除，改下完整安装包…" % to)
+                        self._cleanup_chain(done)
+                        return False
+                ok2, msg, stage, n = stage_patch(target, to)
+                if not ok2:
+                    self.status.emit("%s，改下完整安装包…" % msg)
+                    self._cleanup_chain(done)
+                    return False
+                done.append({"zip": target, "stage": stage, "from": frm,
+                             "to": to, "files": n})
+                got += int(h.get("size") or 0)
+                self.status.emit("增量包 %d/%d 就绪（v%s→v%s，%d 个文件）"
+                                 % (i + 1, len(hops), frm, to, n))
+            set_pending_patch(done)
+            self.status.emit("全部增量包就绪（%d 个，共 %s），重启后按序安装"
+                             % (len(done), _human_size(total)))
+            self.patch_ready.emit(done[0]["zip"], hops[-1]["to"], done)
+            return True
+        except Exception:
+            self._cleanup_chain(done)
+            raise
+
+    def _cleanup_chain(self, done):
+        """清掉链上已解包的 stage 目录（zip 保留：下次点更新直接复用）。"""
+        import shutil
+        for h in done:
+            st = h.get("stage")
+            if st and os.path.isdir(st):
+                try:
+                    shutil.rmtree(st, ignore_errors=True)
+                except Exception:
+                    pass
 
     @staticmethod
     def _drop(path):

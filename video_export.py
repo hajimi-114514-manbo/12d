@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import wave
 
 import numpy as np
@@ -41,7 +42,32 @@ _SUB_PANEL_CACHE = {}      # (W, H) -> (y0, band)
 _SUB_LAYOUT_CACHE = {}     # (W, H, text) -> [(ch, x, y), ...]
 _SUB_TEXT_CACHE = {}       # (W, H, text) -> (y0, band)  整句（打完后的稳定态）
 _SUB_CACHE_MAX = 24
+# v3.5.8（task-74 追加 A）：打字机"稳定区增量带"——a==1 的前缀字符像素
+# 恒定（alpha-over 满足结合律：先叠进透明带再叠 canvas == 逐字直接叠
+# canvas，PIL u8 混合与 float 混合的舍入差 ≤1 级，subtitle_burn 断言内）。
+# (W, H, text) -> {"img": PIL RGBA 带, "drawn": 已画前缀字符数, "arr":
+#                  np 拷贝（drawn 变化才刷新）, "x0","y0","used_x1", ...}
+#
+# **必须线程局部**（v3.5.8 并行导出）：这条缓存是**有状态增量累积**——
+# drawn 单调推进、p/al 缓冲原地累加。多线程共享会互相推进 drawn（A 线程
+# 画到第 10 字时 B 线程以为已画 10 字而跳过自己的 1..9 字 -> 缺字/串色，
+# 实测 maxdiff 154~186）。thread-local 后每线程独立累积，语义与单线程
+# 完全一致（只是多占一点内存）。
+_SUB_LOCAL = threading.local()
+
+
+def _sub_typing_cache():
+    c = getattr(_SUB_LOCAL, "typing", None)
+    if c is None:
+        c = _SUB_LOCAL.typing = {}
+    return c
+
+
+_SUB_TYPING_MAX = 8
 _FONT_CACHE = {}
+# v3.5.8 并行导出：字幕静态缓存（面板/布局/整句）是只读幂等的「算一次存
+# 起来」，多线程共享仅需保证字典结构操作互斥（读多写少，锁粒度极小）。
+_SUB_LOCK = threading.RLock()
 
 _TYPEWRITER_MS = 60        # 打字机每字符毫秒
 _TYPEWRITER_FADE = 0.5     # 单字渐显秒数
@@ -124,17 +150,51 @@ def _body_px(H):
     return max(16, min(110, int(round(H * _TEXT_BASE_PX / 1440))))
 
 
-def _blend_band(canvas, y0, band, x0=0):
-    """band（RGBA）alpha 混合进 canvas 的 y0..、x0.. 区域（就地）。"""
-    a = band[..., 3:4].astype(np.float32) / 255.0
-    reg = canvas[y0:y0 + band.shape[0], x0:x0 + band.shape[1]]
-    reg[:] = (band[..., :3] * a + reg * (1 - a)).astype(np.uint8)
+def _band_premul(band):
+    """band(RGBA) -> 预乘 rgb*a（u16 3 通道）。恒定 band（面板/名字/整句/
+    打字稳定带）一次预算随缓存存放，逐帧 blend 省掉 src×a 全帧乘。
+    v3.5.8（task-74 追加）：u8 定点管线，21.7→5.6ms/次（面板带宽实测）。
+    注意：这里**不做 /256**——_blend_band 的 convertScaleAbs 统一除，
+    与逐字 float 路径保持同一分母（/255 语义），否则半透明边缘系统性
+    偏亮 0.4%（打字带叠字边缘实测 diff 6 级，回归到 ≤3 内）。"""
+    import cv2
+    a3 = cv2.cvtColor(band[..., 3], cv2.COLOR_GRAY2BGR)
+    return cv2.multiply(band[..., :3], a3, dtype=cv2.CV_16UC3)
+
+
+def _blend_band(canvas, y0, band, x0=0, pre=None):
+    """band（RGBA）alpha 混合进 canvas 的 y0..、x0.. 区域（就地）。
+
+    v3.5.8（task-74 追加 B 同方向）：cv2 u8 定点 SIMD——
+    out=(pre + dst*(255-a))/255（pre=src*a 预算），与 float 原式
+    src*a/255 + dst*(1-a/255) 差 ≤1 灰阶（分母一致，仅舍入差；
+    subtitle_burn 27 项 + typing 缓存正确性 8 项把关）。
+    全透明跳过 / 全不透明直接覆盖。"""
+    import cv2
+    h, w = band.shape[:2]
+    reg = canvas[y0:y0 + h, x0:x0 + w]
+    if reg.size == 0:
+        return
+    a_ch = band[..., 3]
+    amin = int(a_ch.min())
+    if amin == 0 and not a_ch.any():
+        return
+    if amin == 255:
+        reg[...] = band[..., :3]
+        return
+    if pre is None:
+        pre = _band_premul(band)
+    a3 = cv2.cvtColor(a_ch, cv2.COLOR_GRAY2BGR)
+    p2 = cv2.multiply(reg, cv2.subtract(255, a3), dtype=cv2.CV_16UC3)
+    s = cv2.add(pre, p2, dtype=cv2.CV_16UC3)
+    reg[...] = cv2.convertScaleAbs(s, alpha=1.0 / 255.0)
 
 
 def _panel_layer(W, H):
     """底部渐变面板（textbox.scss TextBox_Background 复刻）。缓存 (W,H)。"""
     key = (W, H)
-    hit = _SUB_PANEL_CACHE.get(key)
+    with _SUB_LOCK:
+        hit = _SUB_PANEL_CACHE.get(key)
     if hit is not None:
         return hit
     scale = _engine_scale(H)
@@ -163,10 +223,11 @@ def _panel_layer(W, H):
     alpha = np.clip(a * m1 * m2 * 255.0, 0, 255)
     band = np.dstack([rgb.astype(np.uint8),
                       alpha.astype(np.uint8)])
-    out = (y0, band)
-    if len(_SUB_PANEL_CACHE) >= 4:
-        _SUB_PANEL_CACHE.clear()
-    _SUB_PANEL_CACHE[key] = out
+    out = (y0, band, _band_premul(band))
+    with _SUB_LOCK:
+        if len(_SUB_PANEL_CACHE) >= 4:
+            _SUB_PANEL_CACHE.clear()
+        _SUB_PANEL_CACHE[key] = out
     return out
 
 
@@ -174,7 +235,8 @@ def _dialog_layout(W, H, text):
     """台词排版：字距 0.2em 逐字符定位 + 贪心换行（≤4 行）。
     返回 [(ch, x, y), ...]（y = 行顶），缓存 (W,H,text)。"""
     key = (W, H, text)
-    hit = _SUB_LAYOUT_CACHE.get(key)
+    with _SUB_LOCK:
+        hit = _SUB_LAYOUT_CACHE.get(key)
     if hit is not None:
         return hit
     mod = _pil()
@@ -211,9 +273,10 @@ def _dialog_layout(W, H, text):
                 break
         out.append((ch, x, y))
         x += w
-    if len(_SUB_LAYOUT_CACHE) >= 48:
-        _SUB_LAYOUT_CACHE.pop(next(iter(_SUB_LAYOUT_CACHE)), None)
-    _SUB_LAYOUT_CACHE[key] = out
+    with _SUB_LOCK:
+        if len(_SUB_LAYOUT_CACHE) >= 48:
+            _SUB_LAYOUT_CACHE.pop(next(iter(_SUB_LAYOUT_CACHE)), None)
+        _SUB_LAYOUT_CACHE[key] = out
     return out
 
 
@@ -233,7 +296,8 @@ def _draw_engine_text(d, x, y, ch, font, body_px, alpha=1.0):
 def _name_band(W, H, who):
     """名字区（面板顶部）：85% 字号 + 白色渐隐分割线。缓存 (W,H,who)。"""
     key = (W, H, who)
-    hit = _SUB_TEXT_CACHE.get(("name",) + key)
+    with _SUB_LOCK:
+        hit = _SUB_TEXT_CACHE.get(("name",) + key)
     if hit is not None:
         return hit
     mod = _pil()
@@ -269,17 +333,19 @@ def _name_band(W, H, who):
             d.point((x0 + i, yy), fill=(255, 255, 255, a))
     band = np.asarray(img).copy()
     img.close()
-    out = (y0, band)
-    if len(_SUB_TEXT_CACHE) >= _SUB_CACHE_MAX:
-        _SUB_TEXT_CACHE.pop(next(iter(_SUB_TEXT_CACHE)), None)
-    _SUB_TEXT_CACHE[("name",) + key] = out
+    out = (y0, band, _band_premul(band))
+    with _SUB_LOCK:
+        if len(_SUB_TEXT_CACHE) >= _SUB_CACHE_MAX:
+            _SUB_TEXT_CACHE.pop(next(iter(_SUB_TEXT_CACHE)), None)
+        _SUB_TEXT_CACHE[("name",) + key] = out
     return out
 
 
 def _full_text_band(W, H, text):
     """打字完成后的整句图层。缓存 (W,H,text)。"""
     key = (W, H, text)
-    hit = _SUB_TEXT_CACHE.get(key)
+    with _SUB_LOCK:
+        hit = _SUB_TEXT_CACHE.get(key)
     if hit is not None:
         return hit
     mod = _pil()
@@ -306,11 +372,123 @@ def _full_text_band(W, H, text):
         _draw_engine_text(d, x - x0, y - y0, ch, body, body_px, alpha=1.0)
     band = np.asarray(img).copy()
     img.close()
-    out = (y0, x0, band)
-    if len(_SUB_TEXT_CACHE) >= _SUB_CACHE_MAX:
-        _SUB_TEXT_CACHE.pop(next(iter(_SUB_TEXT_CACHE)), None)
-    _SUB_TEXT_CACHE[key] = out
+    out = (y0, x0, band, _band_premul(band))
+    with _SUB_LOCK:
+        if len(_SUB_TEXT_CACHE) >= _SUB_CACHE_MAX:
+            _SUB_TEXT_CACHE.pop(next(iter(_SUB_TEXT_CACHE)), None)
+        _SUB_TEXT_CACHE[key] = out
     return out
+
+
+def _tile_of_char(ch, body, body_px, alpha):
+    """单字符三层文字的 RGBA tile 数组（与 _draw_char_now 同源构造）。
+    返回 (arr, pad, bw, bh) 或 None。"""
+    mod = _pil()
+    if mod is None or body is None or alpha <= 0.02:
+        return None
+    Image, ImageDraw, _ = mod
+    stroke = max(2, int(round(0.12 * body_px)))
+    soff = max(1, int(round(0.05 * body_px)))
+    bb = body.getbbox(ch) or (0, 0, int(body_px), int(body_px * 1.2))
+    pad = stroke + soff + 2
+    bw = int(bb[2] - bb[0]) + pad * 2
+    bh = int(sum(body.getmetrics())) + pad * 2
+    if bw <= 0 or bh <= 0:
+        return None
+    tile = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tile)
+    _draw_engine_text(d, pad - bb[0], pad, ch, body, body_px, alpha=alpha)
+    arr = np.asarray(tile)
+    return arr, pad, bw, bh
+
+
+def _tile_over_pband(p, al, x, y, arr, pad):
+    """tile 以与 _draw_char_now **完全相同的算式序**累积进 premul float
+    带（p=rgb*a 累积、al=a 累积）。premul 空间 source-over 线性可结合：
+    over(P, T1⊕T2) == over(over(P,T1),T2)（浮点舍入 ≤1ulp），
+    这是稳定区带缓存与逐字路径逐像素一致的正确性根基——
+    PIL ImageDraw 直接叠 PIL 带是 lerp 语义，相邻字半透明交叠处
+    实测差 236 级，故带必须用本函数积累。"""
+    ta = arr[..., 3:4].astype(np.float32) / 255.0
+    trgb = arr[..., :3].astype(np.float32)
+    h, w = p.shape[:2]
+    px, py = int(x) - pad, int(y) - pad
+    sx0, sy0 = max(0, px), max(0, py)
+    sx1, sy1 = min(w, px + arr.shape[1]), min(h, py + arr.shape[0])
+    if sx1 <= sx0 or sy1 <= sy0:
+        return
+    sub_a = ta[sy0 - py:sy1 - py, sx0 - px:sx1 - px]
+    sub_rgb = trgb[sy0 - py:sy1 - py, sx0 - px:sx1 - px]
+    ep = p[sy0:sy1, sx0:sx1]
+    ep *= (1.0 - sub_a)
+    ep += sub_rgb * sub_a
+    ea = al[sy0:sy1, sx0:sx1]
+    ea *= (1.0 - sub_a)
+    ea += sub_a
+
+
+def _typing_band(W, H, text, chars, n_stable):
+    """打字机稳定前缀增量带（v3.5.8 追加 A，premul float 版）。
+
+    返回 dict {"arr","pre","x0","y0","used_x1","drawn"} 或 None。
+    带几何取整句 bbox（与 _full_text_band 同式，区域随台词固定不漂移）；
+    n_stable 增长时只把**新稳定的字符**经 _tile_over_pband 增量累积并
+    刷新 arr/pre；n_stable 不变时零绘制零刷新；n_stable 回退（scrub
+    往回拖）时重建。arr 是 premul 语义 band（rgb=p 仅全不透明快路径
+    取用，恰与 straight 一致），pre = p*255（u16）供 _blend_band。
+    调用方把活跃字符（n_stable..vis）继续逐字直接叠 canvas。"""
+    mod = _pil()
+    body = _get_font(_body_px(H), bold=False)
+    if mod is None or body is None or n_stable <= 0:
+        return None
+    key = (W, H, text)
+    _tc = _sub_typing_cache()
+    e = _tc.get(key)
+    if e is None or n_stable < e["drawn"]:
+        body_px = _body_px(H)
+        stroke = max(2, int(round(0.12 * body_px)))
+        soff = max(1, int(round(0.05 * body_px)))
+        xs = [c[1] for c in chars]
+        ys = [c[2] for c in chars]
+        x0 = max(0, int(min(xs) - stroke - soff - 2))
+        x1 = min(W, int(max(xs) + max(body.getlength(c[0]) for c in chars)
+                         + stroke + soff + 2))
+        y0 = max(0, int(min(ys) - stroke - soff - 2))
+        y1 = min(H, int(max(ys) + int(sum(body.getmetrics()))
+                        + stroke + soff + 2))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        e = {"p": np.zeros((y1 - y0, x1 - x0, 3), np.float32),
+             "al": np.zeros((y1 - y0, x1 - x0, 1), np.float32),
+             "drawn": 0, "arr": None, "pre": None,
+             "x0": x0, "y0": y0, "used_x1": x0}
+        _tc.pop(key, None)
+        while len(_tc) >= _SUB_TYPING_MAX:
+            _tc.pop(next(iter(_tc)), None)
+        _tc[key] = e
+    if n_stable > e["drawn"]:
+        body_px = _body_px(H)
+        for ch, x, y in chars[e["drawn"]:n_stable]:
+            t = _tile_of_char(ch, body, body_px, 1.0)
+            if t is not None:
+                arr, pad, _bw, _bh = t
+                _tile_over_pband(e["p"], e["al"], x - e["x0"], y - e["y0"],
+                                 arr, pad)
+        e["drawn"] = n_stable
+        a_u8 = np.clip(e["al"] * 255.0, 0.0, 255.0).astype(np.uint8)
+        e["arr"] = np.dstack([np.clip(e["p"], 0.0, 255.0).astype(np.uint8),
+                              a_u8[..., 0]])
+        e["pre"] = np.clip(e["p"] * 255.0, 0.0, 65535.0).astype(np.uint16)
+        last_x = chars[n_stable - 1][1]
+        e["used_x1"] = min(e["arr"].shape[1],
+                           int(last_x - e["x0"]
+                               + body.getlength(chars[n_stable - 1][0])
+                               + 0.2 * body_px
+                               + 2 * (int(round(0.12 * body_px))
+                                      + int(round(0.05 * body_px)) + 2)))
+    if e["arr"] is None or e["drawn"] <= 0:
+        return None
+    return e
 
 
 def _draw_char_now(canvas, x, y, ch, alpha):
@@ -380,13 +558,13 @@ def _draw_dialogue(canvas, proj, t, aid):
     if not text:
         return
     H, W = canvas.shape[:2]
-    y0, band = _panel_layer(W, H)
+    y0, band, bpre = _panel_layer(W, H)
     if band is not None and band.size:
-        _blend_band(canvas, y0, band)
+        _blend_band(canvas, y0, band, pre=bpre)
     if who:
-        ny0, nband = _name_band(W, H, who)
+        ny0, nband, npre = _name_band(W, H, who)
         if nband is not None and nband.size:
-            _blend_band(canvas, ny0, nband)
+            _blend_band(canvas, ny0, nband, pre=npre)
     chars = _dialog_layout(W, H, text)
     if not chars:
         return
@@ -395,12 +573,25 @@ def _draw_dialogue(canvas, proj, t, aid):
     per = _typewriter_per(text, float(active.get("dur") or 3.0))
     fade = _TYPEWRITER_FADE
     if t_el >= (n - 1) * per + fade:
-        sy0, sx0, sband = _full_text_band(W, H, text)
+        sy0, sx0, sband, spre = _full_text_band(W, H, text)
         if sband is not None and sband.size:
-            _blend_band(canvas, sy0, sband, sx0)
+            _blend_band(canvas, sy0, sband, sx0, pre=spre)
         return
     vis = min(n, int(t_el / per) + 1)
-    for i in range(vis):
+    # v3.5.8 追加 A：a==1 的稳定前缀走增量带（每帧一次区域 blend，零
+    # 重复 PIL 绘制）；仍在 fade 中的尾部字符逐字直接叠 canvas（原路径）。
+    n_stable = 0
+    if t_el >= fade:
+        n_stable = min(vis, int((t_el - fade) / per) + 1)
+    if n_stable > 0:
+        e = _typing_band(W, H, text, chars, n_stable)
+        if e is not None:
+            ux = e["used_x1"]
+            band = e["arr"][:, :ux]
+            if band.size:
+                _blend_band(canvas, e["y0"], band, e["x0"],
+                            pre=e["pre"][:, :ux])
+    for i in range(n_stable, vis):
         ch, x, y = chars[i]
         a = min(1.0, max(0.0, (t_el - i * per) / fade))
         if a > 0.02:
@@ -408,11 +599,17 @@ def _draw_dialogue(canvas, proj, t, aid):
 
 
 def clear_subtitle_cache():
-    """换工程/换幕时清台词图层缓存（测试与外层管理用）。"""
-    _SUB_PANEL_CACHE.clear()
-    _SUB_LAYOUT_CACHE.clear()
-    _SUB_TEXT_CACHE.clear()
-    _FONT_CACHE.clear()
+    """换工程/换幕时清台词图层缓存（测试与外层管理用）。
+
+    v3.5.8：打字增量带是**线程局部**的，这里只能清当前线程那份。导出
+    并行线程的缓存随线程结束自然释放（每个导出任务用新线程池），因此
+    跨工程导出不会有脏数据；同线程反复导出由本函数清理。"""
+    with _SUB_LOCK:
+        _SUB_PANEL_CACHE.clear()
+        _SUB_LAYOUT_CACHE.clear()
+        _SUB_TEXT_CACHE.clear()
+        _FONT_CACHE.clear()
+    _sub_typing_cache().clear()
 
 
 # ---------------- 滤镜映射（v3.5.6 立项：setTransform → numpy 逐帧） ----------------
@@ -552,17 +749,33 @@ _FX_SEPIA_M = np.array([[0.393, 0.769, 0.189],
 
 
 def _gamma_lut(g):
-    """gamma 256 级 LUT（缓存；255*(i/255)^g，替代全帧 np.power）。"""
+    """gamma 256 级 LUT（缓存；255*(i/255)^g，替代全帧 np.power）。
+
+    v3.5.8：同时缓存 uint8 型（cv2.LUT 用，SIMD 查表比 numpy 花式索引
+    快 ~7ms/帧@1080p）。uint8 量化误差 ≤1 灰阶（实测 maxdiff 0.998），
+    在 qa 等价性容差（fx_map_test 9 区段 tol 2）内。"""
     g = max(0.1, g)
-    lut = _GAMMA_LUTS.get(g)
-    if lut is None:
+    ent = _GAMMA_LUTS.get(g)
+    if ent is None:
         if len(_GAMMA_LUTS) > 32:
             _GAMMA_LUTS.clear()
         i = np.arange(256, dtype=np.float32)
-        lut = (255.0 * np.power(np.clip(i / 255.0, 0.0, 1.0), g)
-               ).astype(np.float32)
-        _GAMMA_LUTS[g] = lut
-    return lut
+        f = (255.0 * np.power(np.clip(i / 255.0, 0.0, 1.0), g)
+             ).astype(np.float32)
+        u8 = np.clip(f, 0.0, 255.0).astype(np.uint8)
+        ent = (f, u8)
+        _GAMMA_LUTS[g] = ent
+    return ent
+
+
+def _gamma_apply(rgb, lut_u8):
+    """float 域 0..255（可越界）数组就地 gamma：clip→u8→cv2.LUT→写回。
+    LUT 输出天然在 [0,255]，调用方无需再 clip。
+    v3.5.8：clip+astype 合并为 cv2.multiply 饱和转换（10.7→5.3ms，
+    舍入 vs 截断 ≤1 灰阶——本就在 256 级量化域内，qa 容差 2 通过）。"""
+    import cv2
+    u8 = cv2.multiply(rgb, 1.0, dtype=cv2.CV_8U)
+    rgb[:] = cv2.LUT(u8, lut_u8)
 
 
 def _fx_color(rgb, p):
@@ -573,7 +786,13 @@ def _fx_color(rgb, p):
     brightness/contrast/colorRGB/saturation 全部合并成单个 3x3 矩阵 +
     偏移，一次 matmul 替代原来的 5 趟全帧扫描；②gamma 用 256 级 LUT
     查表替代全帧 np.power。gamma 从链中间挪到仿射之后（仅 sepia/gamma
-    **同时**使用时像素与 v3.5.6 有微小观感差，其余情况逐像素等价）。"""
+    **同时**使用时像素与 v3.5.6 有微小观感差，其余情况逐像素等价）。
+
+    v3.5.8 提速：③仿射矩阵乘 cv2.transform（OpenCV SIMD 多核；实测
+    13.5 vs 16.4ms/帧@1080p，maxdiff 6e-5；原地 dst= 反而慢 7ms，
+    保持分配新数组）；④gamma 走 uint8 cv2.LUT（15.8 vs 23.1ms，
+    量化误差 ≤1 灰阶在容差内）；⑤LUT 后输出天然有界，省一次全帧 clip。"""
+    import cv2
     sp = _fx_num(p.get("sepia"))
     br = _fx_num(p.get("brightness"), 1.0)
     ct = _fx_num(p.get("contrast"), 1.0)
@@ -585,9 +804,7 @@ def _fx_color(rgb, p):
             and (cr, cg, cb) == (1.0, 1.0, 1.0) and sa == 1.0:
         ga = _fx_num(p.get("gamma"), 1.0)
         if ga != 1.0:
-            rgb[:] = _gamma_lut(ga)[
-                np.clip(rgb, 0.0, 255.0).astype(np.uint8)]
-            np.clip(rgb, 0, 255, out=rgb)
+            _gamma_apply(rgb, _gamma_lut(ga)[1])
         return
     M = np.eye(3, dtype=np.float32)
     c = np.zeros(3, np.float32)
@@ -612,13 +829,13 @@ def _fx_color(rgb, p):
         W = np.array([0.299, 0.587, 0.114], np.float32)
         M = sa * M + (1.0 - sa) * np.outer(np.ones(3, np.float32), W @ M)
         c = sa * c + (1.0 - sa) * float(W @ c) * np.ones(3, np.float32)
-    rgb[:] = rgb @ M.T
+    rgb[:] = cv2.transform(rgb, M)
     if c.any():
         rgb += c
     ga = _fx_num(p.get("gamma"), 1.0)
     if ga != 1.0:
-        rgb[:] = _gamma_lut(ga)[
-            np.clip(rgb, 0.0, 255.0).astype(np.uint8)]
+        _gamma_apply(rgb, _gamma_lut(ga)[1])   # 输出有界，免尾部 clip
+        return
     np.clip(rgb, 0, 255, out=rgb)
 
 
@@ -698,19 +915,34 @@ def _fx_chain(rgb, p, ctx):
 
 def _fx_chain_rgba(frgba, p, ctx):
     """fig 层滤镜（非预乘 RGBA：调色作用于 rgb，alpha 参数乘 alpha 通道）。"""
+    import cv2
     rgb = frgba[..., :3].astype(np.float32)
     _fx_chain(rgb, p, ctx)
-    frgba[..., :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+    # v3.5.8：饱和转换替代 clip+astype（≤1 灰阶舍入差，见 _gamma_apply）
+    frgba[..., :3] = cv2.multiply(rgb, 1.0, dtype=cv2.CV_8U)
     al = _fx_num(p.get("alpha"), 1.0)
     if al != 1.0:
         al = min(1.0, max(0.0, al))
         frgba[..., 3] = (frgba[..., 3].astype(np.float32) * al).astype(np.uint8)
 
 
-def _paste_rgba(frgba, img, lay):
-    """把素材帧（RGB/RGBA）按 layout 以 alpha-over 累积进透明立绘层。"""
+# v3.5.8（task-74）：静态源贴层缓存——ImageSource/占位卡的 frame() 恒返回
+# 同一 ndarray（is_static），其 resize/warp/crop 结果逐帧相同，缓存后每帧
+# 只剩 alpha-over（46ms → ~5ms @1080p 实测目标）。键含 id(img)：
+# SourceManager 持有 source 实例、source 持有静态数组引用，id 在使用期
+# 内不复用；close_all 清缓存兜底。上限 8 条（1080p float 层 ~25MB/条，
+# 立绘子矩形远小于全帧，实际占用低一个量级）。
+_PASTE_CACHE = {}
+_PASTE_CACHE_MAX = 8
+
+
+def _paste_prep(img, lay, W, H):
+    """_paste_rgba 的无副作用前置段：resize/旋转/裁剪（**保持 u8**）。
+    返回 (sub_rgb_u8, sub_a_u8, dx0, dy0, dx1, dy1, opaque) 或 None（画面外）。
+    v3.5.8：不再提前转 float——opaque（alpha 全 255，如剪影占位卡/不透明
+    贴图）源在 _paste_over 走直接拷贝快路径（实测 25.9→1.2ms），float
+    转换只在真混合时付出。"""
     import cv2
-    H, W = frgba.shape[:2]
     x, y, sc, rot = lay["x"], lay["y"], lay["scale"], lay["rot"]
     if img.ndim == 2:
         img = np.dstack([img] * 3)
@@ -735,16 +967,127 @@ def _paste_rgba(frgba, img, lay):
     dx0, dy0 = max(0, ox), max(0, oy)
     dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
     if dx1 <= dx0 or dy1 <= dy0:
-        return
+        return None
     sx0, sy0 = dx0 - ox, dy0 - oy
-    sub_rgb = rgb[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)].astype(np.float32)
-    sub_a = a[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)].astype(np.float32)[..., None] / 255.0
-    dst = frgba[dy0:dy1, dx0:dx1].astype(np.float32)
-    dst_rgb, dst_a = dst[..., :3], dst[..., 3:4] / 255.0
-    out_a = sub_a + dst_a * (1 - sub_a)
-    rgb_over = (sub_rgb * sub_a + dst_rgb * dst_a * (1 - sub_a)) / np.maximum(1e-3, out_a)
-    frgba[dy0:dy1, dx0:dx1, :3] = np.clip(rgb_over, 0, 255).astype(np.uint8)
-    frgba[dy0:dy1, dx0:dx1, 3] = np.clip(out_a[..., 0] * 255, 0, 255).astype(np.uint8)
+    sub_rgb = rgb[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
+    sub_a = a[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
+    opaque = bool(sub_a.min() == 255)
+    return sub_rgb, sub_a, dx0, dy0, dx1, dy1, opaque
+
+
+# v3.5.8：_paste_over 的 float 工作区（消除逐帧大分配）。
+# **必须线程局部**：帧级并行导出时多个线程同时跑 alpha-over，共享一块
+# 模块级缓冲会互相踩（实测 12/12 帧串色，maxdiff 154）。改为 thread-local
+# 后每线程各一套，单线程行为与之前完全相同（只是首次多分配一次）。
+_OV_LOCAL = threading.local()
+
+
+def _ov_buf(key, shape):
+    bufs = getattr(_OV_LOCAL, "bufs", None)
+    if bufs is None:
+        bufs = _OV_LOCAL.bufs = {}
+    b = bufs.get(key)
+    if b is None or b.shape != shape:
+        b = np.empty(shape, np.float32)
+        bufs[key] = b
+    return b
+
+
+def _paste_over(frgba, prep):
+    """alpha-over 累积（每帧必做部分）。opaque 源直接拷贝（语义与 float
+    路径逐像素一致：a=1 时 out=sub、dst alpha 被覆盖为 255）。
+
+    v3.5.8 提速：①alpha 包围盒裁剪——silhouette/立绘四周全透明边距在
+    sa=0 处数学上恒等（oa=da → ro=dst），跳过不写回，结果逐像素不变；
+    ②float 工作区复用（_ov_buf）+ 全程 out= 原地，消除 6 个大数组的
+    逐帧分配。算子顺序与原实现一致 → 位级等价。"""
+    sub_rgb, sub_a, dx0, dy0, dx1, dy1, opaque = prep
+    if opaque:
+        frgba[dy0:dy1, dx0:dx1, :3] = sub_rgb
+        frgba[dy0:dy1, dx0:dx1, 3] = 255
+        return
+    # ① alpha 包围盒（两次 u8 reduction，微秒级）
+    rows = np.any(sub_a, axis=1)
+    if not rows.any():
+        return
+    cols = np.any(sub_a, axis=0)
+    r0 = int(np.argmax(rows))
+    r1 = len(rows) - int(np.argmax(rows[::-1]))
+    c0 = int(np.argmax(cols))
+    c1 = len(cols) - int(np.argmax(cols[::-1]))
+    if c1 <= c0 or r1 <= r0:
+        return
+    sub_rgb = sub_rgb[r0:r1, c0:c1]
+    sub_a = sub_a[r0:r1, c0:c1]
+    dx0 += c0
+    dy0 += r0
+    dx1 = min(dx1, dx0 + (c1 - c0))
+    dy1 = min(dy1, dy0 + (r1 - r0))
+    h, w = sub_a.shape
+    if dx1 <= dx0 or dy1 <= dy0:
+        return
+    # ② 原地 float 合成（公式与原实现逐步对应；sub_a 是 2D，统一扩 3 通道形）
+    sa = _ov_buf("sa", (h, w, 1))
+    np.multiply(sub_a[..., None], 1.0 / 255.0, out=sa)
+    dst = _ov_buf("dst", (h, w, 4))
+    np.copyto(dst, frgba[dy0:dy1, dx0:dx1])
+    sr = _ov_buf("sr", (h, w, 3))
+    np.copyto(sr, sub_rgb)
+    t = _ov_buf("t", (h, w, 1))
+    oa = _ov_buf("oa", (h, w, 1))
+    np.subtract(1.0, sa, out=t)                       # t = 1 - sa
+    dsa = dst[..., 3:4]
+    dsa *= (1.0 / 255.0)                              # da（原地）
+    dr = dst[..., :3]
+    dr *= dsa                                         # dst_rgb *= da
+    dr *= t                                           # dst_rgb*da*(1-sa)
+    sr *= sa                                          # sub_rgb*sa
+    sr += dr                                          # num
+    np.multiply(dsa, t, out=t)                        # t = da*(1-sa)
+    np.add(sa, t, out=oa)                             # oa = sa + da*(1-sa)
+    np.maximum(oa, 1e-3, out=oa)
+    sr /= oa                                          # ro = num/oa
+    np.clip(sr, 0, 255, out=sr)
+    frgba[dy0:dy1, dx0:dx1, :3] = sr.astype(np.uint8)
+    oa *= 255.0
+    np.clip(oa, 0, 255, out=oa)
+    frgba[dy0:dy1, dx0:dx1, 3] = oa[..., 0].astype(np.uint8)
+
+
+def _paste_rgba(frgba, img, lay, static=False):
+    """把素材帧（RGB/RGBA）按 layout 以 alpha-over 累积进透明立绘层。
+    static=True（v3.5.8）：img 为恒定的静态源数组，resize/warp/crop 结果
+    缓存复用；调用方必须保证该 img 在缓存期内不被原地改写。"""
+    if not static:
+        prep = _paste_prep(img, lay, frgba.shape[1], frgba.shape[0])
+        if prep is not None:
+            _paste_over(frgba, prep)
+        return
+    H, W = frgba.shape[:2]
+    key = (id(img), round(float(lay["x"]), 6), round(float(lay["y"]), 6),
+           round(float(lay["scale"]), 6), round(float(lay["rot"]), 6), W, H)
+    # v3.5.8 并行正确性：键用 id(img)，但 id 在对象释放后可被复用——
+    # 多 SourceManager 并行解码时，A 线程的素材死了、B 线程新对象可能
+    # 落在同一地址 -> 命中别人的 prep 会串帧（实测 maxdiff 154）。
+    # 缓存值同时持有 img 强引用，命中时 `is` 校验身份；不一致即视为
+    # 未命中重算。顺带让缓存自己钉住静态帧，避免中途被 GC 复用地址。
+    with _CACHE_LOCK:
+        ent = _PASTE_CACHE.get(key)
+    if ent is not None and ent[0] is img:
+        prep = ent[1]
+    else:
+        prep = _paste_prep(img, lay, W, H)
+        with _CACHE_LOCK:
+            if len(_PASTE_CACHE) >= _PASTE_CACHE_MAX:
+                _PASTE_CACHE.clear()
+            _PASTE_CACHE[key] = (img, prep)
+    if prep is not None:
+        _paste_over(frgba, prep)
+
+
+def _paste_cache_clear():
+    with _CACHE_LOCK:
+        _PASTE_CACHE.clear()
 
 
 # ffmpeg 候选（与 l2d_rig_qt.FFMPEG_CANDIDATES 同步；勿 import 那边）
@@ -758,7 +1101,77 @@ def ffmpeg_path():
 
 
 # ---------------- 单帧合成 ----------------
+# v3.5.8 并行正确性：模块级缓存在多线程合成下共享（帧级并行 & bg∥fig
+# 双线程），结构操作（LRU 淘汰 / clear / 写入）必须持锁——只在读写字典
+# 结构时持锁，重计算与大数组运算都在锁外，不损失并行度。
+_CACHE_LOCK = threading.RLock()
+
 _BG_CACHE = {}
+
+# v3.5.8（task-74）：bg∥fig 双线程池（模块级复用，避免逐帧建线程；
+# 导出进程生命周期内 2 worker 常驻，成本可忽略）
+_FX_POOL = None
+
+
+def _fx_pool():
+    global _FX_POOL
+    if _FX_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _FX_POOL = ThreadPoolExecutor(max_workers=2,
+                                      thread_name_prefix="mfx")
+    return _FX_POOL
+
+
+# v3.5.8（task-74）：层结果缓存——"静态输入 + 非时变滤镜"时整层滤镜
+# 输出逐帧相同，缓存后 bg/fig pass 只剩一次 copy（10ms 级）。
+# 拦截口径 = **时变算子黑名单**（读 ctx.t/seed 的四个）；其余键无论
+# 导出链是否消费（如引擎侧 bevel*）都不影响"同参数同输出"，放行并把
+# 参数值计入签名（值变即键变，正确性自洽）。上限 2 份防内存
+# （float 1080p 层 ≈25MB/份、RGBA ≈33MB/份）。
+_FX_TIMEVARYING_KEYS = frozenset({
+    "glitchFilm", "rgbFilm", "noise", "oldFilm",
+})
+_BG_FX_CACHE = {}
+_FIG_FX_CACHE = {}
+# v3.5.8：上限 4 + LRU 淘汰（clear 全弃在多签名场景交替 thrash——
+# 真实工程 4 个时刻 4 种背景+2 种 fig 滤镜签名，2 上限永远未命中）
+_FX_CACHE_MAX = 4
+
+
+def _fx_sig(p):
+    """滤镜参数字典 -> 可哈希签名；None = 不可缓存（空/含时变算子）。"""
+    if not p:
+        return None
+    ks = []
+    for k, v in p.items():
+        if k in _FX_TIMEVARYING_KEYS:
+            return None
+        try:
+            ks.append((k, round(float(v), 6)))
+        except (TypeError, ValueError):
+            ks.append((k, str(v)))
+    return tuple(sorted(ks))
+
+
+def _fx_cache_put(cache, key, layer):
+    # LRU：命中/新写入都移到队尾，超限弃最旧（不整体 clear）
+    with _CACHE_LOCK:
+        cache.pop(key, None)
+        while len(cache) >= _FX_CACHE_MAX:
+            cache.pop(next(iter(cache)), None)
+        cache[key] = layer.copy()
+
+
+def _fx_cache_get(cache, key):
+    """线程安全取缓存层（返回内部数组引用，调用方只读、需要写就 copy）。"""
+    with _CACHE_LOCK:
+        return cache.get(key)
+
+
+def _fx_cache_clear():
+    with _CACHE_LOCK:
+        _BG_FX_CACHE.clear()
+        _FIG_FX_CACHE.clear()
 
 
 def _bg_cache_key(jobs, W, H):
@@ -787,16 +1200,21 @@ def _paste_bg_layer(bgc, jobs, W, H):
         return
     key = _bg_cache_key(jobs, W, H)
     if key is not None:
-        cached = _BG_CACHE.get(key)
+        with _CACHE_LOCK:
+            cached = _BG_CACHE.get(key)
         if cached is not None:
             bgc[...] = cached
             return
     for img, lay, _sd in jobs:
         paste_layer(bgc, img, lay)
     if key is not None:
-        if len(_BG_CACHE) >= 2:
-            _BG_CACHE.clear()          # 上限 2 份（float32 1080p ≈ 25MB/份）
-        _BG_CACHE[key] = bgc.copy()
+        # v3.5.8：LRU@4（原 clear@2——与 _BG_FX_CACHE 上限对齐，多背景
+        # 工程不再互相踢废；fx_map 9-5/9-6 的 len==1/2 断言兼容）
+        with _CACHE_LOCK:
+            _BG_CACHE.pop(key, None)
+            while len(_BG_CACHE) >= 4:
+                _BG_CACHE.pop(next(iter(_BG_CACHE)), None)
+            _BG_CACHE[key] = bgc.copy()
 
 
 def source_key(src):
@@ -1028,23 +1446,74 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
             if bool(lay.get("cover")):
                 bg_jobs.append((img, lay, clip.get("source")))
             elif is_fig:
-                fig_jobs.append((img, lay))
+                fig_jobs.append((img, lay,
+                                 bool(getattr(src, "is_static", False))))
             else:
                 main_jobs.append((img, lay))
-        _paste_bg_layer(bgc, bg_jobs, W, H)
         bg_fx = fx_map.get("bg-main") or fx_map.get("bg")
-        if bg_fx:
-            _fx_chain(bgc, bg_fx, ctx)
-        np.clip(bgc, 0, 255, out=bgc)
-        canvas[...] = bgc
-        for img, lay in fig_jobs:
-            _paste_rgba(fig, img, lay)
         fig_fx = None
         for k, v in fx_map.items():
             if k.startswith("fig"):
                 fig_fx = v
-        if fig_fx:
-            _fx_chain_rgba(fig, fig_fx, ctx)
+
+        def _bg_pass():
+            # v3.5.8：静态背景 + 纯空间滤镜 -> 整层结果缓存（bgc 是
+            # float32 全帧，copy ~8ms，替代 paste+chain 的 ~60ms）
+            bg_key = _bg_cache_key(bg_jobs, W, H)
+            fsig = _fx_sig(bg_fx) if bg_key is not None else None
+            ck2 = (bg_key, fsig) if fsig is not None else None
+            # 命中前提：底层 _BG_CACHE 条目仍在——测试/清缓存语义下
+            # （_BG_CACHE.clear()）派生的 fx 缓存一并失效，不留孤儿命中。
+            if ck2 is not None:
+                with _CACHE_LOCK:
+                    hit = _BG_FX_CACHE.get(ck2) if bg_key in _BG_CACHE else None
+                if hit is not None:
+                    bgc[...] = hit
+                    return
+            _paste_bg_layer(bgc, bg_jobs, W, H)
+            if bg_fx:
+                _fx_chain(bgc, bg_fx, ctx)
+            np.clip(bgc, 0, 255, out=bgc)
+            if ck2 is not None:
+                _fx_cache_put(_BG_FX_CACHE, ck2, bgc)
+
+        def _fig_pass():
+            # v3.5.8：全部立绘为静态源（is_static）+ 纯空间 fig 滤镜 ->
+            # 立绘层整层缓存（paste+chain ~80ms -> copy ~12ms）
+            fsig = _fx_sig(fig_fx)
+            fkey = None
+            if fsig is not None and fig_jobs and \
+                    all(st for _i, _l, st in fig_jobs):
+                fkey = tuple(
+                    (id(img), round(float(lay["x"]), 6),
+                     round(float(lay["y"]), 6),
+                     round(float(lay["scale"]), 6),
+                     round(float(lay["rot"]), 6))
+                    for img, lay, _st in fig_jobs) + (fsig, W, H)
+            if fkey is not None:
+                hit = _fx_cache_get(_FIG_FX_CACHE, fkey)
+                if hit is not None:
+                    fig[...] = hit
+                    return
+            for img, lay, st in fig_jobs:
+                _paste_rgba(fig, img, lay, static=st)
+            if fig_fx:
+                _fx_chain_rgba(fig, fig_fx, ctx)
+            if fkey is not None:
+                _fx_cache_put(_FIG_FX_CACHE, fkey, fig)
+
+        # v3.5.8（task-74）任务3：bg 层与 fig 层完全独立（各自数组、ctx
+        # 只读、_BG_CACHE/_PASTE_CACHE 分别单线程访问），numpy/cv2 大
+        # 操作释放 GIL——双线程并行；单层为空时保持串行省调度开销。
+        if bg_jobs and fig_jobs:
+            f1 = _fx_pool().submit(_bg_pass)
+            f2 = _fx_pool().submit(_fig_pass)
+            f1.result()               # 异常照常上抛（语义同串行）
+            f2.result()
+        else:
+            _bg_pass()
+            _fig_pass()
+        canvas[...] = bgc
         a = fig[..., 3:4].astype(np.float32) / 255.0
         canvas[...] = (fig[..., :3] * a + canvas * (1 - a)).astype(np.uint8)
         for img, lay in main_jobs:                  # 其余轨仍在最上层
@@ -1074,6 +1543,10 @@ class SourceManager:
             except Exception:
                 pass
         self._cache.clear()
+        # v3.5.8：source 实例释放后其静态数组 id 可能被复用——贴层缓存
+        # 必须随之清空（正确性兜底，见 _PASTE_CACHE 注释）。
+        _paste_cache_clear()
+        _fx_cache_clear()
 
 
 # ---------------- 混音 ----------------
@@ -1163,51 +1636,148 @@ def write_wav(path, samples, sr=44100):
         wf.writeframes(samples.tobytes())
 
 
+# ---------------- 导出并行度（v3.5.8） ----------------
+def export_worker_limits():
+    """帧级并行线程的 (默认值, 上限)。UI 下拉与 Worker 归一化共用同一口径。
+
+    **实测数据说了算**（1080p 真实工程端到端，12 秒 360 帧）：
+        1 线程 24.4 fps（基准） / 4 线程 **49.6 fps（2.03x，最优）**
+        8 线程 33.4 / 12 线程 27.7 / 23 线程 31.3——全部明显退化
+    退化原因：每线程独立 SourceManager 各自解码同一批素材，线程一多
+    就撞上磁盘/内存带宽墙与 GIL（numpy 小算子不放 GIL）。
+
+    所以「尽可能多占」的正确落地是**占在拐点上**：
+      - 默认 = clamp(核数//4, 2, 4)：24 核→4（实测最优档）
+      - 上限 = clamp(核数//2, 4, 8)：留给想自己试的用户，但不超过实测
+        拐点族（8 档以上只会更慢，放出来是骗用户）
+    用户要更多可以改代码里的常量；UI 只在这个区间里给选项。"""
+    try:
+        cores = os.cpu_count() or 4
+    except Exception:
+        cores = 4
+    cores = max(1, int(cores))
+    default = max(2, min(4, cores // 4))
+    upper = max(default, min(8, cores // 2))
+    return default, upper
+
+
+def normalize_workers(workers=None):
+    """用户选择 -> 合法线程数；None/非法/越界一律回落到默认值。"""
+    default, upper = export_worker_limits()
+    if workers is None:
+        return default
+    try:
+        w = int(workers)
+    except (TypeError, ValueError):
+        return default
+    if w < 1:
+        return default
+    return max(1, min(upper, w))
+
+
 # ---------------- 导出 Worker ----------------
 try:
     from PySide6.QtCore import QThread, Signal
+    from collections import deque
+    from concurrent.futures import ThreadPoolExecutor
+    import ctypes
+
+    # 帧级并行合成的 thread-local 状态（每合成线程独立 SourceManager）。
+    # 建过的 sm 登记进 _TLS_SMS，导出结束统一 close（thread-local 无法
+    # 从外部枚举，靠登记表防解码句柄泄漏）。
+    _TLS = threading.local()
+    _TLS_LOCK = threading.Lock()
+    _TLS_SMS = []
 
     class VideoExportWorker(QThread):
         """按轨道时间线导出 mp4。progress(pct)，done(ok, msg)。"""
         progress = Signal(int)
         done = Signal(bool, str)
 
-        def __init__(self, proj, out_path, preview_scale=1.0, parent=None):
+        def __init__(self, proj, out_path, preview_scale=1.0, fps=None,
+                     quality=None, workers=None, parent=None):
             super().__init__(parent)
             self.proj = proj
             self.path = out_path
             self.scale = float(preview_scale)
+            # v3.5.8 导出参数（剪映式）：fps=None 跟工程帧率；否则按新帧率
+            # 采样（帧数=时长×fps，t=i/fps 照常取时间线时刻，快放/慢放感
+            # 由素材自身在 t 时刻的画面决定，与播放速度无关）。
+            self.fps_override = None
+            if fps is not None:
+                try:
+                    f = float(fps)
+                    if 1.0 <= f <= 120.0:
+                        self.fps_override = f
+                except (TypeError, ValueError):
+                    pass
+            # quality 保留占位：cv2 mp4v 后端实测不支持 QUALITY（set 后
+            # 输出字节不变，H264 四元组假成功 0 字节），恒用默认质量。
+            self.quality = quality
+            # workers：帧级并行线程数。None/非法 -> 自动（核数//4，2..4）。
+            # 用户可在导出对话框选；上限由 export_worker_limits() 给（UI 用
+            # 同一个函数算下拉上限，避免两边口径不一致）。
+            self.workers = normalize_workers(workers)
             self._cancel = False
 
         def cancel(self):
             self._cancel = True
 
+        def _compose_parallel(self, t):
+            """帧级并行合成（v3.5.8）：每线程独立 SourceManager。
+
+            v3.5.8 定稿：**不降优先级**。线程数已由用户在导出对话框选定
+            （上限按核数探测），选多少就满速用多少——不再为「移鼠标不卡」
+            做 BELOW_NORMAL 妥协（用户明确：既然可选就不考虑鼠标卡顿）。"""
+            sm = getattr(_TLS, "sm", None)
+            if sm is None:
+                sm = _TLS.sm = SourceManager()
+                with _TLS_LOCK:
+                    _TLS_SMS.append(sm)
+            return compose_frame(self.proj, t, sm.get)
+
         def run(self):
             import cv2
-            sm = SourceManager()
+            # 封住 cv2 内部线程池：帧级并行时嵌套多线程互相争用（实测 6/8
+            # 线程退化），单帧限 1 内部线程 + N 合成线程 = 甜点。
+            cv2.setNumThreads(1)
             try:
                 W = max(2, int(round(self.proj["width"] * self.scale)) & ~1)
                 H = max(2, int(round(self.proj["height"] * self.scale)) & ~1)
-                fps = float(self.proj["fps"])
+                fps = self.fps_override or float(self.proj["fps"])
                 n = max(1, int(round(V.project_duration(self.proj) * fps)))
                 vw = cv2.VideoWriter(self.path, cv2.VideoWriter_fourcc(*"mp4v"),
                                     fps, (W, H))
                 if not vw.isOpened():
                     self.done.emit(False, "无法创建视频编码器（cv2 mp4v）")
                     return
-                canvas = np.zeros((H, W, 3), np.uint8)
-                for i in range(n):
+                # ---- v3.5.8 帧级流水：NW 线程乱序合成、按序写编码器 ----
+                # 滑动窗口（NW*2）防止 n 帧 futures 全量积压内存。
+                # NW 由用户选（对话框），归一化时已按核数封顶。
+                nw = self.workers
+                pool = ThreadPoolExecutor(max_workers=nw)
+                window = deque()
+                nxt = 0
+                written = 0
+                while written < n:
                     if self._cancel:
+                        pool.shutdown(wait=False, cancel_futures=True)
                         vw.release()
                         self.done.emit(False, "已取消")
                         return
-                    t = i / fps
-                    frame = compose_frame(self.proj, t, sm.get)
+                    while nxt < n and len(window) < nw * 2:
+                        window.append(pool.submit(self._compose_parallel,
+                                                  nxt / fps))
+                        nxt += 1
+                    frame = window.popleft().result()
                     if frame.shape[0] != H or frame.shape[1] != W:
-                        frame = cv2.resize(frame, (W, H), interpolation=cv2.INTER_AREA)
+                        frame = cv2.resize(frame, (W, H),
+                                           interpolation=cv2.INTER_AREA)
                     vw.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-                    if i % max(1, n // 50) == 0:
-                        self.progress.emit(int(i / n * 80))
+                    written += 1
+                    if written % max(1, n // 50) == 0:
+                        self.progress.emit(int(written / n * 80))
+                pool.shutdown(wait=False)
                 vw.release()
                 self.progress.emit(80)
                 # 混音合流
@@ -1242,6 +1812,10 @@ try:
             except Exception as e:
                 self.done.emit(False, "导出异常: %r" % e)
             finally:
-                sm.close_all()
+                cv2.setNumThreads(0)     # 恢复 cv2 全局默认（预览还要用）
+                with _TLS_LOCK:
+                    for sm in _TLS_SMS:
+                        sm.close_all()
+                    _TLS_SMS.clear()
 except ImportError:      # 无 Qt 环境（纯单测）也能 import 本模块
     VideoExportWorker = None

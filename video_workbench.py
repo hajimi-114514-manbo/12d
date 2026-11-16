@@ -1945,22 +1945,65 @@ class VideoWorkbench(QWidget):
     def _open_export_dialog(self):
         dlg = _ExportDialog(self, self.proj)
         if dlg.exec():
-            path, scale = dlg.result_values()
-            self._start_export(path, scale)
+            # v3.5.8：自定义帧率非法时阻止导出
+            if not dlg._fps_valid():
+                InfoBar.warning("帧率无效", "帧率需为 1-120 的整数，请修正后再导出",
+                                parent=self, position=InfoBarPosition.TOP,
+                                duration=4000)
+                return
+            path, scale, fps, workers = dlg.result_values()
+            self._start_export(path, scale, fps, workers)
 
-    def _start_export(self, path, scale):
+    def _start_export(self, path, scale, fps=None, workers=None):
         self.stop_play()
         self.act_export.setEnabled(False)
+        # v3.5.8：导出进度计时（滑动平均估速 -> 剩余时间）
+        self._export_t0 = time.monotonic()
+        self._export_last_t = self._export_t0
+        self._export_last_pct = 0
+        self._export_rates = []
         self._export_worker = VE.VideoExportWorker(self.proj, path, scale,
+                                                   fps=fps, workers=workers,
                                                    parent=self)
         self._export_worker.progress.connect(self._export_progress)
         self._export_worker.done.connect(self._export_done)
         self._export_worker.start()
 
     def _export_progress(self, pct):
-        self.act_export.setText("%d%%" % pct)
+        # v3.5.8：滑动平均估速，剩余≈(100-pct)/速率；前两次回调数据不足只显示百分比
+        t = time.monotonic()
+        last_t = getattr(self, "_export_last_t", None)
+        last_pct = getattr(self, "_export_last_pct", None)
+        rates = list(getattr(self, "_export_rates", []))
+        if last_t is not None and last_pct is not None and t > last_t \
+                and pct > last_pct:
+            dt = t - last_t
+            if dt > 0:
+                inst = (pct - last_pct) / dt
+                if inst > 0:
+                    rates = (rates + [inst])[-3:]
+        if last_t is not None:
+            self._export_last_t = t
+        self._export_last_pct = pct
+        self._export_rates = rates
+        if len(rates) >= 2:
+            rate = sum(rates) / len(rates)
+            if rate > 0 and pct < 100:
+                remain = (100.0 - pct) / rate
+                if remain > 0:
+                    secs = int(round(remain))
+                    self.act_export.setText("导出 %d%% · 剩约 %d 分 %d 秒"
+                                            % (pct, secs // 60, secs % 60))
+                    return
+        self.act_export.setText("导出 %d%%" % pct)
 
     def _export_done(self, ok, msg):
+        for _k in ("_export_t0", "_export_last_t", "_export_last_pct",
+                   "_export_rates"):
+            try:
+                delattr(self, _k)
+            except AttributeError:
+                pass
         self.act_export.setEnabled(True)
         self.act_export.setText("导出")
         (InfoBar.success if ok else InfoBar.error)(
@@ -1969,8 +2012,28 @@ class VideoWorkbench(QWidget):
 
 
 class _ExportDialog(MessageBoxBase):
+    """剪映式导出参数：分辨率（精确像素）/ 帧率 / 耗时预估。"""
+
+    # v3.5.8：分辨率档位 scale（跟工程 1.0 起），帧率档位（None=跟工程）
+    _RES_SCALES = [1.0, 0.6667, 0.5, 0.4444]
+    _RES_TAGS = ["跟工程", "720p", "540p", "480p"]
+    _FPS_VALS = [None, 60, 30, 24, 15]
+
+    # v3.5.8：并行线程加速比（实测曲线粗略拟合，>8 按 2.1x）
+    _SPEEDUP = {1: 1.0, 2: 1.6, 3: 1.85, 4: 2.0, 5: 2.1,
+                6: 2.15, 7: 2.15, 8: 2.1}
+
+    @staticmethod
+    def _speedup(n):
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return 1.0
+        return _ExportDialog._SPEEDUP.get(n, 2.1 if n > 8 else 1.0)
+
     def __init__(self, parent, proj):
         super().__init__(parent)
+        self.proj = proj
         self.viewLayout.addWidget(StrongBodyLabel("导出视频"))
         r = QHBoxLayout()
         r.addWidget(CaptionLabel("保存路径"))
@@ -1982,20 +2045,172 @@ class _ExportDialog(MessageBoxBase):
         self.ed_path.setText(default)
         r.addWidget(self.ed_path, 1)
         self.viewLayout.addLayout(r)
+
+        pw = int(proj.get("width", 1920))
+        ph = int(proj.get("height", 1080))
+        # 分辨率：精确像素，用 proj 实际宽高算目标并四舍五入到偶数
+        res_labels = []
+        for sc, tag in zip(self._RES_SCALES, self._RES_TAGS):
+            tw = max(2, int(round(pw * sc / 2)) * 2)
+            th = max(2, int(round(ph * sc / 2)) * 2)
+            if tag == "跟工程":
+                res_labels.append("跟工程 (%d×%d)" % (tw, th))
+            else:
+                res_labels.append("%d×%d (%s)" % (tw, th, tag))
         r2 = QHBoxLayout()
         r2.addWidget(CaptionLabel("分辨率"))
         self.cmb_out = ComboBox()
-        self.cmb_out.addItems(["工程原始 (%d×%d)" % (proj["width"], proj["height"]),
-                               "1080p (75%)", "720p (50%)", "480p (33%)"])
+        self.cmb_out.addItems(res_labels)
         r2.addWidget(self.cmb_out, 1)
         self.viewLayout.addLayout(r2)
+
+        # 帧率：第一项显示工程实际 fps，末项「自定义…」配数字输入（1-120）
+        pfps = float(proj.get("fps", 30) or 30)
+        fps_labels = ["跟工程 (%dfps)" % int(round(pfps))]
+        fps_labels += ["%dfps" % f for f in self._FPS_VALS[1:]]
+        fps_labels.append("自定义…")
+        r3 = QHBoxLayout()
+        r3.addWidget(CaptionLabel("帧率"))
+        self.cmb_fps = ComboBox()
+        self.cmb_fps.addItems(fps_labels)
+        r3.addWidget(self.cmb_fps, 1)
+        self.ed_fps = LineEdit(self)
+        self.ed_fps.setPlaceholderText("1-120")
+        self.ed_fps.setMaximumWidth(72)
+        try:
+            from PySide6.QtGui import QIntValidator
+            self.ed_fps.setValidator(QIntValidator(1, 120, self.ed_fps))
+        except Exception:
+            pass
+        self.ed_fps.editingFinished.connect(self._validate_fps)
+        r3.addWidget(self.ed_fps)
+        self.ed_fps.setVisible(False)
+        self.viewLayout.addLayout(r3)
+
+        # 并行线程：1..upper_w，default_w 项标「（推荐）」；选项取自
+        # video_export.export_worker_limits()，不自己猜核数。
+        try:
+            import video_export as _VE
+            dw, uw = _VE.export_worker_limits()
+            dw, uw = int(dw), int(uw)
+        except Exception:
+            dw, uw = 1, max(1, int(os.cpu_count() or 1))
+        if dw < 1 or dw > uw:
+            dw = max(1, min(uw, dw))
+        self._worker_dw, self._worker_uw = dw, uw
+        w_labels = ["%d 线程%s" % (n, "（推荐）" if n == dw else "")
+                    for n in range(1, uw + 1)]
+        r4 = QHBoxLayout()
+        r4.addWidget(CaptionLabel("并行线程"))
+        self.cmb_workers = ComboBox()
+        self.cmb_workers.addItems(w_labels)
+        self.cmb_workers.setCurrentIndex(max(0, dw - 1))
+        r4.addWidget(self.cmb_workers, 1)
+        self.viewLayout.addLayout(r4)
+        cpu = max(1, int(os.cpu_count() or 1))
+        self.workers_hint = CaptionLabel(
+            "线程越多越快，但受内存带宽限制，超过甜点反而变慢；"
+            "默认值已按本机核数（%d 核）实测调过" % cpu, self)
+        self.workers_hint.setWordWrap(True)
+        self.workers_hint.setStyleSheet("color:#8a93a2; font-size:11px;")
+        self.viewLayout.addWidget(self.workers_hint)
+
+        # 耗时预估（CaptionLabel，随任一下拉变化刷新）
+        self.est_lbl = CaptionLabel("耗时预估：—", self)
+        self.est_lbl.setWordWrap(True)
+        self.est_lbl.setStyleSheet("color:#8a93a2; font-size:11px;")
+        self.viewLayout.addWidget(self.est_lbl)
+
+        self.cmb_out.currentIndexChanged.connect(self._refresh_estimate)
+        self.cmb_fps.currentIndexChanged.connect(self._on_fps_changed)
+        self.cmb_workers.currentIndexChanged.connect(self._refresh_estimate)
+        self._refresh_estimate()
+
         self.yesButton.setText("开始导出")
         self.cancelButton.setText("取消")
         self.widget.setMinimumWidth(480)
 
+    def _fps_custom(self):
+        return self.cmb_fps.currentIndex() >= len(self._FPS_VALS)
+
+    def _fps_value(self):
+        """当前所选帧率：档位返回数字（None=跟工程）；自定义解析输入，非法返回 None。"""
+        if not self._fps_custom():
+            return self._FPS_VALS[max(0, self.cmb_fps.currentIndex())]
+        txt = (self.ed_fps.text() or "").strip()
+        try:
+            v = int(txt)
+        except ValueError:
+            return None
+        return v if 1 <= v <= 120 else None
+
+    def _fps_valid(self):
+        """帧率是否合法（自定义时校验 1-120 整数）。"""
+        if not self._fps_custom():
+            return True
+        txt = (self.ed_fps.text() or "").strip()
+        try:
+            v = int(txt)
+        except ValueError:
+            return False
+        return 1 <= v <= 120
+
+    def _on_fps_changed(self):
+        custom = self._fps_custom()
+        self.ed_fps.setVisible(custom)
+        if custom:
+            self.ed_fps.setFocus()
+        self._refresh_estimate()
+
+    def _validate_fps(self):
+        if self._fps_custom() and not self._fps_valid():
+            InfoBar.warning("帧率无效", "帧率需为 1-120 的整数",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+
+    def _refresh_estimate(self):
+        """按当前分辨率+帧率估算「预计约 X 分钟（N 帧）」。
+
+        帧数 = 工程时长 × 所选帧率；每帧毫秒 ≈ 96.8×(所选高/1080)² + 5.3×(所选高/1080)²
+        （线性外推；粗略预估，实际随素材复杂度浮动）。
+        """
+        try:
+            p = self.proj
+            dur = V.project_duration(p)
+            sc = self._RES_SCALES[max(0, self.cmb_out.currentIndex())]
+            th = max(2, int(round(int(p.get("height", 1080)) * sc / 2)) * 2)
+            r2 = (th / 1080.0) ** 2
+            fps = self._fps_value()
+            if self._fps_custom() and fps is None:
+                self.est_lbl.setText(
+                    "帧率需为 1-120 的整数 · 粗略预估，实际随素材复杂度浮动")
+                return
+            if fps is None:
+                fps = float(p.get("fps", 30) or 30)
+            frames = max(1, int(round(dur * fps)))
+            workers = self._workers_value()
+            sp = self._speedup(workers)
+            ms_per = (96.8 * r2 + 5.3 * r2) / sp
+            minutes = frames * ms_per / 60000.0
+            self.est_lbl.setText(
+                "预计约 %.1f 分钟（%d 帧）· 粗略预估，实际随素材复杂度浮动 · "
+                "线程 1 时为单线程基准" % (minutes, frames))
+        except Exception:
+            self.est_lbl.setText("耗时预估：— · 粗略预估，实际随素材复杂度浮动")
+
+    def _workers_value(self):
+        """当前所选并行线程数（1..upper_w）。"""
+        try:
+            return max(1, int(self.cmb_workers.currentIndex()) + 1)
+        except Exception:
+            return 1
+
     def result_values(self):
-        scale = (1.0, 0.75, 0.5, 0.33)[max(0, self.cmb_out.currentIndex())]
-        return os.path.normpath(self.ed_path.text().strip()), scale
+        scale = self._RES_SCALES[max(0, self.cmb_out.currentIndex())]
+        fps = self._fps_value()
+        workers = self._workers_value()
+        return (os.path.normpath(self.ed_path.text().strip()), scale, fps,
+                workers)
 
 class _ActNameDialog(MessageBoxBase):
     """F2-L5：幕重命名的单行输入对话框。"""

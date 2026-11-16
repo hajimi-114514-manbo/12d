@@ -62,6 +62,8 @@ class FrameSource(object):
     src_dur = 0.0
     placeholder = ""      # 非空 = 占位预览源（如 "cubism2_atlas"），UI 可提示
                           # 「图集预览，导出后为真模型」；真素材恒 ""
+    is_static = False     # v3.5.8（task-74）：frame() 恒返回同一 ndarray
+                          # （无逐帧变化）——合成端可对贴层结果做静态缓存
 
     def frame(self, t):
         raise NotImplementedError
@@ -119,6 +121,7 @@ def _imread_rgba(path):
 class ImageSource(FrameSource):
     """静态图片：解码一次常驻缓存，frame(t) 恒返回同一帧（src_dur=0 表示无限长）。
     v3.4.0 起带 alpha 的素材返回 RGBA (H,W,4)——合成端自动走透明混合。"""
+    is_static = True      # v3.5.8：恒返回 self._img 同一对象（贴层可缓存）
 
     def __init__(self, path):
         self.path = str(path)
@@ -501,6 +504,9 @@ class PuppetSource(FrameSource):
         self.height, self.width = atlas.shape[:2]
         label = os.path.basename(os.path.normpath(self.path)) or "model"
         self._atlas = self._silhouette_card(self.width, self.height, label)
+        self.is_static = True    # v3.5.8：占位卡路径 frame() 恒返回
+                                 # self._atlas 同一对象（贴层可缓存）；
+                                 # 真模型渲染分支保持 False
         self.fps = 0.0
         self.src_dur = 0.0                  # 静态占位：无限长（image 语义）
         self.placeholder = "cubism2_atlas"

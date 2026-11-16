@@ -728,45 +728,72 @@ class WelcomeWindow(QWidget):
                         parent=self, position=InfoBarPosition.TOP,
                         duration=8000)
 
-    # ---------------- 增量包就绪（v3.5.3：只下几十~几百 KB，重启即生效） ----------------
-    def _on_upd_patch_ready(self, path, to_ver):
-        """增量包下好 → 进度条满格 → 问「现在重启」还是「退出时自动更新」。"""
+    # ---------------- 增量包就绪（v3.5.3 单跳 / v3.5.8 链式） ----------------
+    def _on_upd_patch_ready(self, path, to_ver, hops=None):
+        """增量链下好 → 进度条满格 → 问「现在重启」还是「退出时自动更新」。"""
+        hops = [h for h in (hops or []) if isinstance(h, dict)]
+        n = len(hops)
         self.update_bar.setVisible(True)
         self.upd_pct_lbl.setVisible(True)
         self.update_bar.setValue(100)
         self.upd_pct_lbl.setText("100%")
         gen = self._upd_gen
         QTimer.singleShot(1500, lambda: self._hide_upd_bar(gen))
-        self.update_lbl.setText("增量包已下载，重启后生效")
+        self.update_lbl.setText(
+            "增量包%s已下载，重启后生效" % (" %d 个" % n if n > 1 else ""))
         self.btn_update.setToolTip("检查更新")
         try:
             size = _UC.human_size(os.path.getsize(path))
         except OSError:
             size = "?"
         InfoBar.success("增量包已下载",
-                        "v%s（%s），重启应用即生效\n点右下角更新按钮可随时重启应用更新"
-                        % (to_ver or "?", size),
-                        parent=self, position=InfoBarPosition.TOP, duration=8000)
-        st = _UC.pending_patch() or {}
+                        "更新到 v%s（%s%s），重启应用即生效\n"
+                        "点右下角更新按钮可随时重启应用更新"
+                        % (to_ver or "?", size,
+                           "，%d 个包" % n if n > 1 else ""),
+                        parent=self, position=InfoBarPosition.TOP,
+                        duration=8000)
+        st = hops or _UC.pending_patch() or []
         self._ask_apply_patch(st, to_ver, size)
 
-    def _ask_apply_patch(self, st, to_ver=None, size=None):
-        """确认框：立即重启应用增量包 / 稍后（退出时自动应用）。"""
-        st = st or {}
-        to_ver = to_ver or st.get("to") or "?"
-        n = st.get("files") or 0
-        if size is None:
-            try:
-                size = _UC.human_size(os.path.getsize(st.get("zip") or ""))
-            except OSError:
-                size = "?"
+    def _ask_apply_patch(self, hops, to_ver=None, size=None):
+        """确认框：立即重启应用增量链 / 稍后（退出时自动应用）。
+        hops 是按序链节点 list（v3.5.8；单跳 = 长度 1）。"""
+        hops = [h for h in (hops or []) if isinstance(h, dict)]
+        if hops:
+            to_ver = to_ver or hops[-1].get("to") or "?"
+            n_files = sum(int(h.get("files") or 0) for h in hops)
+            if size is None:
+                total = 0
+                ok = False
+                for h in hops:
+                    try:
+                        total += os.path.getsize(h.get("zip") or "")
+                        ok = True
+                    except OSError:
+                        pass
+                size = _UC.human_size(total) if ok else "?"
+        else:
+            to_ver = to_ver or "?"
+            n_files = 0
+            size = size or "?"
+        n_hops = len(hops)
         box = MessageBoxBase(self)
         box.titleLabel.setText("增量包已下载")
-        box.contentLabel.setText(
-            "v%s（%s，%d 个文件）\n\n"
-            "只覆盖改动过的文件，不用重装整个程序。\n"
-            "现在重启应用即可生效；选「稍后」则退出程序时自动更新。\n\n"
-            "是否现在重启应用？" % (to_ver, size, n))
+        if n_hops > 1:
+            path_str = " → ".join("v%s" % h.get("to") for h in hops)
+            box.contentLabel.setText(
+                "%s\n共 %d 个增量包（%s，%d 个文件），将按序逐个安装，"
+                "装完自动删除下载的包。\n\n"
+                "只覆盖改动过的文件，不用重装整个程序。\n"
+                "现在重启应用即可生效；选「稍后」则退出程序时自动更新。\n\n"
+                "是否现在重启应用？" % (path_str, n_hops, size, n_files))
+        else:
+            box.contentLabel.setText(
+                "v%s（%s，%d 个文件）\n\n"
+                "只覆盖改动过的文件，不用重装整个程序。\n"
+                "现在重启应用即可生效；选「稍后」则退出程序时自动更新。\n\n"
+                "是否现在重启应用？" % (to_ver, size, n_files))
         box.yesButton.setText("立即重启更新")
         box.cancelButton.setText("稍后（退出时自动更新）")
         if box.exec():
