@@ -21,6 +21,202 @@ import numpy as np
 
 import video_model as V
 
+# ---------------- 字幕烧录（v3.5.4：compose_frame 画台词层） ----------------
+# 视觉规格 = 工作台预览（stage_view._draw_subtitle，MyGO 风）与实时预览页
+# （stage_preview.html DOM）同款：无底框、白字黑描边、名字 = 蓝色圆角胶囊
+# （#4c88ff）居中于文字块上方、旁白无牌、水平居中贴底、自动换行最多 4 行。
+# 从此"实时预览看到的字幕 = 视频导出的字幕"。
+#
+# 实现：PIL 在 RGBA 图层上画一次，按台词缓存（同 who+text 的帧直接复用
+# 图层），混合时只动 alpha 非零的行带（字幕块 ~15% 画布高，其余零开销）。
+
+_SUB_CACHE = {}            # (W, H, who, text) -> (y0, band ndarray H'xWx4)
+_SUB_CACHE_MAX = 24        # 导出顺序遍历，窗口 24 条足够；8MB/条全幅裁带后 ~1.5MB
+_FONT_CACHE = {}           # (px, bold) -> ImageFont
+
+_FONT_CANDIDATES = (
+    "msyhbd.ttc", "msyh.ttc",          # 微软雅黑 粗/常规
+    "simhei.ttf",                      # 黑体
+    "SourceHanSansCN-Regular.otf",
+)
+
+
+def _pil():
+    """PIL 惰性加载；缺 Pillow 返回 None（无字幕降级，不崩导出）。"""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+        return Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+
+
+def _get_font(px, bold=False):
+    """按像素取中文字体；全 miss 时退回 PIL 内置字体（可能无中文）。"""
+    key = (int(px), bool(bold))
+    f = _FONT_CACHE.get(key)
+    if f is not None:
+        return f
+    mod = _pil()
+    if mod is None:
+        return None
+    ImageFont = mod[2]
+    if px <= 0:
+        px = 1
+    for name in _FONT_CANDIDATES:
+        try:
+            f = ImageFont.truetype(name, px)
+            break
+        except Exception:
+            continue
+    if f is None:
+        try:
+            # Pillow >= 10：load_default(size=) 可指定像素；更老版本退 10px
+            f = ImageFont.load_default(size=px)
+        except Exception:
+            f = ImageFont.load_default()
+    _FONT_CACHE[key] = f
+    return f
+
+
+def _wrap_lines(draw, text, font, max_w):
+    """贪心断行（同 stage_view._wrap_text 算法：逐字符累积，超宽换行，
+    \\n 强制断行）。返回行列表。"""
+    lines, cur = [], ""
+    for ch in text:
+        if ch == "\n":
+            lines.append(cur)
+            cur = ""
+            continue
+        nxt = cur + ch
+        try:
+            w = draw.textlength(nxt, font=font)
+        except Exception:
+            w = font.getlength(nxt)
+        if cur and w > max_w:
+            lines.append(cur)
+            cur = ch
+        else:
+            cur = nxt
+    lines.append(cur)
+    return lines or [""]
+
+
+def _subtitle_layer(W, H, who, text):
+    """生成字幕 RGBA 图层。返回 (y0, band)（band 只含非透明行，省内存）；
+    带 (W,H,who,text) 缓存——同一句台词几十帧复用，零重绘。"""
+    key = (W, H, who, text)
+    hit = _SUB_CACHE.get(key)
+    if hit is not None:
+        return hit
+    mod = _pil()
+    if mod is None:
+        return (0, None)
+    Image, ImageDraw, _ImageFont = mod
+
+    # 规格（stage_view 常量按画布分辨率等比）：
+    #   正文 44px@1080p，名字 0.8x 加粗，描边 ~3px@1080p，
+    #   底边距 46px@1080p，两侧内边距 56px@1080p，最多 4 行
+    body_px = max(18, min(96, round(H * 44 / 1080)))
+    name_px = max(14, round(body_px * 0.8))
+    outline = max(2, round(body_px * 0.075))
+    margin_b = max(16, round(H * 46 / 1080))
+    pad_x = max(16, round(W * 56 / 1920))
+    max_w = W - 2 * pad_x
+
+    body = _get_font(body_px, bold=False)
+    name = _get_font(name_px, bold=True)
+    if body is None or name is None:
+        return (0, None)
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    lines = _wrap_lines(d, text, body, max_w)[:4]
+
+    ascent, descent = body.getmetrics()
+    line_h = ascent + descent
+    block_h = line_h * len(lines)
+    block_top = H - margin_b - block_h
+    # 正文：白字 + 黑描边（PIL stroke 即 8 方向描边效果）
+    for i, ln in enumerate(lines):
+        d.text((pad_x, block_top + i * line_h), ln, font=body,
+               fill=(255, 255, 255, 255), anchor="la",
+               stroke_width=outline, stroke_fill=(0, 0, 0, 235))
+    # 名字胶囊：居中于文字块上方；旁白（who 空）不画
+    if who:
+        na, nd = name.getmetrics()
+        nh = na + nd + max(8, round(H * 12 / 1080))
+        try:
+            nw = d.textlength(who, font=name) + max(20, round(W * 36 / 1920))
+        except Exception:
+            nw = name.getlength(who) + max(20, round(W * 36 / 1920))
+        nw = max(nw, nh)                       # 空格/单字符时胶囊别小于高
+        nx = (W - nw) / 2.0
+        ny = block_top - nh - max(8, round(H * 12 / 1080))
+        d.rounded_rectangle((nx, ny, nx + nw, ny + nh),
+                            radius=nh / 2.0,
+                            fill=(76, 136, 255, 235),
+                            outline=(255, 255, 255, 60), width=1)
+        d.text((nx + nw / 2.0, ny + nh / 2.0), who, font=name,
+               fill=(255, 255, 255, 255), anchor="mm")
+
+    arr = np.asarray(img)
+    alpha = arr[..., 3]
+    rows = np.nonzero(alpha.any(axis=1))[0]
+    if rows.size == 0:
+        band, y0 = None, 0
+    else:
+        y0, y1 = int(rows[0]), int(rows[-1]) + 1
+        band = arr[y0:y1]
+    out = (y0, band)
+    if len(_SUB_CACHE) >= _SUB_CACHE_MAX:
+        _SUB_CACHE.pop(next(iter(_SUB_CACHE)), None)
+    _SUB_CACHE[key] = out
+    return out
+
+
+def _draw_dialogue(canvas, proj, t, aid):
+    """把 t 时刻活跃台词画到 canvas（就地修改）。多条取最后一条，
+    与 stage_view._active_dialogues / 实时预览页语义一致。"""
+    mod = _pil()
+    if mod is None:
+        return
+    try:
+        dlg = V.act_view(proj, aid).get("dialogue") or []
+    except Exception:
+        return
+    eps = 1e-6
+    active = None
+    for d in dlg:
+        if not isinstance(d, dict):
+            continue
+        try:
+            t0 = float(d.get("t"))
+            dur = float(d.get("dur"))
+        except Exception:
+            continue
+        if t0 - eps <= t < t0 + dur - eps:
+            active = d
+    if active is None:
+        return
+    who = str(active.get("who") or "")
+    text = str(active.get("text") or "")
+    if not text:
+        return
+    H, W = canvas.shape[:2]
+    y0, band = _subtitle_layer(W, H, who, text)
+    if band is None or band.size == 0:
+        return
+    a = band[..., 3:4].astype(np.float32) / 255.0
+    canvas[y0:y0 + band.shape[0]] = (
+        band[..., :3] * a + canvas[y0:y0 + band.shape[0]] * (1 - a)
+    ).astype(np.uint8)
+
+
+def clear_subtitle_cache():
+    """换工程/换幕时清台词图层缓存（测试与外层管理用）。"""
+    _SUB_CACHE.clear()
+    _FONT_CACHE.clear()
+
+
 # ffmpeg 候选（与 l2d_rig_qt.FFMPEG_CANDIDATES 同步；勿 import 那边）
 _HERE = os.path.dirname(os.path.abspath(__file__))
 FFMPEG_CANDIDATES = [os.path.join(_HERE, "ffmpeg.exe"),
@@ -184,7 +380,7 @@ def paste_layer(canvas, img, lay):
     return canvas
 
 
-def compose_frame(proj, t, src_get, canvas=None, aid=None):
+def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True):
     """t 时刻一帧 RGB uint8（v3.4.0 起：**自底向上逐可见视频轨 RGBA 叠加**，
     不再只取最上层 clip；上层无 alpha 素材自然覆盖=旧语义，
     带 alpha 素材按 out=fg*a+dst*(1-a) 混合）。
@@ -193,7 +389,11 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None):
 
     F2-L5（v3.5）：加 aid —— 多幕工程里一幕一条独立时间轴，合成只看
     **当前幕**的轨道。aid=None 时行为与旧版完全一致（v1 顶层 tracks /
-    v2 第一幕）。"""
+    v2 第一幕）。
+
+    v3.5.4：subtitle=True（默认）在合成末尾**烧录当前幕的活跃台词**
+    （MyGO 风皮肤，与工作台预览 / 实时预览页同规格）。工作台预览调用点
+    显式传 subtitle=False（Qt paintEvent 自己画，避免双重字幕）。"""
     H, W = int(proj["height"]), int(proj["width"])
     if canvas is None:
         canvas = np.zeros((H, W, 3), np.uint8)
@@ -213,6 +413,8 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None):
         if img is None or img.size == 0:
             continue
         paste_layer(canvas, img, V.layout_at(clip))
+    if subtitle:
+        _draw_dialogue(canvas, proj, t, aid)
     return canvas
 
 

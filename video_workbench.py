@@ -1231,8 +1231,12 @@ class VideoWorkbench(QWidget):
     def render_frame(self, t):
         self._sync_preset_sources(t)
         # F2-L5（v3.5）：多幕工程只合成**当前幕**（一幕一条独立时间轴）
+        # v3.5.4：subtitle=False —— 工作台预览的台词由 StageView.paintEvent
+        # 画（widget 自适应字号）；视频导出走 compose_frame 的烧录版。
+        # 两条路同规格（MyGO 风），但各画各的，避免预览双重字幕。
         arr = VE.compose_frame(self.proj, t, self._sources.get,
-                               aid=getattr(self, "_cur_aid", None))
+                               aid=getattr(self, "_cur_aid", None),
+                               subtitle=False)
         # 交互门控：播放/逐帧合成中 StageView 跳过鼠标，但照常刷新画面与框
         self.stage.playing = bool(self._playing)
         self.stage.tick_busy = bool(self._tick_busy)
