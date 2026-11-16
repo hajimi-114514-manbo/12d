@@ -21,24 +21,36 @@ import numpy as np
 
 import video_model as V
 
-# ---------------- 字幕烧录（v3.5.4：compose_frame 画台词层） ----------------
-# 视觉规格 = 工作台预览（stage_view._draw_subtitle，MyGO 风）与实时预览页
-# （stage_preview.html DOM）同款：无底框、白字黑描边、名字 = 蓝色圆角胶囊
-# （#4c88ff）居中于文字块上方、旁白无牌、水平居中贴底、自动换行最多 4 行。
-# 从此"实时预览看到的字幕 = 视频导出的字幕"。
-#
-# 实现：PIL 在 RGBA 图层上画一次，按台词缓存（同 who+text 的帧直接复用
-# 图层），混合时只动 alpha 非零的行带（字幕块 ~15% 画布高，其余零开销）。
+# ---------------- 字幕烧录（v3.5.5：WebGAL 引擎对话框皮肤 + 打字机） ----------------
+# 参照 = 引擎真实渲染截图（textbox.scss 北风主题，运行时确认生效）。
+# 布局基准 2560×1440（入口 index.html 对 #root 强制 scale = 视口高/1440），
+# scss 里全部 px 值按 scale 换算到画布：
+#   面板：全宽贴底，高 430px@1440；118deg 蓝灰三色渐变
+#   (147,165,207,.9)→(182,198,222,.82)@48%→(228,239,233,.82)，
+#   叠双向 mask 渐隐（to bottom 0.04→0.28@10%→1@75%；to right 0.08→0.28@10%→1@42%）
+#   文字区：左缩进 490px@2560，右 50px@1440，上 (1em+100px)，下 70px
+#   正文：白字 + #2e2312 描边 0.12em + 右下阴影 + 字距 0.2em，左对齐，≤4 行
+#   名字：85% 字号，面板顶部，下方白色渐隐分割线（min-width 50%）
+#   打字机：逐字浮现（~60ms/字，自适应压缩保证打字+渐显 ≤ dur 的 70%），
+#   单字 0.5s 渐显（引擎 TextDelayShow 的近似）。
+# 性能：面板/布局/整句图层缓存；打字期间逐字符绘制，打完走整句缓存。
 
-_SUB_CACHE = {}            # (W, H, who, text) -> (y0, band ndarray H'xWx4)
-_SUB_CACHE_MAX = 24        # 导出顺序遍历，窗口 24 条足够；8MB/条全幅裁带后 ~1.5MB
-_FONT_CACHE = {}           # (px, bold) -> ImageFont
+_SUB_PANEL_CACHE = {}      # (W, H) -> (y0, band)
+_SUB_LAYOUT_CACHE = {}     # (W, H, text) -> [(ch, x, y), ...]
+_SUB_TEXT_CACHE = {}       # (W, H, text) -> (y0, band)  整句（打完后的稳定态）
+_SUB_CACHE_MAX = 24
+_FONT_CACHE = {}
+
+_TYPEWRITER_MS = 60        # 打字机每字符毫秒
+_TYPEWRITER_FADE = 0.5     # 单字渐显秒数
+_TEXT_BASE_PX = 55         # 正文字号（1440 布局基准 px，从引擎截图实测）
 
 _FONT_CANDIDATES = (
-    "msyhbd.ttc", "msyh.ttc",          # 微软雅黑 粗/常规
-    "simhei.ttf",                      # 黑体
-    "SourceHanSansCN-Regular.otf",
+    "ResourceHanRoundedCN-Regular",     # 引擎正文字体：资源圆体
+    "msyh.ttc", "msyhbd.ttc", "simhei.ttf",
 )
+
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def _pil():
@@ -50,8 +62,24 @@ def _pil():
         return None
 
 
+def _font_files():
+    """runtime 字体优先（资源圆体 = 引擎同款），再退系统雅黑/黑体。"""
+    rt = os.path.join(_APP_DIR, "templates", "webgal_runtime", "assets")
+    out = []
+    try:
+        if os.path.isdir(rt):
+            out.extend(os.path.join(rt, f) for f in sorted(os.listdir(rt))
+                       if f.lower().startswith("resourcehanrounded")
+                       and f.lower().endswith((".ttf", ".otf", ".ttc")))
+    except OSError:
+        pass
+    out.extend((r"C:\Windows\Fonts\msyh.ttc",
+                r"C:\Windows\Fonts\msyhbd.ttc",
+                r"C:\Windows\Fonts\simhei.ttf"))
+    return out
+
+
 def _get_font(px, bold=False):
-    """按像素取中文字体；全 miss 时退回 PIL 内置字体（可能无中文）。"""
     key = (int(px), bool(bold))
     f = _FONT_CACHE.get(key)
     if f is not None:
@@ -60,17 +88,25 @@ def _get_font(px, bold=False):
     if mod is None:
         return None
     ImageFont = mod[2]
-    if px <= 0:
-        px = 1
-    for name in _FONT_CANDIDATES:
-        try:
-            f = ImageFont.truetype(name, px)
-            break
-        except Exception:
-            continue
+    px = max(1, int(px))
+    f = None
+    if bold:
+        for p in _font_files():
+            if "msyhbd" in p:
+                try:
+                    f = ImageFont.truetype(p, px)
+                    break
+                except Exception:
+                    pass
+    if f is None:
+        for p in _font_files():
+            try:
+                f = ImageFont.truetype(p, px)
+                break
+            except Exception:
+                continue
     if f is None:
         try:
-            # Pillow >= 10：load_default(size=) 可指定像素；更老版本退 10px
             f = ImageFont.load_default(size=px)
         except Exception:
             f = ImageFont.load_default()
@@ -78,104 +114,244 @@ def _get_font(px, bold=False):
     return f
 
 
-def _wrap_lines(draw, text, font, max_w):
-    """贪心断行（同 stage_view._wrap_text 算法：逐字符累积，超宽换行，
-    \\n 强制断行）。返回行列表。"""
-    lines, cur = [], ""
-    for ch in text:
-        if ch == "\n":
-            lines.append(cur)
-            cur = ""
-            continue
-        nxt = cur + ch
-        try:
-            w = draw.textlength(nxt, font=font)
-        except Exception:
-            w = font.getlength(nxt)
-        if cur and w > max_w:
-            lines.append(cur)
-            cur = ch
-        else:
-            cur = nxt
-    lines.append(cur)
-    return lines or [""]
+def _engine_scale(H):
+    return H / 1440.0
 
 
-def _subtitle_layer(W, H, who, text):
-    """生成字幕 RGBA 图层。返回 (y0, band)（band 只含非透明行，省内存）；
-    带 (W,H,who,text) 缓存——同一句台词几十帧复用，零重绘。"""
-    key = (W, H, who, text)
-    hit = _SUB_CACHE.get(key)
+def _body_px(H):
+    return max(16, min(110, int(round(H * _TEXT_BASE_PX / 1440))))
+
+
+def _blend_band(canvas, y0, band, x0=0):
+    """band（RGBA）alpha 混合进 canvas 的 y0..、x0.. 区域（就地）。"""
+    a = band[..., 3:4].astype(np.float32) / 255.0
+    reg = canvas[y0:y0 + band.shape[0], x0:x0 + band.shape[1]]
+    reg[:] = (band[..., :3] * a + reg * (1 - a)).astype(np.uint8)
+
+
+def _panel_layer(W, H):
+    """底部渐变面板（textbox.scss TextBox_Background 复刻）。缓存 (W,H)。"""
+    key = (W, H)
+    hit = _SUB_PANEL_CACHE.get(key)
     if hit is not None:
         return hit
-    mod = _pil()
-    if mod is None:
-        return (0, None)
-    Image, ImageDraw, _ImageFont = mod
-
-    # 规格（stage_view 常量按画布分辨率等比）：
-    #   正文 44px@1080p，名字 0.8x 加粗，描边 ~3px@1080p，
-    #   底边距 46px@1080p，两侧内边距 56px@1080p，最多 4 行
-    body_px = max(18, min(96, round(H * 44 / 1080)))
-    name_px = max(14, round(body_px * 0.8))
-    outline = max(2, round(body_px * 0.075))
-    margin_b = max(16, round(H * 46 / 1080))
-    pad_x = max(16, round(W * 56 / 1920))
-    max_w = W - 2 * pad_x
-
-    body = _get_font(body_px, bold=False)
-    name = _get_font(name_px, bold=True)
-    if body is None or name is None:
-        return (0, None)
-    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    lines = _wrap_lines(d, text, body, max_w)[:4]
-
-    ascent, descent = body.getmetrics()
-    line_h = ascent + descent
-    block_h = line_h * len(lines)
-    block_top = H - margin_b - block_h
-    # 正文：白字 + 黑描边（PIL stroke 即 8 方向描边效果）
-    for i, ln in enumerate(lines):
-        d.text((pad_x, block_top + i * line_h), ln, font=body,
-               fill=(255, 255, 255, 255), anchor="la",
-               stroke_width=outline, stroke_fill=(0, 0, 0, 235))
-    # 名字胶囊：居中于文字块上方；旁白（who 空）不画
-    if who:
-        na, nd = name.getmetrics()
-        nh = na + nd + max(8, round(H * 12 / 1080))
-        try:
-            nw = d.textlength(who, font=name) + max(20, round(W * 36 / 1920))
-        except Exception:
-            nw = name.getlength(who) + max(20, round(W * 36 / 1920))
-        nw = max(nw, nh)                       # 空格/单字符时胶囊别小于高
-        nx = (W - nw) / 2.0
-        ny = block_top - nh - max(8, round(H * 12 / 1080))
-        d.rounded_rectangle((nx, ny, nx + nw, ny + nh),
-                            radius=nh / 2.0,
-                            fill=(76, 136, 255, 235),
-                            outline=(255, 255, 255, 60), width=1)
-        d.text((nx + nw / 2.0, ny + nh / 2.0), who, font=name,
-               fill=(255, 255, 255, 255), anchor="mm")
-
-    arr = np.asarray(img)
-    alpha = arr[..., 3]
-    rows = np.nonzero(alpha.any(axis=1))[0]
-    if rows.size == 0:
-        band, y0 = None, 0
-    else:
-        y0, y1 = int(rows[0]), int(rows[-1]) + 1
-        band = arr[y0:y1]
+    scale = _engine_scale(H)
+    hp = max(8, int(round(430 * scale)))
+    y0 = H - hp
+    import math
+    ang = math.radians(118.0)
+    ux, uy = math.sin(ang), -math.cos(ang)
+    gx, gy = np.meshgrid(np.linspace(0, 1, W), np.linspace(0, 1, hp))
+    proj = (gx - 0.5) * ux + (gy - 0.5) * uy
+    lo, hi = float(proj.min()), float(proj.max())
+    t = (proj - lo) / max(1e-6, hi - lo)
+    c0 = np.array([147, 165, 207], np.float32); a0 = 0.90
+    c1 = np.array([182, 198, 222], np.float32); a1 = 0.82
+    c2 = np.array([228, 239, 233], np.float32); a2 = 0.82
+    t48 = np.clip(t / 0.48, 0, 1)[..., None]
+    rgb = c0 * (1 - t48) + c1 * t48
+    a = a0 + (a1 - a0) * t48[..., 0]
+    t52 = np.clip((t - 0.48) / 0.52, 0, 1)[..., None]
+    rgb = rgb * (1 - t52) + c2 * t52
+    a = a + (a2 - a) * t52[..., 0]
+    m1 = np.interp(gy.ravel(), [0.0, 0.10, 0.75, 1.0],
+                   [0.04, 0.28, 1.0, 1.0]).reshape(hp, W)
+    m2 = np.interp(gx.ravel(), [0.0, 0.10, 0.42, 1.0],
+                   [0.08, 0.28, 1.0, 1.0]).reshape(hp, W)
+    alpha = np.clip(a * m1 * m2 * 255.0, 0, 255)
+    band = np.dstack([rgb.astype(np.uint8),
+                      alpha.astype(np.uint8)])
     out = (y0, band)
-    if len(_SUB_CACHE) >= _SUB_CACHE_MAX:
-        _SUB_CACHE.pop(next(iter(_SUB_CACHE)), None)
-    _SUB_CACHE[key] = out
+    if len(_SUB_PANEL_CACHE) >= 4:
+        _SUB_PANEL_CACHE.clear()
+    _SUB_PANEL_CACHE[key] = out
     return out
 
 
+def _dialog_layout(W, H, text):
+    """台词排版：字距 0.2em 逐字符定位 + 贪心换行（≤4 行）。
+    返回 [(ch, x, y), ...]（y = 行顶），缓存 (W,H,text)。"""
+    key = (W, H, text)
+    hit = _SUB_LAYOUT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    mod = _pil()
+    body = _get_font(_body_px(H), bold=False)
+    if mod is None or body is None:
+        return []
+    scale = _engine_scale(H)
+    x0 = int(round(490 * W / 2560))
+    x1 = W - int(round(50 * scale))
+    max_w = max(50, x1 - x0)
+    sp = 0.2 * _body_px(H)
+    y_first = H - int(round(430 * scale)) + int(round((_TEXT_BASE_PX + 100) * scale))
+    line_h = sum(body.getmetrics()) or int(_body_px(H) * 1.35)
+    out = []
+    lines = 0
+    x, y = x0, y_first
+    for ch in text:
+        if ch == "\n":
+            lines += 1
+            y += line_h
+            x = x0
+            if lines >= 4:
+                break
+            continue
+        try:
+            w = body.getlength(ch) + sp
+        except Exception:
+            w = _body_px(H)
+        if x > x0 and x + w > x1:
+            lines += 1
+            y += line_h
+            x = x0
+            if lines >= 4:
+                break
+        out.append((ch, x, y))
+        x += w
+    if len(_SUB_LAYOUT_CACHE) >= 48:
+        _SUB_LAYOUT_CACHE.pop(next(iter(_SUB_LAYOUT_CACHE)), None)
+    _SUB_LAYOUT_CACHE[key] = out
+    return out
+
+
+def _draw_engine_text(d, x, y, ch, font, body_px, alpha=1.0):
+    """引擎文字三层：右下阴影 → #2e2312 描边（0.12em）→ 白色本体。"""
+    stroke = max(2, int(round(0.12 * body_px)))
+    soff = max(1, int(round(0.05 * body_px)))
+    fill = (255, 255, 255, int(255 * alpha))
+    sf = (0, 0, 0, int(150 * alpha))
+    st = (46, 35, 18, int(255 * alpha))
+    d.text((x + soff, y + soff), ch, font=font, fill=sf, anchor="la",
+           stroke_width=stroke, stroke_fill=sf)
+    d.text((x, y), ch, font=font, fill=fill, anchor="la",
+           stroke_width=stroke, stroke_fill=st)
+
+
+def _name_band(W, H, who):
+    """名字区（面板顶部）：85% 字号 + 白色渐隐分割线。缓存 (W,H,who)。"""
+    key = (W, H, who)
+    hit = _SUB_TEXT_CACHE.get(("name",) + key)
+    if hit is not None:
+        return hit
+    mod = _pil()
+    if mod is None or not who:
+        return (0, None)
+    Image, ImageDraw, _ = mod
+    scale = _engine_scale(H)
+    name_px = max(14, int(round(_body_px(H) * 0.85)))
+    font = _get_font(name_px, bold=True)
+    if font is None:
+        return (0, None)
+    hp = int(round(430 * scale))
+    panel_top = H - hp
+    x0 = int(round(490 * W / 2560))
+    top = panel_top + int(round(26 * scale))
+    h = int(round(90 * scale))
+    y0 = panel_top + int(round(26 * scale)) - 8
+    bh = h + 24
+    img = Image.new("RGBA", (W, bh), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    _draw_engine_text(d, x0, top - y0, who, font, name_px, alpha=1.0)
+    # 分割线：showName 底部 2px 白，border-image 渐隐（5% 处最白 → 50% 消失）
+    ly = top + h - int(round(2 * scale)) - y0
+    lx1 = x0 + int(round((W - x0) * 0.5))
+    seg = max(1, lx1 - x0)
+    for i in range(seg):
+        t = i / seg
+        a = int(255 * (0.95 if t < 0.05 else max(0.0, 1.0 - (t - 0.05) / 0.45)) * 0.3)
+        if a <= 0:
+            continue
+        yy = ly + int(round(2 * scale))
+        if 0 <= yy < bh:
+            d.point((x0 + i, yy), fill=(255, 255, 255, a))
+    band = np.asarray(img).copy()
+    img.close()
+    out = (y0, band)
+    if len(_SUB_TEXT_CACHE) >= _SUB_CACHE_MAX:
+        _SUB_TEXT_CACHE.pop(next(iter(_SUB_TEXT_CACHE)), None)
+    _SUB_TEXT_CACHE[("name",) + key] = out
+    return out
+
+
+def _full_text_band(W, H, text):
+    """打字完成后的整句图层。缓存 (W,H,text)。"""
+    key = (W, H, text)
+    hit = _SUB_TEXT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    mod = _pil()
+    body = _get_font(_body_px(H), bold=False)
+    if mod is None or body is None:
+        return (0, None)
+    Image, ImageDraw, _ = mod
+    chars = _dialog_layout(W, H, text)
+    if not chars:
+        return (0, None)
+    body_px = _body_px(H)
+    stroke = max(2, int(round(0.12 * body_px)))
+    soff = max(1, int(round(0.05 * body_px)))
+    xs = [c[1] for c in chars]
+    ys = [c[2] for c in chars]
+    x0 = max(0, int(min(xs) - stroke - soff - 2))
+    x1 = min(W, int(max(xs) + max(body.getlength(c[0]) for c in chars)
+                     + stroke + soff + 2))
+    y0 = max(0, int(min(ys) - stroke - soff - 2))
+    y1 = min(H, int(max(ys) + int(sum(body.getmetrics())) + stroke + soff + 2))
+    img = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    for ch, x, y in chars:
+        _draw_engine_text(d, x - x0, y - y0, ch, body, body_px, alpha=1.0)
+    band = np.asarray(img).copy()
+    img.close()
+    out = (y0, x0, band)
+    if len(_SUB_TEXT_CACHE) >= _SUB_CACHE_MAX:
+        _SUB_TEXT_CACHE.pop(next(iter(_SUB_TEXT_CACHE)), None)
+    _SUB_TEXT_CACHE[key] = out
+    return out
+
+
+def _draw_char_now(canvas, x, y, ch, alpha):
+    """打字中的单个渐显字符（小图层局部混合）。"""
+    mod = _pil()
+    body = _get_font(_body_px(canvas.shape[0]), bold=False)
+    if mod is None or body is None or alpha <= 0.02:
+        return
+    Image, ImageDraw, _ = mod
+    body_px = _body_px(canvas.shape[0])
+    stroke = max(2, int(round(0.12 * body_px)))
+    soff = max(1, int(round(0.05 * body_px)))
+    bb = body.getbbox(ch) or (0, 0, int(body_px), int(body_px * 1.2))
+    pad = stroke + soff + 2
+    bw = int(bb[2] - bb[0]) + pad * 2
+    bh = int(sum(body.getmetrics())) + pad * 2
+    if bw <= 0 or bh <= 0:
+        return
+    tile = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
+    d = ImageDraw.Draw(tile)
+    _draw_engine_text(d, pad - bb[0], pad, ch, body, body_px, alpha=alpha)
+    arr = np.asarray(tile)
+    H, W = canvas.shape[:2]
+    px, py = int(x) - pad, int(y) - pad
+    sx0, sy0 = max(0, px), max(0, py)
+    sx1, sy1 = min(W, px + bw), min(H, py + bh)
+    if sx1 <= sx0 or sy1 <= sy0:
+        return
+    sub = arr[sy0 - py:sy1 - py, sx0 - px:sx1 - px]
+    sub_a = sub[..., 3:4].astype(np.float32) / 255.0
+    reg = canvas[sy0:sy1, sx0:sx1]
+    reg[:] = (sub[..., :3] * sub_a + reg * (1 - sub_a)).astype(np.uint8)
+
+
+def _typewriter_per(text, dur):
+    n = max(1, len(text))
+    p = _TYPEWRITER_MS / 1000.0
+    budget = max(0.3, float(dur) * 0.7 - _TYPEWRITER_FADE)
+    return min(p, budget / n)
+
+
 def _draw_dialogue(canvas, proj, t, aid):
-    """把 t 时刻活跃台词画到 canvas（就地修改）。多条取最后一条，
-    与 stage_view._active_dialogues / 实时预览页语义一致。"""
+    """把 t 时刻活跃台词画到 canvas（引擎皮肤：面板 + 名字 + 打字机）。"""
     mod = _pil()
     if mod is None:
         return
@@ -202,18 +378,38 @@ def _draw_dialogue(canvas, proj, t, aid):
     if not text:
         return
     H, W = canvas.shape[:2]
-    y0, band = _subtitle_layer(W, H, who, text)
-    if band is None or band.size == 0:
+    y0, band = _panel_layer(W, H)
+    if band is not None and band.size:
+        _blend_band(canvas, y0, band)
+    if who:
+        ny0, nband = _name_band(W, H, who)
+        if nband is not None and nband.size:
+            _blend_band(canvas, ny0, nband)
+    chars = _dialog_layout(W, H, text)
+    if not chars:
         return
-    a = band[..., 3:4].astype(np.float32) / 255.0
-    canvas[y0:y0 + band.shape[0]] = (
-        band[..., :3] * a + canvas[y0:y0 + band.shape[0]] * (1 - a)
-    ).astype(np.uint8)
+    n = len(chars)
+    t_el = t - float(active.get("t"))
+    per = _typewriter_per(text, float(active.get("dur") or 3.0))
+    fade = _TYPEWRITER_FADE
+    if t_el >= (n - 1) * per + fade:
+        sy0, sx0, sband = _full_text_band(W, H, text)
+        if sband is not None and sband.size:
+            _blend_band(canvas, sy0, sband, sx0)
+        return
+    vis = min(n, int(t_el / per) + 1)
+    for i in range(vis):
+        ch, x, y = chars[i]
+        a = min(1.0, max(0.0, (t_el - i * per) / fade))
+        if a > 0.02:
+            _draw_char_now(canvas, x, y, ch, a)
 
 
 def clear_subtitle_cache():
     """换工程/换幕时清台词图层缓存（测试与外层管理用）。"""
-    _SUB_CACHE.clear()
+    _SUB_PANEL_CACHE.clear()
+    _SUB_LAYOUT_CACHE.clear()
+    _SUB_TEXT_CACHE.clear()
     _FONT_CACHE.clear()
 
 
@@ -299,6 +495,8 @@ def paste_layer(canvas, img, lay):
 
     - 素材 3ch=恒不透明，4ch=带 alpha（out=fg*a+dst*(1-a)）
     - fit 基准 s0=min(W/w,H/h)，实际缩放 = s0*lay["scale"]
+    - **cover=True（v3.5.5，WebGAL changeBg 语义）：基准改 max(W/w,H/h)，
+      铺满裁剪**——引擎里背景就是铺满的，视频里同语义才和游戏画面一致
     - 中心放 (x*W, y*H)，允许越界（裁剪）
     - rot==0 快路径：resize + 平移贴；rot!=0 才上 warpAffine
     - 默认布局(0.5,0.5,1.0,0.0)+无 alpha 走**旧代码原路径**
@@ -306,8 +504,10 @@ def paste_layer(canvas, img, lay):
     import cv2
     H, W = canvas.shape[:2]
     x, y, sc, rot = lay["x"], lay["y"], lay["scale"], lay["rot"]
+    cover = bool(lay.get("cover"))
     # ---- 旧行为精确保持 ----
-    is_default = (x == 0.5 and y == 0.5 and sc == 1.0 and rot == 0.0)
+    is_default = (x == 0.5 and y == 0.5 and sc == 1.0 and rot == 0.0
+                  and not cover)
     if is_default and img.ndim == 2:
         img = np.dstack([img] * 3)
     if is_default and img.ndim == 3 and img.shape[2] == 3:
@@ -326,7 +526,7 @@ def paste_layer(canvas, img, lay):
     h, w = rgb.shape[:2]
     if h == 0 or w == 0:
         return canvas
-    s0 = min(W / w, H / h)
+    s0 = max(W / w, H / h) if cover else min(W / w, H / h)
     s = s0 * sc
     nw = max(1, int(round(w * s)))
     nh = max(1, int(round(h * s)))

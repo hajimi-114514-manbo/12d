@@ -737,6 +737,9 @@ class _Builder:
         clip = self._new_clip(bt, src, self.t)
         if clip is not None:
             clip["layout"] = dict(self.VM.default_layout())
+            # v3.5.5：引擎 changeBg 是铺满（cover 裁剪），视频导出同语义
+            # 才和游戏画面一致（_sanitize_layout 对未知键原样透传）。
+            clip["layout"]["cover"] = True
             self._open[bt] = clip
 
     def do_change_figure(self, game_dir, arg):
