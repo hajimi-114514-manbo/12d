@@ -1,8 +1,8 @@
 # 木偶工作室（Muppet Studio）
 
-> **v3.2.2** —— 把动漫立绘自动拆成分层骨架并做动画（伪 L2D），同时内置剪映式视频编辑工作台的 PySide6 桌面应用。
+> **v3.5.3** —— 把动漫立绘自动拆成分层骨架并做动画（伪 L2D），同时内置剪映式视频编辑工作台的 PySide6 桌面应用。
 >
-> 当前版本：v3.2.2（单一版本源见 `l2d_rig_qt.py` 的 `VERSION` 常量，窗口标题引用它；每次小更新 patch+1，成体系大功能 minor+1）。
+> 当前版本：v3.5.3（单一版本源见 `l2d_rig_qt.py` 的 `VERSION` 常量，窗口标题引用它；每次小更新 patch+1，成体系大功能 minor+1）。
 >
 > 语义规范采用 **Adobe Character Animator（CA）官方图层命名规范**，所以导出的 PSD 既能被
 > Character Animator 全自动绑定，也能被 Live2D Cubism Editor 自动转成部件。
@@ -108,10 +108,23 @@ D:\Python312\python.exe l2d_rig_qt.py
 欢迎页左下角圆形按钮 →「检查更新」：
 
 1. 通过 GitHub（raw → ghfast → jsdelivr 三镜像）读取 `version.json` 比对版本号
-2. 有新版则**后台静默下载**新安装包（断点续传 + sha256 校验），不阻塞任何操作
-3. 退出应用时自动拉起 `Setup --auto` **静默安装**并重启应用（全程无窗口，日志 `%TEMP%\muppet_update.log`）
+2. **增量包优先**（v3.5.3 起）：清单里有 `from` == 本机版本的增量包时，只下
+   几十~几百 KB 的 `MuppetStudio-Update-v<新>-from-v<旧>.zip`（只含改动文件），
+   校验 sha256 + 换源交叉校验后解到 `%TEMP%\muppet_update\stage-v<新>\`
+3. 没有对应增量包 / 增量包坏了 → 自动回落**完整安装包**（断点续传 + sha256）
+4. 覆盖动作在**退出应用之后**做（运行中的 exe/pyd 会被锁）：
+   - 增量包：拉起 `_apply_patch.bat` → 备份旧文件到 `<安装目录>\_backup_before_update_v<新版本>\`
+     → `robocopy` 覆盖 → 失败自动回滚 → 重启应用（日志 `%TEMP%\muppet_update\patch_apply.log`）
+   - 整包：拉起 `Setup --auto` 静默安装（日志 `%TEMP%\muppet_update.log`）
+5. 下完会问「立即重启更新 / 稍后（退出时自动更新）」
 
-> 维护约定：每次发版必须同步更新仓库根 `version.json`（version + installer_sha256 + notes），否则用户检查不到新版。
+> 维护约定（每次发版必须做）：
+> 1. 更新仓库根 `version.json` 的 `version` + `notes`；
+> 2. 整包发版时填 `installer_sha256`（缺声明客户端 fail-closed 拒装）；
+> 3. 发增量包时在 `patches` 里写一条
+>    `{"from": 旧版本, "to": 新版本, "file": 包名, "sha256": 包哈希, "size": 字节, "files": 文件数}`，
+>    并把同名 zip 传到同一个 Release tag 下。
+> 缺任何一项客户端都只是回落整包，不会装坏。
 
 ---
 

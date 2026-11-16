@@ -161,7 +161,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.5.2"
+VERSION = "3.5.3"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -5354,18 +5354,26 @@ def _welcome_gate():
 
 
 def _run_pending_update():
-    """退出时静默应用已下载的新版（task-13/14 契约：Setup --auto --dir <安装目录>）。
+    """退出时静默应用已下载的新版。
 
-    pending_installer() 只在欢迎页「检查更新」下载完成时才有值；没有则零开销返回。
-    launch_update 是 DETACHED 拉起，本进程随即正常退出，安装器会等待我们结束。
+    v3.5.3 起**增量包优先**：
+      - pending_patch() 有值（增量包）→ launch_patch()：拉起 detached 脚本，
+        它等本进程退出 → 备份被覆盖的旧文件 → 覆盖安装目录 → 重启程序；
+      - 否则退回老链路 pending_installer() → Setup --auto --dir <安装目录>。
+    两者互斥（增量包成功就不会再去下整包），都没有时零开销返回。
     任何异常一律吞掉：更新失败绝不能卡住或拖慢用户退出。
     """
     try:
         import update_checker as U
+        # 安装根目录 = 本文件所在目录（installer 的 MARKERS 也认这一点）
+        install_dir = os.path.dirname(os.path.abspath(__file__))
+        if U.pending_patch():
+            if U.launch_patch(install_dir):
+                return
+            # 覆盖脚本拉不起来：若同时还下过整包就退回整包，否则什么也不做
         if not U.pending_installer():
             return
-        # 安装根目录 = 本文件所在目录（installer 的 MARKERS 也认这一点）
-        U.launch_update(os.path.dirname(os.path.abspath(__file__)))
+        U.launch_update(install_dir)
     except Exception:
         pass
 

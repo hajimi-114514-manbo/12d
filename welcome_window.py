@@ -548,6 +548,11 @@ class WelcomeWindow(QWidget):
         th = self._upd_thread
         if th is not None and th.isRunning():
             return                       # 已在检查/下载：忽略重复点击
+        # v3.5.3：增量包优先。已下好增量包时再点按钮 = 想马上装
+        pp = _UC.pending_patch()
+        if pp:
+            self._ask_apply_patch(pp)
+            return
         p = _UC.pending_installer()
         if p:
             InfoBar.success("新版已下载", "退出后自动安装\n%s" % p,
@@ -684,6 +689,7 @@ class WelcomeWindow(QWidget):
         th.progressed.connect(self._on_upd_progress)
         th.uptodate.connect(self._on_upd_uptodate)
         th.ready.connect(self._on_upd_ready)
+        th.patch_ready.connect(self._on_upd_patch_ready)
         th.failed.connect(self._on_upd_failed)
         th.finished.connect(lambda: self.btn_update.setEnabled(True))
         th.start()
@@ -721,6 +727,69 @@ class WelcomeWindow(QWidget):
         InfoBar.success("新版已下载", "退出后自动安装\n%s" % path,
                         parent=self, position=InfoBarPosition.TOP,
                         duration=8000)
+
+    # ---------------- 增量包就绪（v3.5.3：只下几十~几百 KB，重启即生效） ----------------
+    def _on_upd_patch_ready(self, path, to_ver):
+        """增量包下好 → 进度条满格 → 问「现在重启」还是「退出时自动更新」。"""
+        self.update_bar.setVisible(True)
+        self.upd_pct_lbl.setVisible(True)
+        self.update_bar.setValue(100)
+        self.upd_pct_lbl.setText("100%")
+        gen = self._upd_gen
+        QTimer.singleShot(1500, lambda: self._hide_upd_bar(gen))
+        self.update_lbl.setText("增量包已下载，重启后生效")
+        self.btn_update.setToolTip("检查更新")
+        try:
+            size = _UC.human_size(os.path.getsize(path))
+        except OSError:
+            size = "?"
+        InfoBar.success("增量包已下载",
+                        "v%s（%s），重启应用即生效\n点右下角更新按钮可随时重启应用更新"
+                        % (to_ver or "?", size),
+                        parent=self, position=InfoBarPosition.TOP, duration=8000)
+        st = _UC.pending_patch() or {}
+        self._ask_apply_patch(st, to_ver, size)
+
+    def _ask_apply_patch(self, st, to_ver=None, size=None):
+        """确认框：立即重启应用增量包 / 稍后（退出时自动应用）。"""
+        st = st or {}
+        to_ver = to_ver or st.get("to") or "?"
+        n = st.get("files") or 0
+        if size is None:
+            try:
+                size = _UC.human_size(os.path.getsize(st.get("zip") or ""))
+            except OSError:
+                size = "?"
+        box = MessageBoxBase(self)
+        box.titleLabel.setText("增量包已下载")
+        box.contentLabel.setText(
+            "v%s（%s，%d 个文件）\n\n"
+            "只覆盖改动过的文件，不用重装整个程序。\n"
+            "现在重启应用即可生效；选「稍后」则退出程序时自动更新。\n\n"
+            "是否现在重启应用？" % (to_ver, size, n))
+        box.yesButton.setText("立即重启更新")
+        box.cancelButton.setText("稍后（退出时自动更新）")
+        if box.exec():
+            self._restart_to_apply()
+        else:
+            self.update_lbl.setText("增量包已下载，退出时自动更新")
+            self.btn_update.setToolTip("检查更新")
+
+    def _restart_to_apply(self):
+        """拉起退出后覆盖的脚本并关闭应用（脚本会在覆盖完成后自动重启程序）。"""
+        if not _UC.launch_patch(_V2):
+            # 脚本没起来：保留待应用状态，退出时 _run_pending_update 会再试一次
+            InfoBar.warning("重启更新未完成",
+                            "覆盖脚本拉起失败，退出程序时会再试一次",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=8000)
+            return
+        # 已交给脚本：清掉待应用状态，免得退出钩子重复拉起第二个脚本
+        _UC.clear_pending_patch()
+        self.update_lbl.setText("正在重启应用…")
+        self.btn_update.setEnabled(False)
+        from PySide6.QtWidgets import QApplication
+        QTimer.singleShot(200, QApplication.quit)
 
     def _on_upd_failed(self, msg):
         self._hide_upd_bar()

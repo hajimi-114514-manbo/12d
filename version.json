@@ -1,5 +1,6 @@
 {
   "version": "3.5.2",
   "installer_sha256": "",
-  "notes": "v3.5.2：①时间轴补齐水平滑块与键盘导航（←→ 帧 / Shift ←→ 秒 / Home End 首尾）；②预览性能大幅优化（render_frame 7.84ms→4.39ms，播放 77.8→110fps）；③**实时预览补齐背景/字幕/滤镜三层**（原来只画立绘，用户报「没有背景和文字和滤镜」）；④修掉 3 个连带回归（提示文案撑宽窗口、滚动位置少减左列宽、未布局时滑块滚不动）+ 1 个既有 bug（预览读 _aid 恒为 None，多幕切幕后仍推第一幕）。"
+  "patches": [],
+  "notes": "v3.5.2：①时间轴补齐水平滑块与键盘导航（←→ 帧 / Shift ←→ 秒 / Home End 首尾）；②预览性能大幅优化（render_frame 7.84ms→4.39ms，播放 77.8→110fps）；③**实时预览补齐背景/字幕/滤镜三层**（原来只画立绘，用户报「没有背景和文字和滤镜」）；④修掉 3 个连带回归（提示文案撑宽窗口、滚动位置少减左列宽、未布局时滑块滚不动）+ 1 个既有 bug（预览读 _aid 恒为 None，多幕切幕后仍推第一幕）。发版时由 D:\\scripts\\temp\\make_patch_release.py 更新：version / installer_sha256 / patches（from/to/file/sha256/size/files）。"
 }
