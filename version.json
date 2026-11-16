@@ -1,38 +1,46 @@
 {
-  "version": "3.5.7",
-  "installer_sha256": "4b429666298d7117ddb12b20d15b0736bb8c5ae2ddfcb12504883ba29a4a6ee3",
+  "version": "3.5.8",
+  "installer_sha256": "48202fae314cc5c94e6d3d236e10551831f539083aec5509193ca100b00fd82e",
   "patches": [
     {
+      "from": "3.5.7",
+      "to": "3.5.8",
+      "file": "MuppetStudio-Update-v3.5.8-from-v3.5.7.zip",
+      "sha256": "ffe4c57a954f8388d57f0297ad3b6efe453ddfb75ffae09fe592cefa5a84140e",
+      "size": 251421,
+      "files": 7
+    },
+    {
       "from": "3.5.6",
-      "to": "3.5.7",
-      "file": "MuppetStudio-Update-v3.5.7-from-v3.5.6.zip",
-      "sha256": "091d26dfdebe1e81cbfca35f5bb3a49f61f41542b57361b79f7b7b8b95dc6f66",
-      "size": 200650,
-      "files": 5
+      "to": "3.5.8",
+      "file": "MuppetStudio-Update-v3.5.8-from-v3.5.6.zip",
+      "sha256": "926c624ae4107dcd485a4a5671f965abcf7e27c228d4dc94745d4cfa914055f3",
+      "size": 251498,
+      "files": 8
     },
     {
       "from": "3.5.5",
-      "to": "3.5.7",
-      "file": "MuppetStudio-Update-v3.5.7-from-v3.5.5.zip",
-      "sha256": "b32bf5ac8c43a6ff2776f036ce8061a6bfb639008c2491d18bad321bcf8652b5",
-      "size": 200718,
-      "files": 5
+      "to": "3.5.8",
+      "file": "MuppetStudio-Update-v3.5.8-from-v3.5.5.zip",
+      "sha256": "28f05bbb27c9881343cb4f6531ba5c669afa001e5b673792242ae91404205e8a",
+      "size": 251554,
+      "files": 8
     },
     {
       "from": "3.5.3",
-      "to": "3.5.7",
-      "file": "MuppetStudio-Update-v3.5.7-from-v3.5.3.zip",
-      "sha256": "fc859d5b97a82a9807f06e76043d48742bdf1cc2daf5f3490a4607c55efd56ff",
-      "size": 221426,
-      "files": 6
+      "to": "3.5.8",
+      "file": "MuppetStudio-Update-v3.5.8-from-v3.5.3.zip",
+      "sha256": "6e215a022285a2e75ed2f25263e174c2a39d5d43346d7340c6e62d53f04fc817",
+      "size": 272261,
+      "files": 9
     },
     {
       "from": "3.5.2",
-      "to": "3.5.7",
-      "file": "MuppetStudio-Update-v3.5.7-from-v3.5.2.zip",
-      "sha256": "45ddff9b64a1f310e3e588859f117f35620eb461716184533987a2ca27d3cd3b",
-      "size": 248706,
-      "files": 9
+      "to": "3.5.8",
+      "file": "MuppetStudio-Update-v3.5.8-from-v3.5.2.zip",
+      "sha256": "f1ba612d6c8300841aa51b541c67f7d803cfea1e3b3dfe4ad9616c0ea113615c",
+      "size": 277921,
+      "files": 10
     }
   ],
   "notes": "v3.5.3：更新按钮直接拉增量包——version.json 新增 patches 清单，有匹配条目时只下几十~几百 KB 的改动文件（sha256 + 换源交叉校验 + zip slip 防护），退出后自动备份/覆盖/回滚并重启程序；无匹配或校验不符自动回落 420MB 整包（老链路不变）。下完弹「立即重启更新 / 稍后」。"
