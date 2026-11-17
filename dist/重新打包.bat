@@ -16,7 +16,11 @@ rem -xr!models\sam: sam is now an asset-managed download (~40MB), not shipped in
 rem -xr!runtime: runtime ships as its own embedded resource (see RT_RESOURCE below), not inside app zip
 rem -xr!webgal_runtime: downloaded WebGAL runtime (MPL-2.0, ~50MB) is user-side asset, NEVER shipped
 rem   (note: -xr!runtime above matches the dir literally named "runtime" only, NOT webgal_runtime!)
-D:\oopz\7za.exe a -tzip -mx=9 "%TMPDIR%\muppet_app.zip" "%APP%\*" -xr!24yearsold -xr!models\sam -xr!runtime -xr!webgal_runtime -xr!dist -xr!legacy -xr!__pycache__ -xr!launcher.log -xr!comfy_launch.log -xr!recent_projects.json -xr!.git -xr!seethrough_out -bd >nul
+rem -xr!projects: user projects + EXPORTED VIDEOS, can be huge.
+rem   v3.5.12: projects/ held 2 mp4 (60MB+112MB), installer
+rem   ballooned 419MB -> 571MB. Never ship it.
+rem -xr!import_game_dir.json: per-user remembered import path.
+D:\oopz\7za.exe a -tzip -mx=9 "%TMPDIR%\muppet_app.zip" "%APP%\*" -xr!24yearsold -xr!models\sam -xr!runtime -xr!webgal_runtime -xr!dist -xr!legacy -xr!__pycache__ -xr!launcher.log -xr!comfy_launch.log -xr!recent_projects.json -xr!.git -xr!seethrough_out -xr!projects -xr!import_game_dir.json -bd >nul
 if errorlevel 1 goto :err
 pushd "%APP%"
 "D:\Python312\python.exe" -c "import os,json;d=os.path.join('models','24yearsold');fs=[{'repo':'24yearsold/'+r,'file':os.path.relpath(os.path.join(dp,f),os.path.join(d,r)).replace(chr(92),chr(47)),'size':os.path.getsize(os.path.join(dp,f))} for dp,dn,fn in os.walk(d) for f in fn for r in [dp.split(os.sep)[len(d.split(os.sep))]]] if os.path.isdir(d) else [];json.dump(sorted(fs,key=lambda x:(x['repo'],x['file'])),open(r'%TMPDIR%\model_manifest.json','w',encoding='utf8'),ensure_ascii=False,indent=1)" 2>nul
