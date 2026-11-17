@@ -1925,7 +1925,7 @@ try:
         done = Signal(bool, str)
 
         def __init__(self, proj, out_path, preview_scale=1.0, fps=None,
-                     quality=None, workers=None, parent=None):
+                     quality=None, workers=None, l2d_animate=None, parent=None):
             super().__init__(parent)
             self.proj = proj
             self.path = out_path
@@ -1948,10 +1948,23 @@ try:
             # 用户可在导出对话框选；上限由 export_worker_limits() 给（UI 用
             # 同一个函数算下拉上限，避免两边口径不一致）。
             self.workers = normalize_workers(workers)
+            # l2d_animate：立绘逐帧动画。**泵本身由主线程起停**
+            # （l2d_pump.pump().start/stop 只能活在有事件循环的主线程），
+            # worker 只拿这个标志做两件事：① False 时显式关掉全局开关，
+            # 防上一次导出残留的 enabled 泄漏进来；② cancel 时叫醒阻塞在
+            # 泵上的合成线程。None（脚本/测试直接 run()）= 不动全局状态。
+            self.l2d_animate = None if l2d_animate is None else bool(l2d_animate)
             self._cancel = False
 
         def cancel(self):
             self._cancel = True
+            # 叫醒可能卡在泵上的合成线程：泵在主线程被卡住的请求会占着
+            # 窗口，不 abort 的话取消按钮要等到 REQUEST_TIMEOUT 才生效。
+            try:
+                import l2d_pump as LPM
+                LPM.pump().abort()
+            except Exception:
+                pass
 
         def _compose_parallel(self, t):
             """帧级并行合成（v3.5.8）：每线程独立 SourceManager。
@@ -1971,6 +1984,13 @@ try:
             # 封住 cv2 内部线程池：帧级并行时嵌套多线程互相争用（实测 6/8
             # 线程退化），单帧限 1 内部线程 + N 合成线程 = 甜点。
             cv2.setNumThreads(1)
+            if self.l2d_animate is False:
+                # 显式关：别让上一次导出残留的 enabled=True 泄漏进这次定格导出
+                try:
+                    import l2d_pump as LPM
+                    LPM.pump().configure(False)
+                except Exception:
+                    pass
             try:
                 W = max(2, int(round(self.proj["width"] * self.scale)) & ~1)
                 H = max(2, int(round(self.proj["height"] * self.scale)) & ~1)

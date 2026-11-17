@@ -123,7 +123,241 @@ const slots = new Map();          // modelId -> {queue, model, ref, fit}
 const last = { motion: {}, expression: {}, transform: {} };
 // v3.5.2：背景 / 字幕 / 滤镜三层状态（供幂等判断与 __muppetState 观测）
 let bgSprite = null;
-const state = { bgUrl: "", sub: "", filter: "" };
+const state = { bgUrl: "", sub: "", filter: "", userPaused: false };
+
+// 立绘包围盒：从**模型几何**算，不从像素量。
+// 为什么：早期版本用「首帧 alpha 非零包围盒」定 ROI，结果导出不可复现——
+// 首帧抓取会因纹理预热失败拿到空图（实测 k=0 alpha 全 0），于是"用哪一帧
+// 定框"随时序漂移，A/B 两个 slot 量出的框差 1px（640x350 vs 640x349），
+// 整段后续帧的裁剪全都对不上。模型尺寸/fit/scale 是加载完就确定的量，
+// 与墙钟无关，用它才能让逐帧动画保持逐位可复现。
+window.__muppetBox = function (modelId, margin) {
+  const s = slots.get(modelId);
+  if (!s || !s.model) return null;
+  const m = s.model;
+  const mg = Math.max(0, Number(margin) || 0);
+  // anchor(0.5,0.5) -> x/y 是中心；width/height 已含 scale
+  let x = m.x - m.width / 2 - mg;
+  let y = m.y - m.height / 2 - mg;
+  let w = m.width + mg * 2;
+  let h = m.height + mg * 2;
+  const cx = Math.max(0, Math.floor(x)), cy = Math.max(0, Math.floor(y));
+  const cw = Math.min(Math.ceil(w + (x - cx)), STAGE_W - cx);
+  const ch = Math.min(Math.ceil(h + (y - cy)), STAGE_H - cy);
+  if (cw <= 0 || ch <= 0) return null;
+  return [cx, cy, cw, ch];
+};
+
+// 重画一帧（不推进时间）：给导出泵做「首帧空图重试」。
+// Live2D 模型 loadModel 完成后纹理还在上传，第一次 render 画不出东西
+// （实测 k=0 抓到的 alpha 全 0，第二次才有画面）。bundle 里
+// `_render` 只在 `deltaTime` 非零时才结算参数，所以 deltaTime=0 的
+// 重复 render **不会推进相位**，重试是安全的、也是可复现的。
+window.__muppetRedraw = function () {
+  if (!app) return false;
+  try { app.render(); return true; } catch (e) { return false; }
+};
+
+// 抓图（导出动画泵用）：整张 or **固定 ROI 包围盒**。
+// 为什么要有 ROI：实测 1080p 立绘整张 1280×720 编码 toDataURL=10.3ms、
+// 解码 5.7ms、autocrop 0.7ms = 15.4ms/帧；改成页面侧只 drawImage 出
+// 立绘包围盒（275×633）再编码，全链路降到 10.3ms。webp 试过更慢
+// （默认 q 编码 20.2ms）且透明区 RGB 会烂（maxdiff 255），弃用。
+// 附带好处：一道的裁剪框固定后**不再逐帧抖动**（头发丝出框会让
+// 导出侧 fit 基准逐帧微移，实测 1-2px 视觉噪声）。
+let _offCv = null, _offCtx = null;
+window.__muppetGrab = function (roi) {
+  const cv = document.querySelector("canvas");
+  if (!cv) return "";
+  if (!roi) { try { return cv.toDataURL("image/png"); } catch (e) { return ""; } }
+  const x = Math.max(0, Math.round(roi[0] | 0)), y = Math.max(0, Math.round(roi[1] | 0));
+  const w = Math.max(1, Math.round(roi[2] | 0)), h = Math.max(1, Math.round(roi[3] | 0));
+  if (!_offCv) {
+    _offCv = document.createElement("canvas");
+    _offCtx = _offCv.getContext("2d", { willReadFrequently: true });
+  }
+  if (_offCv.width !== w || _offCv.height !== h) { _offCv.width = w; _offCv.height = h; }
+  try {
+    _offCtx.clearRect(0, 0, w, h);
+    _offCtx.drawImage(cv, x, y, w, h, 0, 0, w, h);
+    return _offCv.toDataURL("image/png");
+  } catch (e) { return ""; }
+};
+
+// ===== 手动时钟（导出逐帧动画泵用）=====
+// 为什么必须自己驱动：bundle 里 Live2DModel 的时间推进挂在 **Ticker.shared**
+//   onTickerUpdate(){ this.update(G.shared.deltaMS) }
+//   update(t){ this.deltaTime += t; this.elapsedTime += t }
+//   _render(){ if (this.deltaTime) { internalModel.update(deltaTime, elapsedTime); deltaTime = 0 } }
+// 两个后果：
+// 1) 现有 setPaused 只关 app.ticker，**关不住模型**——导出远快于实时，让
+//    模型吃墙上时钟，成片里的呼吸/眨眼就是快进；
+// 2) update() 只累加 deltaTime，参数真正结算发生在 render 的 _render 里，
+//    所以「一帧一次 update + 一帧一次 render」必须成对，N 次 update 中间
+//    不 render 等于一次大跨度 update，不是 N 帧动画。
+// 手动模式下：模型 autoUpdate=false（脱离 Ticker.shared），app.ticker 暂停，
+// 时间只按调用方给的 dt 走；每个 slot 记住自己已走到第几步（head），
+// 第 k 步**永远**是从 0 起走 k 步得到 —— 与请求到达顺序无关，可重现。
+const clock = { manual: false, dt: 1000 / 30 };
+
+function applyPaused() {
+  if (app) app.ticker.paused = state.userPaused || clock.manual;
+}
+
+function _manualize(m) {
+  // 只动 autoUpdate（不改 deltaTime）：断开 Ticker.shared 的驱动
+  try { if (m && m.autoUpdate !== undefined) m.autoUpdate = false; } catch (e) {}
+}
+
+function _resetClock(m) {
+  // 道起点：全局虚拟时钟也一起归零。v2 的动作相位 = 当前时间 - 动作起始
+  // 时间，而起始时间是 motion() 那一刻从 UtSystem 读的；不一起归零，同一个
+  // k 在不同道看到的绝对时刻不同 -> 姿态不同（实测三道 k=0 maxdiff 64）。
+  if (vclock.on) vclock.t = 0;
+  // 把模型内部时钟归零：构造函数写的是 `elapsedTime = performance.now()`，
+  // 而 `_render` 把 elapsedTime 当 currentTime 传给 internalModel.update
+  // （fade / 眨眼都按它算）。不归零，同一份「走 k 步」的序列在不同时刻
+  // 加载会出**不同画面**（实测两个 slot 的 k=0 顶边差 1px，裁剪框跟着差，
+  // 整段导出逐帧全对不上）。归零后画面只取决于 k => 逐帧动画也能逐位复现。
+  try { if (m) { m.elapsedTime = 0; m.deltaTime = 0; } } catch (e) {}
+}
+
+// ---- 虚拟时钟：接管 live2d SDK 的取时口（可复现性的真正关键）----
+// 只归零 model.elapsedTime **不够**：v2 SDK 自带时间源 ——
+//   P.getSystemTimeMSec  = function(){ return new Date().getTime(); }
+//   P.updateUserTimeMSec = function(){ return (P._\ = P.getSystemTimeMSec()); }
+// 动作推进与眨眼读的是它，跟我们在 model.update(dt) 里喂的 dt 毫无关系。
+// 实测：每步之间多睡 200ms 墙钟，20 帧画面与紧凑步进**全不相同**。
+// 所以手动时钟期间把 Date.prototype.getTime 换成虚拟值，每走一步才真的
+// 推进 dt 毫秒。只改 getTime()：减法/比较走 valueOf 不受影响（WebGAL
+// 存档时间戳照旧是真实时间），且退出手动模式立刻还原。
+const vclock = { on: false, t: 0, orig: null };
+
+function applyVirtualClock(on) {
+  if (on === vclock.on) return;
+  if (on) {
+    vclock.orig = Date.prototype.getTime;
+    Date.prototype.getTime = function () { return vclock.t; };
+    vclock.t = 0;
+    vclock.on = true;
+  } else {
+    if (vclock.orig) { try { Date.prototype.getTime = vclock.orig; } catch (e) {} }
+    vclock.orig = null;
+    vclock.on = false;
+  }
+}
+
+function _restartMotion(m, id) {
+  // 回拖（scrub / 乱序请求跳出缓存窗口）：把动作重新起播，从第 0 步走。
+  // 用与 playMotion 相同的入口，保证「重启后第 k 步」与首次顺序推进一致。
+  // 同时把 elapsedTime 归零：否则「重启后走 k 步」的绝对时刻与首次不同，
+  // 任何按绝对时间算的东西（眨眼调度等）会让同一个 k 出两种画面。
+  try { m.elapsedTime = 0; m.deltaTime = 0; } catch (e) {}
+  if (vclock.on) vclock.t = 0;          // 虚拟时钟一起归零，否则重启后第 k 帧 != 首次第 k 帧
+  try {
+    const mm = m && m.internalModel && m.internalModel.motionManager;
+    if (mm && mm.stopAllMotions) mm.stopAllMotions();
+  } catch (e) {}
+  const g = last.motion[id];
+  if (g) { try { m.motion(g); } catch (e) {} }
+  const ex = last.expression[id];
+  if (ex) { try { m.expression(ex); } catch (e) {} }
+}
+
+// 独奏：只让 modelId 这个 slot 可见，其余隐藏并渲染。
+// 宿主页所有立绘都摆在舞台正中（导出侧再应用 layout），多道并存时
+// canvas 是**叠加结果** —— 抓 A 道会带上 B 道的像素（实测 maxdiff 64）。
+// 所以每次 seek 之前必须先独奏，抓回来才是这一道自己的立绘。
+function _solo(modelId) {
+  if (!app) return false;
+  let changed = false;
+  slots.forEach((s, id) => {
+    if (!s.model) return;
+    const want = (id === modelId);
+    if (s.model.visible !== want) { s.model.visible = want; changed = true; }
+  });
+  if (changed) app.render();
+  return changed;
+}
+
+const clockAPI = {
+  setManual(on) {
+    on = !!on;
+    // **幂等**：状态没变就绝不重置相位。原先每次调用都把 s.k 归零，而
+    // Python 侧每帧都会确认一次手动模式 -> 第 k 帧要从 0 重走 k 步，
+    // 导出复杂度变成 O(k²)（1800 帧的片段直接不能用；60 帧的测试恰好
+    // 暴露不出来）。
+    if (on === clock.manual) return { manual: clock.manual, noop: true };
+    clock.manual = on;
+    applyVirtualClock(on);             // SDK 取时口接管/还原
+    for (const s of slots.values()) {
+      if (on) {
+        _manualize(s.model);
+        s.k = 0;
+        s.dt = undefined;
+        if (s.model) { s.model.deltaTime = 0; }
+      } else {
+        try { if (s.model) s.model.autoUpdate = true; } catch (e) {}
+      }
+    }
+    applyPaused();
+    if (on && app) app.render();      // 手动模式不再有自动出帧，先给一帧
+    return { manual: clock.manual, models: slots.size };
+  },
+
+  // 相位定义：**第 k 帧 = 从加载起走 (k+1) 步**（每步 dt ms）。
+  // 为什么不是 k 步：bundle 里 `_render` 只在 `deltaTime` 非零时才调
+  // internalModel.update 结算参数，k=0 若一步不走、只 render，模型参数
+  // 从未初始化 -> 画出来是**全透明空图**（实测 alpha 全 0，重试 8 次依旧
+  // 空，白等）。多走一步既完成参数初始化，又不破坏确定性。
+  // 上限 max 是必需的：回拖到长片段开头要从头重走上千步，一次 JS 调用
+  // 连跑会把主线程独占好几秒（进度条冻死），所以按 max 切片跨 tick 推进。
+  // 返回 {head, steps, reached} —— reached=false 表示还要继续 seek。
+  seek(modelId, k, dt, max) {
+    const s = slots.get(modelId);
+    if (!s || !s.model || !app) return { err: "no_model" };
+    k = Math.max(0, Math.round(Number(k) || 0));
+    const target = k + 1;
+    dt = Number(dt) || clock.dt;
+    const cap = (max === undefined || max === null || max < 1)
+      ? Infinity : Math.round(max);
+    const m = s.model;
+    _manualize(m);
+    const soloChanged = _solo(modelId);   // 别道的像素不许混进来
+    if (s.dt !== dt || s.k === undefined) { s.k = 0; s.dt = dt; }   // 网格变了从头走
+    let restarted = false;
+    if (target < s.k) {
+      // 回拖：只清 deltaTime（elapsedTime 保持单调，淡入淡出按它算，
+      // 倒拨会让 fade 时间窗错乱——实测过同类坑）
+      m.deltaTime = 0;
+      _restartMotion(m, modelId);
+      s.k = 0; restarted = true;
+    }
+    let steps = 0;
+    for (; s.k < target && steps < cap; s.k++) {
+      // **每道一条时间轴**：v2 SDK 的取时口（UtSystem._$CS）是进程全局的，
+      // 而动作相位 = 当前时间 - 该动作起始时间。只按 += dt 累加的话，多道
+      // 交错推进时各道读到的绝对时刻互相踩（实测三道 k=0 像素 maxdiff 64）。
+      // 直接把时钟摆成"本道第 s.k+1 步"应有的值 => 姿态只取决于 k。
+      if (vclock.on) vclock.t = (s.k + 1) * dt;
+      m.update(dt); app.render(); steps++;
+    }
+    if (!steps) {
+      // **一步都没走就不能直接抓**：v2 SDK 的 draw 依赖"本模型刚 update
+      // 过"，_solo 刚把它从隐藏切回可见时只 render 会画出**空画布**（实测
+      // bbox 非零占比 0.00000，整张全透明）。这里不自己补救（试过
+      // internalModel.update(0, elapsedTime)，仍然空），只把状态回传给
+      // Python 侧，由它走「clearModel + 重载 + 从 0 重走」——那条路实测
+      // 与首次渲染逐位相同。
+      return { steps: 0, head: s.k, k, target, dt, restarted,
+               reached: true, needReload: !!soloChanged, manual: clock.manual };
+    }
+    return { steps, head: s.k, k, target, dt, restarted, reached: s.k >= target,
+             manual: clock.manual };
+    return { steps, head: s.k, k, target, dt, restarted,
+             reached: s.k >= target, manual: clock.manual };
+  },
+};
 
 // v3.5.2：把 tint / 字幕层的包围盒同步到 canvas 实际显示区域。
 // canvas 是 16:9 居中 letterbox，窗口非 16:9 时有黑边 —— 若这两层用
@@ -192,7 +426,8 @@ function fitOf(model) {
 
 function slot(id) {
   let s = slots.get(id);
-  if (!s) { s = { queue: Promise.resolve(), model: null, ref: "", fit: 1 }; slots.set(id, s); }
+  // k/dt：手动时钟下该模型已走到第几步、步长是多少（见 clockAPI.seek）
+  if (!s) { s = { queue: Promise.resolve(), model: null, ref: "", fit: 1, k: 0, dt: undefined }; slots.set(id, s); }
   return s;
 }
 function enqueue(id, fn) {
@@ -218,6 +453,10 @@ const puppetAPI = {
     if (model.anchor && model.anchor.set) model.anchor.set(0.5, 0.5);
     else model.pivot.set(model.width / 2, model.height / 2);
     s.model = model; s.ref = url; s.fit = fitOf(model);
+    if (clock.manual) _resetClock(model);   // 只在导出手动时钟里归零（见 _resetClock）
+    // 换了模型 = 相位从头开始（手动时钟下 k 必须归零，否则第 k 步语义错位）
+    s.k = 0; s.dt = undefined;
+    if (clock.manual) _manualize(model);
     app.stage.addChild(model);
     sendEvt("ready", { modelId });
   },
@@ -240,9 +479,15 @@ const puppetAPI = {
     const g = groups.find(k => k.toLowerCase() === want) ||
               groups.find(k => k.toLowerCase().includes(want));
     if (!g) { sendEvt("error", { code: "unknownMotion", name }); return; }
+    // **只在手动时钟下**先归零再重播：motion() 会用当前 elapsedTime 记
+    // fade 起点，顺序反了起点就是遗留的墙钟大数，进度算成负数 -> 动作
+    // 永远淡入不进来。预览模式绝不能归零：正在淡出的旧动作会被卡住，
+    // 两个动作叠着播（那是用户能直接看到的破绽）。
+    if (clock.manual) _resetClock(s.model);
     const ok = s.model.motion(g);
     if (!ok) { sendEvt("error", { code: "unknownMotion", name }); return; }
     last.motion[modelId] = g;
+    s.k = 0;                            // 动作重播 = 相位归零（否则第 k 步不再是第 k 帧）
   },
   async setExpression(modelId, name) {
     const s = slot(modelId);
@@ -254,6 +499,8 @@ const puppetAPI = {
     if (!e) { sendEvt("error", { code: "unknownExpression", name }); return; }
     s.model.expression(e);
     last.expression[modelId] = e;
+    s.k = 0;                            // 同 playMotion：表情切换重走相位
+    if (clock.manual) _resetClock(s.model);
   },
   async clear(modelId) {
     if (!modelId) {
@@ -268,7 +515,8 @@ const puppetAPI = {
     slots.delete(modelId);
   },
   async setPaused(paused) {
-    if (app) app.ticker.paused = !!paused;
+    state.userPaused = !!paused;
+    applyPaused();
   },
 
   // ================= v3.5.2：背景层 / 字幕层 / 滤镜层 =================
@@ -379,6 +627,10 @@ window.__muppetOnCmd = function (j) {
     case "setBackground": enqueue("__bg__", () => puppetAPI.setBackground(a.url || "")); break;
     case "setSubtitle": puppetAPI.setSubtitle(a.who || "", a.text || ""); break;
     case "setFilter": puppetAPI.setFilter(a); break;
+    // 手动时钟（导出动画泵）：这两条**同步**执行并回传结果，
+    // 泵一次往返就要拿到「实际走了几步」，不能靠事后读快照。
+    case "setManualClock": return clockAPI.setManual(a.on);
+    case "seek": return clockAPI.seek(a.modelId, a.k, a.dt, a.max);
     default: sendEvt("error", { code: "cmdUnsupported", cmd: e.cmd, ref: e.id });
   }
 };
@@ -412,6 +664,12 @@ window.__muppetState = function () {
                     ? document.getElementById("sub-text").textContent : "" };
     })(),
     filter: state.filter,
+    // 手动时钟状态（导出动画泵/测试用）：heads 给每个 slot 当前步号
+    clock: (function () {
+      const heads = {};
+      slots.forEach((s, id) => { if (s.model) heads[id] = { k: s.k, dt: s.dt, autoUpdate: s.model.autoUpdate, vis: !!s.model.visible }; });
+      return { manual: clock.manual, dt: clock.dt, paused: !!(app && app.ticker.paused), heads };
+    })(),
   };
 };
 </script>

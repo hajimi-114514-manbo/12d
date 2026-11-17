@@ -1951,10 +1951,10 @@ class VideoWorkbench(QWidget):
                                 parent=self, position=InfoBarPosition.TOP,
                                 duration=4000)
                 return
-            path, scale, fps, workers = dlg.result_values()
-            self._start_export(path, scale, fps, workers)
+            path, scale, fps, workers, animate = dlg.result_values()
+            self._start_export(path, scale, fps, workers, animate)
 
-    def _start_export(self, path, scale, fps=None, workers=None):
+    def _start_export(self, path, scale, fps=None, workers=None, animate=None):
         self.stop_play()
         self.act_export.setEnabled(False)
         # v3.5.11：L2D 立绘预渲染（**必须在主线程做**——渲染依赖
@@ -1974,6 +1974,30 @@ class VideoWorkbench(QWidget):
                          "%d 个立绘状态已就绪（导出视频含完整 L2D）" % n_states,
                          parent=self, position=InfoBarPosition.TOP,
                          duration=4000)
+        # 逐帧动画（方案 A）：泵必须在**主线程**起 —— QTimer 要活在有事件
+        # 循环的线程里，而 VideoExportWorker.run() 在 QThread，那儿起不了。
+        # 上面的定格预渲染在动画模式下**照旧执行**：它是泵的兜底，某帧泵
+        # 超时/失败就退回定格图，画面不会缺（宁可少一次眨眼）。
+        if animate is None:
+            animate = True
+        self._export_animate = False
+        if animate and n_states:
+            try:
+                import l2d_pump as LPM
+                eff_fps = float(fps) if fps else float(self.proj.get("fps") or 30.0)
+                pm = LPM.pump()
+                # ring 容量按线程数放大：并行导出乱序窗口 ≈2×workers 帧，
+                # 盖不住就要走「回拖重载」那条慢且重的路
+                pm.configure(True, eff_fps, VE.normalize_workers(workers))
+                self._export_animate = bool(pm.start())
+                if not self._export_animate:
+                    InfoBar.warning("逐帧动画未启用",
+                                    "渲染泵起不来（%s），本次导出改用定格立绘"
+                                    % pm.reason(),
+                                    parent=self, position=InfoBarPosition.TOP,
+                                    duration=5000)
+            except Exception:
+                self._export_animate = False
         # v3.5.8：导出进度计时（滑动平均估速 -> 剩余时间）
         self._export_t0 = time.monotonic()
         self._export_last_t = self._export_t0
@@ -1981,6 +2005,7 @@ class VideoWorkbench(QWidget):
         self._export_rates = []
         self._export_worker = VE.VideoExportWorker(self.proj, path, scale,
                                                    fps=fps, workers=workers,
+                                                   l2d_animate=self._export_animate,
                                                    parent=self)
         self._export_worker.progress.connect(self._export_progress)
         self._export_worker.done.connect(self._export_done)
@@ -2020,6 +2045,23 @@ class VideoWorkbench(QWidget):
             try:
                 delattr(self, _k)
             except AttributeError:
+                pass
+        # 逐帧动画：收泵。stop() 会停 QTimer、把页面时钟交回墙上时间，并
+        # 唤醒还在等的线程 —— 不 stop 的话下次预览/导出会接手一个被暂停
+        # 的 ticker 和残留 slot。
+        if getattr(self, "_export_animate", False):
+            self._export_animate = False
+            try:
+                import l2d_pump as LPM
+                pm = LPM.pump()
+                st = dict(pm.stats)
+                pm.stop()
+                pm.configure(False)
+                bad = st.get("timeouts", 0) + st.get("failed", 0)
+                if bad:
+                    msg = "%s（立绘动画 %d 帧，其中 %d 帧超时/失败已回落定格）" % (
+                        msg, st.get("frames", 0), bad)
+            except Exception:
                 pass
         self.act_export.setEnabled(True)
         self.act_export.setText("导出")
@@ -2132,6 +2174,24 @@ class _ExportDialog(MessageBoxBase):
         self.workers_hint.setStyleSheet("color:#8a93a2; font-size:11px;")
         self.viewLayout.addWidget(self.workers_hint)
 
+        # 立绘动画：逐帧（方案 A，主线程渲染泵）/ 定格（方案 B，预渲染图）。
+        # 默认逐帧——用户明确要动画优先；代价写在提示里，别让人事后惊讶。
+        r5 = QHBoxLayout()
+        r5.addWidget(CaptionLabel("立绘动画"))
+        self.cmb_anim = ComboBox()
+        self.cmb_anim.addItems(["逐帧动画（人物会呼吸眨眼，较慢）",
+                                "定格（快，人物不动）"])
+        self.cmb_anim.setCurrentIndex(0)
+        r5.addWidget(self.cmb_anim, 1)
+        self.viewLayout.addLayout(r5)
+        self.anim_hint = CaptionLabel(
+            "逐帧：人物呼吸眨眼真的在动。开销随工程而变——合成越重的工程"
+            "（视频轨/滤镜）越能被并行隐藏，实测只慢 10% 上下；素材简单的"
+            "工程慢 2-3 倍。两种模式产物都可逐位复现。", self)
+        self.anim_hint.setWordWrap(True)
+        self.anim_hint.setStyleSheet("color:#8a93a2; font-size:11px;")
+        self.viewLayout.addWidget(self.anim_hint)
+
         # 耗时预估（CaptionLabel，随任一下拉变化刷新）
         self.est_lbl = CaptionLabel("耗时预估：—", self)
         self.est_lbl.setWordWrap(True)
@@ -2141,6 +2201,7 @@ class _ExportDialog(MessageBoxBase):
         self.cmb_out.currentIndexChanged.connect(self._refresh_estimate)
         self.cmb_fps.currentIndexChanged.connect(self._on_fps_changed)
         self.cmb_workers.currentIndexChanged.connect(self._refresh_estimate)
+        self.cmb_anim.currentIndexChanged.connect(self._refresh_estimate)
         self._refresh_estimate()
 
         self.yesButton.setText("开始导出")
@@ -2208,10 +2269,22 @@ class _ExportDialog(MessageBoxBase):
             workers = self._workers_value()
             sp = self._speedup(workers)
             ms_per = (96.8 * r2 + 5.3 * r2) / sp
+            animate = self._animate_value()
+            if animate:
+                # 逐帧动画开销实测（同一工程 still/anim 对比）：
+                #  · 合成贵的工程（视频轨+滤镜）：主线程取图与 worker 合成
+                #    天然重叠，只慢 6-12%；
+                #  · 合成便宜的工程（静态图+立绘）：取图（~13ms/帧）成为
+                #    瓶颈，慢 2-3 倍；
+                #  · workers=1 时两者串行相加，最慢。
+                # 取 2.0x 是区间中偏保守的一档：宁可让用户提前看到完成，
+                # 也不要 ETA 一路往后跳。
+                ms_per *= 2.0
             minutes = frames * ms_per / 60000.0
             self.est_lbl.setText(
-                "预计约 %.1f 分钟（%d 帧）· 粗略预估，实际随素材复杂度浮动 · "
-                "线程 1 时为单线程基准" % (minutes, frames))
+                "预计约 %.1f 分钟（%d 帧）· %s · 粗略预估，实际随素材复杂度浮动"
+                % (minutes, frames,
+                   "含立绘逐帧动画" if animate else "立绘定格（快）"))
         except Exception:
             self.est_lbl.setText("耗时预估：— · 粗略预估，实际随素材复杂度浮动")
 
@@ -2222,12 +2295,19 @@ class _ExportDialog(MessageBoxBase):
         except Exception:
             return 1
 
+    def _animate_value(self):
+        """立绘动画开关：0=逐帧动画，1=定格。异常一律回默认（逐帧）。"""
+        try:
+            return self.cmb_anim.currentIndex() != 1
+        except Exception:
+            return True
+
     def result_values(self):
         scale = self._RES_SCALES[max(0, self.cmb_out.currentIndex())]
         fps = self._fps_value()
         workers = self._workers_value()
         return (os.path.normpath(self.ed_path.text().strip()), scale, fps,
-                workers)
+                workers, self._animate_value())
 
 class _ActNameDialog(MessageBoxBase):
     """F2-L5：幕重命名的单行输入对话框。"""

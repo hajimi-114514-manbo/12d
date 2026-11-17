@@ -5405,6 +5405,13 @@ def run_app():
     # 否则 Qt 报 "Release of profile requested but WebEnginePage still
     # not deleted. Expect troubles !"，严重时进程退出崩溃（0xC0000005）。
     def _shutdown_l2d():
+        # 顺序要紧：泵持有 renderer 引用，stop() 里还要跑一次 JS
+        # （退出手动时钟）。必须先让泵放手，再关渲染器，最后清预渲染缓存。
+        try:
+            import l2d_pump as LPM
+            LPM.shutdown()
+        except Exception:
+            pass
         try:
             import l2d_renderer as L2R
             L2R.shutdown()

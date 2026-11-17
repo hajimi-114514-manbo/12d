@@ -531,6 +531,10 @@ class PuppetSource(FrameSource):
         # 在导出 QThread 里会死锁（实测 startTimer 报事件分发器已销毁）。
         # 所以导出前由主线程把唯一状态渲染好（真实工程仅 8 个状态/0.2s），
         # 这里只做查表，零渲染开销、零线程问题。
+        #
+        # 动画模式（方案 A）：l2d_pump 开着时，本方法**逐帧向主线程泵取图**
+        # （呼吸/眨眼真的在动），定格预渲染图退化成兜底 —— 泵超时/失败
+        # 仍回落到定格，再回落到占位卡，导出永不因此挂住。
         self._l2d_prefetch = None
         try:
             import l2d_prefetch as LP
@@ -539,8 +543,14 @@ class PuppetSource(FrameSource):
                 self._l2d_prefetch = pf
         except Exception:
             self._l2d_prefetch = None
+        self._l2d_animate = False
+        try:
+            import l2d_pump as LPM
+            self._l2d_animate = bool(LPM.pump().enabled)
+        except Exception:
+            self._l2d_animate = False
 
-        if self._l2d_prefetch is not None:
+        if self._l2d_prefetch is not None or self._l2d_animate:
             self._atlas = None
             self.is_static = False      # 状态可随 clip 变（motion/expression）
             self.fps = 30.0
@@ -570,7 +580,17 @@ class PuppetSource(FrameSource):
     def frame(self, t=0.0):
         if self._closed:
             raise SourceClosed("PuppetSource 已关闭: %s" % self.path)
-        # v3.5.11：真 L2D 立绘 —— 查主线程预渲染缓存（本线程零渲染）
+        # v3.5.11：真 L2D 立绘 —— 先问主线程泵要**这一帧的动画画面**，
+        # 拿不到才回落预渲染定格图（动画没开/泵不可用/超时都走这条）。
+        if self._l2d_animate:
+            try:
+                import l2d_pump as LPM
+                img = LPM.pump().request(self.path, self._motion_id,
+                                         self._expression_id, t)
+            except Exception:
+                img = None
+            if img is not None and getattr(img, "size", 0):
+                return img
         if self._l2d_prefetch is not None:
             try:
                 img = self._l2d_prefetch.get(
