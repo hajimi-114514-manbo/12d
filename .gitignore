@@ -39,4 +39,4 @@ templates/**/live2dcubismcore.min.js
 
 # 资产库（1.1GB 素材，本地物）
 /asset_library/
-
+dist/MuppetStudio-Update-v*.zip
