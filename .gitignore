@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 launcher.log
 recent_projects.json
+import_game_dir.json
 seethrough_out/
 
 # 系统/编辑器
