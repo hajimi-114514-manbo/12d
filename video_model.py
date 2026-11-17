@@ -60,6 +60,7 @@
   - 时间吸附精度 0.01s；重叠判定容差 EPS=0.005s。
 """
 import copy
+import os
 import re
 
 # C2：预置动作/表情表（C1 纯数据模块）。表缺失时整体宽松，不硬依赖。
@@ -1171,10 +1172,105 @@ def sanitize_project(obj, warn=None):
 _CUBISM_KEY_BAD_RE = re.compile(r"[\s;:\"']")
 
 
+_LIB_MOTION_KEYS = None       # 素材库实有键名集合（惰性构建，进程级缓存）
+_LIB_KEYS_STAMP = None
+
+
+def _lib_motion_keys():
+    """素材库里真实存在的 motion/expression 键名（含**裸键**）。
+
+    为什么需要：2026-11-17 并入的改模整合包里，大批模型用裸键
+    （`idle01` / `kime01` …，model.json 的键名本身就是裸的），而
+    motion_table 的 id 全是 `anon/idle01` 这种前缀式。只用表内 id 判定
+    会把裸键当脏值清掉（用户可见：导出游戏人物没动作）。
+
+    判定要既放行真实键、又挡住编造值，所以额外读一次素材库 model.json
+    的键名做白名单扩展。读 97~138 个 model.json 约几十毫秒，用 (路径,
+    mtime, size) 戳缓存，避免每次 sanitize 都重扫。
+
+    素材库不存在/读失败 -> 返回空集（退回纯形态判定，不阻断任何操作）。
+    """
+    global _LIB_MOTION_KEYS, _LIB_KEYS_STAMP
+    try:
+        lib = os.environ.get("MUPPET_ASSET_LIBRARY") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "webgal_games", "asset_library")
+        fig = os.path.join(lib, "figure")
+        if not os.path.isdir(fig):
+            return _LIB_MOTION_KEYS or set()
+        # 戳：figure 目录的 mtime + 子项数量（新增/删除素材会变）
+        st = os.stat(fig)
+        stamp = (st.st_mtime, len(os.listdir(fig)))
+        if _LIB_MOTION_KEYS is not None and _LIB_KEYS_STAMP == stamp:
+            return _LIB_MOTION_KEYS
+        keys = set()
+        import json as _json
+        for role in os.listdir(fig):
+            rd = os.path.join(fig, role)
+            if not os.path.isdir(rd):
+                continue
+            for cos in os.listdir(rd):
+                p = os.path.join(rd, cos, "model.json")
+                if not os.path.isfile(p):
+                    continue
+                try:
+                    o = _json.load(open(p, encoding="utf-8"))
+                except Exception:
+                    continue
+                mo = o.get("motions")
+                if isinstance(mo, dict):
+                    keys |= {str(k) for k in mo}
+                elif isinstance(mo, list):
+                    keys |= {str(x.get("name")) for x in mo
+                             if isinstance(x, dict) and x.get("name")}
+                ex = o.get("expressions")
+                if isinstance(ex, dict):
+                    keys |= {str(k) for k in ex}
+                elif isinstance(ex, list):
+                    keys |= {str(x.get("name")) for x in ex
+                             if isinstance(x, dict) and x.get("name")}
+        _LIB_MOTION_KEYS = keys
+        _LIB_KEYS_STAMP = stamp
+        return keys
+    except Exception:
+        return _LIB_MOTION_KEYS or set()
+
+
 def _cubism_key_ok(v):
-    """值是否形如 Cubism 键名（anon/idle01、taki/smile_02 …）。"""
-    return ("/" in v and len(v) <= 64
-            and not _CUBISM_KEY_BAD_RE.search(v))
+    """值是否是**真实可用**的 Cubism 键名。
+
+    v3.5.13 修（用户实报「导出的游戏里人物都没动作」）：
+    原先要求值里必须含 "/"（`anon/idle01` 前缀式）。但 2026-11-17 并入
+    素材库的改模整合包里，大批模型用**裸键**（`idle01`/`kime01`…），
+    于是 `_sanitize_preset` 把它们判成脏值清掉 —— 导入 48 条 motion
+    全灭，导出脚本一个 `-motion` 都不写。
+
+    现在的判据（任一成立即放行）：
+      1) 形如 `anon/idle01`（含 "/"，无非法字符）
+      2) 命中**素材库实有键名**（裸键 `kime01` 在这里通过）
+      素材库读不到时（未装/路径异常）退回「纯标识符形态」兜底，
+      否则合法裸键会被误杀——宁可放过一个编造值，也不能把真实动作清空
+      （后者的用户可见后果是「人物全都不动」）。
+      脏值（空白/分号/冒号/引号/反斜杠/路径特征）在任何档位都会被拒。
+    """
+    if not isinstance(v, str):
+        return False
+    s = v.strip()
+    if not s or len(s) > 64:
+        return False
+    if _CUBISM_KEY_BAD_RE.search(s) or "\\" in s:
+        return False
+    if s.startswith(("/", ".")) or s.endswith("/") or ".." in s:
+        return False
+    # 1) 前缀式形态（anon/idle01）
+    if "/" in s:
+        return True
+    # 2) 素材库实有键名（裸键走这条）—— 这是正常路径
+    lib = _lib_motion_keys()
+    if lib:
+        return s in lib
+    # 3) 素材库不可用时的兜底：只放行纯标识符（不让整条链路瘫掉）
+    return bool(re.match(r"^[A-Za-z0-9_\u3040-\u30ff\u4e00-\u9fff\-]+$", s))
 
 
 def _motion_value_ok(v, ids=None):
