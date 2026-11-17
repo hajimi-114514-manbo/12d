@@ -499,7 +499,18 @@ def _match_motion_name(want, names):
 
     三级匹配：精确 > 键名末段前缀（"idle" 命中 "anon/idle01"——键名末段
     以 want 开头，大小写不敏感）> 模糊（difflib get_close_matches）。
-    未命中返回 None。"""
+
+    **角色前缀归一化**（v3.5.12 修）：键名表里的键是 `<角色>/<表情>`
+    形式（素材统一命名，11 个角色共用一套池，每个角色目录里都有一份完整
+    副本），而工程里存的可能是**别的**角色前缀（台词级动作按角色并入
+    每个模型的引用集，见 _collect_puppet_motion_refs）。例如工程里写
+    `soyo/default`，而某个模型的键名表里该表情叫 `anon/default`——
+    按原逻辑精确匹配失败、末段前缀也不匹配（"soyo/default" 不是
+    "anon/default" 的前缀），最后落到 fallback，**键表被清空**，
+    引擎于是请求一堆根本不存在的文件（404 -> 人物动作卡顿）。
+
+    这里补一条：**去掉角色前缀后按末段名再匹配一次**（"soyo/default"
+    -> "default" 命中 "anon/default"）。未命中返回 None。"""
     want = str(want or "").strip()
     if not want or not names:
         return None
@@ -511,6 +522,15 @@ def _match_motion_name(want, names):
         seg = str(n).split("/")[-1].lower()
         if seg.startswith(lw):
             return n
+    # 2b) 角色前缀归一化：工程里的名字与键名表角色前缀不同时按末段比
+    wseg = lw.split("/")[-1]
+    if "/" in lw:
+        for n in names:                   # 2b-1) 末段精确
+            if str(n).split("/")[-1].lower() == wseg:
+                return n
+        for n in names:                   # 2b-2) 末段前缀
+            if str(n).split("/")[-1].lower().startswith(wseg):
+                return n
     try:                                  # 3) 模糊
         import difflib
         m = difflib.get_close_matches(lw, [str(n).split("/")[-1].lower()
@@ -639,7 +659,59 @@ def _slim_cubism2_json(obj, used, warn, tag):
         return False
 
 
-def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None):
+def _add_default_expression(obj, role_root, warn=None):
+    """把「默认表情」补进 model.json 的 expressions 键表。
+
+    背景（实测）：剧本里 `-expression=<role>/default` 是最常见的写法，但
+    `default` **不是**任何 Cubism2 模型 model.json 的真实键名（瘦身后
+    更不会有）。而素材库里它**确实存在**：
+        <role>/.mtn_exp/expressions/__base__/<role>/default.exp.json
+    导出时若不把它写进键表、也不按需拷贝，引擎运行时请求这个文件必然
+    404（`ExpressionManager: Failed to load expression`）——
+    **用户看到的现象就是「场景切换时人物动作卡顿」**。
+
+    返回 True=已补进键表。"""
+    try:
+        role_dir = os.path.basename(os.path.abspath(role_root))
+        rel = os.path.join(".mtn_exp", "expressions", "__base__",
+                            role_dir, "default.exp.json")
+        src_f = os.path.normpath(os.path.join(role_root, rel))
+        if not os.path.isfile(src_f):
+            return False
+        if not os.path.abspath(src_f).startswith(
+                os.path.abspath(role_root) + os.sep):
+            return False
+        file_def = "../.mtn_exp/expressions/__base__/%s/default.exp.json" \
+            % role_dir
+        name = "%s/default" % role_dir
+        fr = obj.get("FileReferences") if isinstance(obj, dict) else None
+        ex = (fr or {}).get("Expressions") if fr else obj.get("expressions")
+        if isinstance(ex, list):
+            if any(isinstance(e, dict)
+                   and str(e.get("name") or "").endswith("/default")
+                   for e in ex):
+                return False
+            ex.append({"name": name, "file": file_def})
+            return True
+        if isinstance(ex, dict):
+            if any(str(k).endswith("/default") for k in ex):
+                return False
+            ex[name] = {"File": file_def}
+            return True
+        # 键表缺失：补一个 list 形态（与真实素材一致）
+        if fr is not None:
+            fr["Expressions"] = [{"name": name, "file": file_def}]
+        else:
+            obj["expressions"] = [{"name": name, "file": file_def}]
+        return True
+    except Exception as e:
+        if warn is not None:
+            warn.append("补 default 表情失败: %r" % (e,))
+        return False
+
+
+def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None,
+                        used_costumes=None, used_by_costume=None):
     """把 Cubism2 角色根拷进 figure/，返回目标子目录名（相对 figure/）。
 
     v3.4.9 两种模式：
@@ -666,28 +738,107 @@ def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None):
             # 1) 角色根全树拷，**排除 .mtn_exp 动作池**（池按需拷）——
             #    .chara / 多服装目录等共享文件保持原结构（.chara 可能在
             #    角色根，也可能在服装目录内，两种真实形态都覆盖）
+            #
+            #    **只拷「用到的服装目录」**（v3.5.12 修）：早先把角色根
+            #    整棵拷过去，于是 soyo 有 14 个服装目录、sakiko 有 5 个，
+            #    但池文件只按**用到的模型**按需拷（11-12 个）——没用到的
+            #    服装目录里那份**原始的 232 表情 / 664 动作**的 model.json
+            #    照样在包里，引擎一旦扫到就会请求几千个**并不存在**的池
+            #    文件（404 -> 人物动作卡顿），白白多占几十 MB。
+            #    used_costumes=None（未预扫）时保持整棵拷（旧行为）。
+            def _ignore_unused(src, names):
+                """跳过**用不到的服装目录**。
+
+                shutil.copytree 的 ignore 回调语义（实测）：`src` 是当前
+                要处理的**目录**，`names` 是它下面的条目名；返回的名字集
+                会被跳过。所以要跳过「角色根下的未用服装目录」，必须在
+                **角色根这一层**的回调里返回那些目录名 —— 判断依据是
+                「当前 src 就是角色根」，而不是「src 的父目录是角色根」
+                （后者是错的：角色根的父目录是素材库 figure/，永远匹配不上
+                真正的角色根）。
+                """
+                if used_costumes is None:
+                    return set()
+                src_r = os.path.normcase(os.path.normpath(
+                    src.rstrip("\\/")))
+                root_r = os.path.normcase(os.path.normpath(role_root))
+                if src_r != root_r:
+                    return set()
+                skip = set()
+                for n in names:
+                    if n in (".", "") or n.startswith("."):
+                        continue
+                    # 角色根下的条目：服装目录（子目录）才需要过滤；
+                    # 根级文件（model.json/.chara 等共享文件）都保留
+                    if os.path.isdir(os.path.join(src, n)) \
+                            and n not in used_costumes:
+                        skip.add(n)
+                return skip
+
+            def _ignore_all(src, names):
+                # .mtn_exp 动作池按需拷（不走全树）+ 未使用的服装目录跳过
+                r = set(shutil.ignore_patterns(_C2_MTN_EXP)(src, names))
+                r |= _ignore_unused(src, names)
+                return r
+
             shutil.copytree(role_root, dst_root,
-                            ignore=shutil.ignore_patterns(_C2_MTN_EXP),
+                            ignore=_ignore_all,
                             dirs_exist_ok=True)
             dst_costume = os.path.join(dst_root, *(
                 safe_name(p) for p in rel.split("/") if p not in (".", ""))) \
                 if rel not in (".", "") else dst_root
             # 2) 瘦身 model.json（读源 -> 改写 -> 写目标）
-            src_json = os.path.join(model_dir, "model.json")
-            try:
-                obj = json.load(open(src_json, "r", encoding="utf-8"))
-            except Exception as e:
-                warn.append("Cubism2 model.json 读取失败 %s: %r" %
-                            (src_json, e))
-                obj = None
-            if isinstance(obj, dict):
-                if _slim_cubism2_json(obj, used or {}, warn,
-                                      os.path.relpath(src_json, role_root)):
-                    with open(os.path.join(dst_costume, "model.json"),
-                              "w", encoding="utf-8") as f:
-                        json.dump(obj, f, ensure_ascii=False, indent=2)
-                    stats["slimmed_models"] = stats.get(
-                        "slimmed_models", 0) + 1
+            #
+            #    **本角色「用到的」每个服装目录都要瘦身**（v3.5.12 修）：
+            #    早先只瘦身当前处理的那个 model_dir，同角色下**其它**用到
+            #    的服装目录仍是原始的 232 表情 / 664 动作，引擎一扫就请求
+            #    几百个不存在的池文件（404 -> 人物动作卡顿）。
+            #    used_by_costume: {服装目录名: {"motions":set,"expressions":set}}
+            def _slim_one(src_dir, dst_dir, used_refs, tag):
+                src_json = os.path.join(src_dir, "model.json")
+                try:
+                    o = json.load(open(src_json, "r", encoding="utf-8"))
+                except Exception as e:
+                    warn.append("Cubism2 model.json 读取失败 %s: %r" %
+                                (src_json, e))
+                    return None
+                if not isinstance(o, dict):
+                    return None
+                if _slim_cubism2_json(o, used_refs or {}, warn, tag):
+                    # 保底 default 表情必须在**写盘前**补进键表：它不是
+                    # 任何模型 model.json 的真实键名（瘦身更不会有），但
+                    # 剧本里 `-expression=<role>/default` 是常见写法，而
+                    # 素材库里它**确实存在**：
+                    #   <role>/.mtn_exp/expressions/__base__/<role>/default.exp.json
+                    # 不补 -> 引擎运行时 404（ExpressionManager: Failed to
+                    # load expression）-> **人物动作卡顿**。
+                    _add_default_expression(o, role_root, warn)
+                    try:
+                        with open(os.path.join(dst_dir, "model.json"),
+                                  "w", encoding="utf-8") as f:
+                            json.dump(o, f, ensure_ascii=False, indent=2)
+                        stats["slimmed_models"] = stats.get(
+                            "slimmed_models", 0) + 1
+                    except OSError as e:
+                        warn.append("Cubism2 model.json 写入失败 %s: %r"
+                                    % (dst_dir, e))
+                return o
+
+            obj = _slim_one(model_dir, dst_costume, used or {},
+                            os.path.relpath(os.path.join(model_dir,
+                                                        "model.json"),
+                                            role_root))
+            # 本角色其它用到的服装目录：同样瘦身
+            if used_by_costume:
+                for _cd in sorted(used_by_costume):
+                    if _cd == os.path.basename(os.path.abspath(model_dir)):
+                        continue        # 上面已处理
+                    _sd = os.path.join(role_root, _cd)
+                    _dd = os.path.join(dst_root, safe_name(_cd))
+                    if os.path.isdir(_sd) and os.path.isdir(_dd):
+                        _slim_one(_sd, _dd, used_by_costume[_cd],
+                                  os.path.relpath(os.path.join(
+                                      _sd, "model.json"), role_root))
             # 3) 池文件按需拷：遍历**瘦身后的** motions/expressions 定义
             #    （此时 obj 已是子集；未瘦身则保持整树兜底拷）
             if isinstance(obj, dict):
@@ -1914,8 +2065,27 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     slot = _slot(lay.get("x"))
                     used = puppet_refs.get(
                         os.path.normpath(os.path.abspath(path)))
+                    # 只拷**用到的服装目录**（同角色可能有十几个服装，
+                    # 全拷进来 = 几十 MB 体积 + 几千个不存在的池文件引用）
+                    _role_root = _cubism2_role_root(path)
+                    _used_costumes = None
+                    _used_by_costume = None
+                    if isinstance(puppet_refs, dict) and puppet_refs:
+                        _rr = os.path.normpath(os.path.abspath(_role_root))
+                        _used_costumes = set()
+                        _used_by_costume = {}
+                        for _k, _v in puppet_refs.items():
+                            # puppet_refs 的 key 是**模型目录**
+                            # （figure/<role>/<costume>），其父目录才是角色根
+                            _kd = os.path.normpath(os.path.abspath(_k))
+                            if os.path.dirname(_kd) == _rr:
+                                _cn = os.path.basename(_kd)
+                                _used_costumes.add(_cn)
+                                _used_by_costume[_cn] = _v
                     rel_ref = _copy_cubism2_model(path, copy_map["figure"],
-                                                  stats, warn, used=used)
+                                                  stats, warn, used=used,
+                                                  used_costumes=_used_costumes,
+                                                  used_by_costume=_used_by_costume)
                     if rel_ref:
                         stats["model_dirs"] = stats.get("model_dirs", 0) + 1
                         mdir = os.path.join(path, "model.json")
@@ -2030,6 +2200,33 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                             % (tr.get("id"), sk, c.get("id")))
 
     # ---- 规则 10：台词表 dialogue -> 台词行（+ H2a 台词级动作切换行） ----
+    _ref_keys_cache = {}
+
+    def _ref_keys(ref):
+        """导出包里某个立绘引用的动作/表情键名表。
+
+        ref 形如 "soyo/casual-2023/model.json"（相对 figure/ 根）。
+        **读的是导出后的 model.json**（已瘦身 + 已补 default），所以键表
+        与包里实际存在的文件严格一致 —— 台词级动作据此校验，引用的一定
+        存在。非 model.json 引用（png 立绘）返回 None（无表可校验）。
+
+        注意：台词循环在 clip 循环**之后**跑，此时 model.json 已落盘。
+        """
+        r = str(ref or "").replace("\\", "/")
+        if not r.lower().endswith(".json"):
+            return None
+        if r in _ref_keys_cache:
+            return _ref_keys_cache[r]
+        p = os.path.join(copy_map["figure"], *r.split("/"))
+        info = None
+        try:
+            if os.path.isfile(p):
+                info = _parse_cubism2_json(p)
+        except Exception:
+            info = None
+        _ref_keys_cache[r] = info
+        return info
+
     def _dialogue_figure(t, who):
         """台词动作落点：时刻 t 的生效立绘 -> (slot, ref) 或 None。
 
@@ -2098,14 +2295,34 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                             ref, fid, _transform_of(dlay, W, H))
                     else:
                         line = "changeFigure:%s -%s" % (ref, slot)
-                    if mo:
-                        line += " -motion=%s" % mo
-                    if ex:
-                        line += " -expression=%s" % ex
+                    # 台词级动作也要**校验键名**：这里写的是原样字符串，
+                    # 若工程里存的是 "soyo/default"（素材里真实存在，但
+                    # 不是任何 model.json 的键名），引擎运行时会请求一个
+                    # 并不存在的文件 -> 404 -> **人物动作卡顿**。
+                    # clip 级走 _match_motion_name（匹配不到就不写选项），
+                    # 台词级之前是裸写，两者口径不一致 —— 这里对齐。
+                    _mo_out, _ex_out = mo, ex
+                    _keys = _ref_keys(ref)
+                    if _keys:
+                        _m2 = _match_motion_name(mo, _keys["motions"])
+                        _e2 = _match_motion_name(ex, _keys["expressions"])
+                        if mo and not _m2:
+                            _mo_out = None
+                        if ex and not _e2:
+                            _ex_out = None
+                        # default 保底：键名表里没有但素材里有 -> 直接引用
+                        # （_add_default_expression 已把它写进 model.json）
+                        if mo and not _m2 and str(mo).endswith("/default"):
+                            _mo_out = mo
+                        if ex and not _e2 and str(ex).endswith("/default"):
+                            _ex_out = ex
+                    if _mo_out:
+                        line += " -motion=%s" % _mo_out
+                    if _ex_out:
+                        line += " -expression=%s" % _ex_out
                     events.append((t, 3.5, seq, [line + ";"]))
                     seq += 1
-                    dialogue_prev_action[slot] = key
-        # v3.5：台词正文里的「空格+减号」要转义——引擎用 / -/ 切参数，
+                    dialogue_prev_action[slot] = key        # v3.5：台词正文里的「空格+减号」要转义——引擎用 / -/ 切参数，
         # 不转义的话 "A - B" 会被误切，B 段整段消失（实测真 bug）。
         events.append((t, 4, seq,
                        ["%s:%s;" % (who or "旁白", _escape_say_body(text))]))

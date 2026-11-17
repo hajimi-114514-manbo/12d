@@ -1123,6 +1123,51 @@ def save_recent(items):
     except Exception:
         pass      # 持久化失败不影响使用
 
+# ---------------- 「导入脚本」记住整合包目录 ----------------
+# 用户要求（2026-11-17）：导入脚本第一步选 .txt、第二步选整合包（game/）。
+# 第二次选的目录要**记住**，下次导入直接用，不再重复问；直到某次导入时
+# 发现那个目录已经不存在（或不是合法的 game 目录）才重新弹框。
+# 存独立小文件而不是塞进 recent_projects——后者是「工程」列表，语义不同，
+# 混进去会污染欢迎页/最近菜单。
+IMPORT_GDIR_FILE = os.path.join(V2, "import_game_dir.json")
+
+def is_game_dir(d):
+    """是不是可用的 WebGAL 整合包目录（含 game/ 子目录或自身就是 game/）。
+
+    校验不能只看目录是否存在：用户可能把整个包删了、或指到空目录。
+    判据用「有 scene/ 或 background/figure 之类的资源子目录」——
+    webgal_import 真正需要的是这些。"""
+    try:
+        if not d or not os.path.isdir(d):
+            return False
+        # 形态 A：用户选的是包根（含 game/）
+        g = os.path.join(d, "game")
+        if os.path.isdir(g) and os.path.isdir(os.path.join(g, "scene")):
+            return True
+        # 形态 B：用户选的就是 game/ 本身
+        if os.path.isdir(os.path.join(d, "scene")):
+            return True
+        return False
+    except Exception:
+        return False
+
+def load_import_game_dir():
+    """读记住的整合包目录；不存在/已失效返回 None（调用方据此弹框）。"""
+    try:
+        obj = json.load(open(IMPORT_GDIR_FILE, encoding="utf8"))
+    except Exception:
+        return None
+    d = str(obj.get("dir") or "") if isinstance(obj, dict) else ""
+    return d if is_game_dir(d) else None
+
+def save_import_game_dir(d):
+    try:
+        json.dump({"dir": str(d), "ts": int(time.time())},
+                  open(IMPORT_GDIR_FILE, "w", encoding="utf8"),
+                  ensure_ascii=False, indent=2)
+    except Exception:
+        pass      # 持久化失败不影响导入
+
 # ---------------- 拆分进度锚点（日志文本 -> 百分比，单调不回退） ----------------
 # 本地引擎 verbose 消息对照表；未命中的消息保持上次值。
 PROGRESS_ANCHORS = [
@@ -5018,16 +5063,44 @@ def _video_import_script(win, wb):
         win, "选择 WebGAL 场景脚本", "", "WebGAL 场景脚本 (*.txt)")
     if not script:
         return
-    # 资源根目录推断：脚本所在目录名 == "game" 即用之，否则手选
+    # 资源根目录推断：
+    #   ① 脚本所在目录名 == "game" -> 直接用它（最省事，不用问）
+    #   ② 否则用**上次记住的**整合包目录（用户要求：第二次选择完就默认
+    #      用这个地址，不重复选，直到某次导入发现它已失效）
+    #   ③ 都没有/已失效 -> 才弹框让用户选，选完记住
     game_dir = None
     d = os.path.dirname(os.path.abspath(script))
-    if os.path.basename(d) == "game":
+    if os.path.basename(d) == "game" and is_game_dir(d):
         game_dir = d
     else:
-        game_dir = QFileDialog.getExistingDirectory(
-            win, "选择 WebGAL 游戏目录（含 game/ 资源）", "")
+        game_dir = load_import_game_dir()
+        if game_dir is not None:
+            # 记住的目录仍然可用 -> 直接用，不再弹框
+            pg0 = getattr(wb, "prog", None)
+            if pg0 is not None:
+                pg0.setText("导入脚本：使用已记住的整合包目录")
+        else:
+            # 失效/首次：弹框。起始目录给点线索（失效的旧路径的父级），
+            # 让用户少点几层——不给也行，但给了明显省事。
+            _start = ""
+            try:
+                _old = load_import_game_dir()
+                if not _old:
+                    _r = json.load(open(IMPORT_GDIR_FILE, encoding="utf8"))
+                    _old = str(_r.get("dir") or "")
+                if _old:
+                    _p = _old if os.path.isdir(_old) else os.path.dirname(_old)
+                    if os.path.isdir(_p):
+                        _start = _p
+            except Exception:
+                _start = ""
+            game_dir = QFileDialog.getExistingDirectory(
+                win, "选择 WebGAL 游戏目录（含 game/ 资源）", _start)
     if not game_dir:
         return
+    # 用户新选的（或推断出的）有效目录 -> 记住，下次不再问
+    if is_game_dir(game_dir):
+        save_import_game_dir(game_dir)
     wb._script_busy = True
     pg = getattr(wb, "prog", None)        # 视频窗无 prog 控件时静默
     if pg is not None:
