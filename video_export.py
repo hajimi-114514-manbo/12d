@@ -54,6 +54,24 @@ _SUB_CACHE_MAX = 24
 # 实测 maxdiff 154~186）。thread-local 后每线程独立累积，语义与单线程
 # 完全一致（只是多占一点内存）。
 _SUB_LOCAL = threading.local()
+# v3.5.8 并行导出：混合中间缓冲**必须线程局部**（同 _SUB_LOCAL.typing 的教训：
+# 共享 scratch 会被两个线程先后覆盖 -> 串色）。按 (h, w, dtype) 复用，省掉
+# 每帧一次全宽临时分配（1080p 面板带 6MB）。
+_BUF_LOCAL = threading.local()
+
+
+def _scratch(shape, dtype):
+    """线程局部复用缓冲（键含 dtype，u8/u16 不互踩）。"""
+    d = getattr(_BUF_LOCAL, "bufs", None)
+    if d is None:
+        d = _BUF_LOCAL.bufs = {}
+    key = (shape[0], shape[1], shape[2] if shape[2:] else 1, dtype)
+    buf = d.get(key)
+    if buf is None:
+        if len(d) > 8:
+            d.clear()
+        buf = d[key] = np.empty(shape, dtype)
+    return buf
 
 
 def _sub_typing_cache():
@@ -151,43 +169,65 @@ def _body_px(H):
 
 
 def _band_premul(band):
-    """band(RGBA) -> 预乘 rgb*a（u16 3 通道）。恒定 band（面板/名字/整句/
-    打字稳定带）一次预算随缓存存放，逐帧 blend 省掉 src×a 全帧乘。
-    v3.5.8（task-74 追加）：u8 定点管线，21.7→5.6ms/次（面板带宽实测）。
-    注意：这里**不做 /256**——_blend_band 的 convertScaleAbs 统一除，
-    与逐字 float 路径保持同一分母（/255 语义），否则半透明边缘系统性
-    偏亮 0.4%（打字带叠字边缘实测 diff 6 级，回归到 ≤3 内）。"""
+    """band(RGBA) -> (pre, inv, amin, amax)「混合辅助件」（字幕提速，本档）。
+
+    pre = round(src*a/255)（u8 直写混合的唯一被加数）、
+    inv = (255-a) 展成 3 通道（u8，逐帧不再 cvtColor+subtract）、
+    amin/amax = 全幅 alpha 极值（逐帧不再 min/any 扫交错平面）。
+
+    逐帧混合退化成 **两条 u8 pass**：
+        out = sat_u8(pre + round(dst*inv/255))
+    旧 u16 管线是 6 条 pass（cvtColor/subtract/multiply/add/convertScaleAbs
+    +min/any 扫描），1080p 面板带（1920×322）实测 4.97→0.48ms。
+
+    分母仍是 255（cv2.multiply 的 scale=1/255，与 float 原式
+    src*a/255 + dst*(1-a/255) 只差两次 ±0.5 舍入 ≤1 灰阶；早期 /256 版
+    之所以半透明边缘偏亮 0.4%，是 pre 与 dst 项分母不一致——这里两项都
+    走 /255，subtitle_burn 27 项 + typing 缓存 8 项 + blend 精度探针把关）。
+
+    **纯空间预乘**：时间性滤镜的逐帧变化在滤镜层缓存（_FX_TIMEVARYING_KEYS）
+    之外，与字幕静态缓存无关。"""
     import cv2
-    a3 = cv2.cvtColor(band[..., 3], cv2.COLOR_GRAY2BGR)
-    return cv2.multiply(band[..., :3], a3, dtype=cv2.CV_16UC3)
+    rgb = band[..., :3]
+    a = np.ascontiguousarray(band[..., 3])
+    if a.size == 0:                        # 空带（0 行/0 列）：给个恒等辅助件
+        z = np.zeros(band.shape[:2] + (3,), np.uint8)
+        return (z, z, 0, 0)
+    amin = int(a.min())
+    amax = int(a.max())
+    a3 = cv2.cvtColor(a, cv2.COLOR_GRAY2BGR)
+    pre = cv2.multiply(rgb, a3, dtype=cv2.CV_8U, scale=1.0 / 255.0)
+    inv = cv2.subtract(255, a3)
+    return (pre, inv, amin, amax)
 
 
 def _blend_band(canvas, y0, band, x0=0, pre=None):
     """band（RGBA）alpha 混合进 canvas 的 y0..、x0.. 区域（就地）。
 
-    v3.5.8（task-74 追加 B 同方向）：cv2 u8 定点 SIMD——
-    out=(pre + dst*(255-a))/255（pre=src*a 预算），与 float 原式
-    src*a/255 + dst*(1-a/255) 差 ≤1 灰阶（分母一致，仅舍入差；
-    subtitle_burn 27 项 + typing 缓存正确性 8 项把关）。
-    全透明跳过 / 全不透明直接覆盖。"""
+    字幕提速：`pre` 传 `_band_premul` 的辅助件 → 两条 u8 pass 定点混合（见
+    该函数注释）；传 None（老调用点/测试手搭的 band）时现算辅助件，结果
+    同一条算式。全透明跳过 / 全不透明直写用缓存里的 amin/amax 判定：
+    切片区域用全幅极值做**保守**判定——全 0 切片恒等、全 255 切片必然
+    仍可直写，判不出只是少走快路径，像素结果不变。"""
     import cv2
     h, w = band.shape[:2]
     reg = canvas[y0:y0 + h, x0:x0 + w]
     if reg.size == 0:
         return
-    a_ch = band[..., 3]
-    amin = int(a_ch.min())
-    if amin == 0 and not a_ch.any():
+    if pre is None or not (isinstance(pre, tuple) and len(pre) == 4):
+        pre = _band_premul(band)
+    p, inv, amin, amax = pre
+    if amax == 0:
         return
     if amin == 255:
         reg[...] = band[..., :3]
         return
-    if pre is None:
-        pre = _band_premul(band)
-    a3 = cv2.cvtColor(a_ch, cv2.COLOR_GRAY2BGR)
-    p2 = cv2.multiply(reg, cv2.subtract(255, a3), dtype=cv2.CV_16UC3)
-    s = cv2.add(pre, p2, dtype=cv2.CV_16UC3)
-    reg[...] = cv2.convertScaleAbs(s, alpha=1.0 / 255.0)
+    if p.shape[1] != w:                    # 打字带按 used_x1 切片
+        p = p[:, :w]
+        inv = inv[:, :w]
+    buf = _scratch(reg.shape, np.uint8)
+    cv2.multiply(reg, inv, dst=buf, dtype=cv2.CV_8U, scale=1.0 / 255.0)
+    cv2.add(p, buf, dst=reg)
 
 
 def _panel_layer(W, H):
@@ -430,12 +470,13 @@ def _tile_over_pband(p, al, x, y, arr, pad):
 def _typing_band(W, H, text, chars, n_stable):
     """打字机稳定前缀增量带（v3.5.8 追加 A，premul float 版）。
 
-    返回 dict {"arr","pre","x0","y0","used_x1","drawn"} 或 None。
+    返回 dict {"arr","aux","x0","y0","used_x1","drawn"} 或 None。
     带几何取整句 bbox（与 _full_text_band 同式，区域随台词固定不漂移）；
     n_stable 增长时只把**新稳定的字符**经 _tile_over_pband 增量累积并
-    刷新 arr/pre；n_stable 不变时零绘制零刷新；n_stable 回退（scrub
-    往回拖）时重建。arr 是 premul 语义 band（rgb=p 仅全不透明快路径
-    取用，恰与 straight 一致），pre = p*255（u16）供 _blend_band。
+    刷新 arr/aux；n_stable 不变时零绘制零刷新；n_stable 回退（scrub
+    往回拖）时重建。arr 是 premul 语义 band（rgb=p 已是 0..255 显示量级
+    的 src*a，故 aux.pre 直接取 p，不再像 straight band 那样重乘 a），
+    aux.inv/amin/amax 由 al 生成，供 _blend_band 两条 u8 pass。
     调用方把活跃字符（n_stable..vis）继续逐字直接叠 canvas。"""
     mod = _pil()
     body = _get_font(_body_px(H), bold=False)
@@ -460,7 +501,7 @@ def _typing_band(W, H, text, chars, n_stable):
             return None
         e = {"p": np.zeros((y1 - y0, x1 - x0, 3), np.float32),
              "al": np.zeros((y1 - y0, x1 - x0, 1), np.float32),
-             "drawn": 0, "arr": None, "pre": None,
+             "drawn": 0, "arr": None, "aux": None,
              "x0": x0, "y0": y0, "used_x1": x0}
         _tc.pop(key, None)
         while len(_tc) >= _SUB_TYPING_MAX:
@@ -476,9 +517,14 @@ def _typing_band(W, H, text, chars, n_stable):
                                  arr, pad)
         e["drawn"] = n_stable
         a_u8 = np.clip(e["al"] * 255.0, 0.0, 255.0).astype(np.uint8)
-        e["arr"] = np.dstack([np.clip(e["p"], 0.0, 255.0).astype(np.uint8),
+        pre = np.rint(np.clip(e["p"], 0.0, 255.0)).astype(np.uint8)
+        e["arr"] = np.dstack([pre[..., 0], pre[..., 1], pre[..., 2],
                               a_u8[..., 0]])
-        e["pre"] = np.clip(e["p"] * 255.0, 0.0, 65535.0).astype(np.uint16)
+        # premul 带：p 本身已是 src*a（0..255 显示量级），直接当 pre，
+        # 不能再走 _band_premul（那会把 a 乘第二遍）
+        e["aux"] = (pre,
+                    np.repeat(np.subtract(255, a_u8, dtype=np.uint8), 3, axis=2),
+                    int(a_u8.min()), int(a_u8.max()))
         last_x = chars[n_stable - 1][1]
         e["used_x1"] = min(e["arr"].shape[1],
                            int(last_x - e["x0"]
@@ -633,8 +679,8 @@ def _draw_dialogue(canvas, proj, t, aid):
             ux = e["used_x1"]
             band = e["arr"][:, :ux]
             if band.size:
-                _blend_band(canvas, e["y0"], band, e["x0"],
-                            pre=e["pre"][:, :ux])
+                # aux 是全幅的，_blend_band 里按 band 宽切 pre/inv 两列
+                _blend_band(canvas, e["y0"], band, e["x0"], pre=e["aux"])
     for i in range(n_stable, vis):
         ch, x, y = chars[i]
         a = min(1.0, max(0.0, (t_el - i * per) / fade))
@@ -978,7 +1024,7 @@ def _fx_chain_rgba(frgba, p, ctx):
 # 内不复用；close_all 清缓存兜底。上限 8 条（1080p float 层 ~25MB/条，
 # 立绘子矩形远小于全帧，实际占用低一个量级）。
 _PASTE_CACHE = {}
-_PASTE_CACHE_MAX = 8
+_PASTE_CACHE_MAX = _PASTE_CACHE_BASE = 8
 
 
 def _paste_prep(img, lay, W, H):
@@ -1124,8 +1170,11 @@ def _paste_rgba(frgba, img, lay, static=False):
         prep = _paste_prep(img, lay, W, H)
         with _CACHE_LOCK:
             if len(_PASTE_CACHE) >= _PASTE_CACHE_MAX:
-                _PASTE_CACHE.clear()
+                # 旧写法是整体 clear()：新键一来就把别的线程正在用的全丢掉
+                # （并行导出下等于永久 miss）。改 LRU 弃最旧 + 字节兜底。
+                _PASTE_CACHE.pop(next(iter(_PASTE_CACHE)), None)
             _PASTE_CACHE[key] = (img, prep)
+            _cache_shrink(_PASTE_CACHE, _PASTE_BUDGET_MB * 1048576, keep=2)
     if prep is not None:
         _paste_over(frgba, prep)
 
@@ -1180,7 +1229,62 @@ _BG_FX_CACHE = {}
 _FIG_FX_CACHE = {}
 # v3.5.8：上限 4 + LRU 淘汰（clear 全弃在多签名场景交替 thrash——
 # 真实工程 4 个时刻 4 种背景+2 种 fig 滤镜签名，2 上限永远未命中）
-_FX_CACHE_MAX = 4
+_FX_CACHE_MAX = _FX_CACHE_BASE = 4
+_CACHE_BUDGET_MB = 256        # bg+fig 两层缓存合计真实字节上限
+_PASTE_BUDGET_MB = 192        # 贴层缓存（每条同时钉住源图 + prep）
+
+
+def _entry_bytes(v):
+    """缓存条目的实际占用：单层数组，或 (源图, prep) 两份。"""
+    if isinstance(v, tuple):
+        return sum(getattr(a, "nbytes", 0) for a in v)
+    return getattr(v, "nbytes", 0)
+
+
+def _cache_shrink(cache, budget_bytes, keep=1):
+    """按**实际 nbytes**淘汰最旧条目（条数上限只是下限，内存才是硬账）。
+
+    为什么必须按字节：1080p 一份 fig 层 W*H*4=8.3MB、bg 层 W*H*3=6.2MB，
+    而贴层缓存一条是 (源图, prep) **两份**数组。实测 workers=8 时按条数
+    兜底会放到 718MB 峰值，改按字节后压回预算内——宁可退回 miss 重算，
+    也不让导出把机器压进交换分区（那样比 miss 慢得多）。"""
+    if budget_bytes <= 0:
+        return
+    while len(cache) > keep:
+        tot = sum(_entry_bytes(v) for v in cache.values())
+        if tot <= budget_bytes:
+            break
+        cache.pop(next(iter(cache)), None)
+
+
+def tune_cache_capacity(workers):
+    """帧级并行导出前按线程数定层缓存容量，返回实际生效的 (fx, paste)。
+
+    **为什么容量必须随线程数走**：立绘层缓存键含 `id(img)`、贴层缓存键同
+    样（`id` 复用串帧的教训见 _paste_rgba 注释，值里持强引用 + `is` 校验是
+    必须的，不能改成按内容去重）。而每个合成线程各有独立 SourceManager，同
+    一素材在 N 个线程里就是 N 个不同对象 → **同时在用的键数随 N 线性增长**。
+    固定 cap=4 是串行时代调的：workers=8 时任一线程刚写入就被别人逐出，
+    立绘层 100% 未命中、每帧重算整层滤镜。60s 真实切片实测：
+        w=4  94.3fps（fig 层 1544 命中 / 4 miss，4 线程刚好压线）
+        w=8  18.7fps（fig 层 0 命中 / 1548 miss —— 全灭）
+        w=8 把 cap 提到 20 → 106.7fps（5.7x，缺陷坐实在容量，不在 cv2）
+    背景层缓存按 (路径+mtime+布局) 建键、能跨线程复用，所以不受影响——
+    这正是「键里带对象地址的那些才需要扩容」的对照证据。
+
+    扩容不是无限放大：条数下限取 2×线程数，**实际驻留由 _cache_shrink 按
+    真实字节砍**（bg+fig 合计 _CACHE_BUDGET_MB、贴层 _PASTE_BUDGET_MB）。
+    实测 1080p workers=8 按条数兜底放到 718MB 峰值，按字节兜底后压回
+    预算内；4K 会先被字节砍到几条，宁可 miss 也不换页。"""
+    try:
+        nw = max(1, int(workers))
+    except (TypeError, ValueError):
+        return _FX_CACHE_MAX, _PASTE_CACHE_MAX
+    cap_fx = max(_FX_CACHE_BASE, 2 * nw)
+    cap_p = max(_PASTE_CACHE_BASE, 2 * nw)
+    globals()["_FX_CACHE_MAX"] = cap_fx
+    globals()["_PASTE_CACHE_MAX"] = cap_p
+    return cap_fx, cap_p
 
 
 def _fx_sig(p):
@@ -1205,6 +1309,28 @@ def _fx_cache_put(cache, key, layer):
         while len(cache) >= _FX_CACHE_MAX:
             cache.pop(next(iter(cache)), None)
         cache[key] = layer.copy()
+        _fx_budget_shrink()
+
+
+def _fx_budget_shrink():
+    """bg+fig 两份层缓存**合计**不超 _CACHE_BUDGET_MB（调用方须持锁）。
+
+    条数上限保证 N 个线程的键能同时驻留，字节上限保证不把机器压进换页——
+    两者缺一不可：只给条数，workers=8 实测峰值 718MB；只给字节，8 线程
+    互相逐出回到 18.7fps。逐出顺序取条目多的那边（并列取 fig，它单份更大，
+    先弃它省得多）。"""
+    budget = _CACHE_BUDGET_MB * 1048576
+    while len(_BG_FX_CACHE) + len(_FIG_FX_CACHE) > 2:
+        tot = (sum(_entry_bytes(v) for v in _BG_FX_CACHE.values())
+               + sum(_entry_bytes(v) for v in _FIG_FX_CACHE.values()))
+        if tot <= budget:
+            break
+        if len(_FIG_FX_CACHE) >= len(_BG_FX_CACHE) and _FIG_FX_CACHE:
+            _FIG_FX_CACHE.pop(next(iter(_FIG_FX_CACHE)), None)
+        elif _BG_FX_CACHE:
+            _BG_FX_CACHE.pop(next(iter(_BG_FX_CACHE)), None)
+        else:
+            _FIG_FX_CACHE.pop(next(iter(_FIG_FX_CACHE)), None)
 
 
 def _fx_cache_get(cache, key):
@@ -1740,17 +1866,21 @@ def write_wav(path, samples, sr=44100):
 def export_worker_limits():
     """帧级并行线程的 (默认值, 上限)。UI 下拉与 Worker 归一化共用同一口径。
 
-    **实测数据说了算**（1080p 真实工程端到端，12 秒 360 帧）：
-        1 线程 24.4 fps（基准） / 4 线程 **49.6 fps（2.03x，最优）**
-        8 线程 33.4 / 12 线程 27.7 / 23 线程 31.3——全部明显退化
-    退化原因：每线程独立 SourceManager 各自解码同一批素材，线程一多
-    就撞上磁盘/内存带宽墙与 GIL（numpy 小算子不放 GIL）。
+    **实测数据说了算**（1080p 真实工程 60s 切片 1800 帧端到端，含写盘混音）：
+        层缓存容量修好前：1 线程 ~86fps / 4 线程 94 / **8 线程 18.7（塌方）**
+        修好后（tune_cache_capacity）：4 线程 76-110 / 8 线程 83-104，
+        产物 sha256 与单线程逐位一致。
+    8 线程当年的塌方**不是核数不够**，是共享 LRU 容量按串行时代调的 cap=4：
+    立绘层缓存键含 id(img)，每线程一套独立 SourceManager → 8 线程 8 个键
+    装进 4 格缓存，互相逐出、每帧重算整层滤镜。这条已在
+    tune_cache_capacity 修掉，别再按「8 档必然更慢」的老结论收上限。
 
-    所以「尽可能多占」的正确落地是**占在拐点上**：
-      - 默认 = clamp(核数//4, 2, 4)：24 核→4（实测最优档）
-      - 上限 = clamp(核数//2, 4, 8)：留给想自己试的用户，但不超过实测
-        拐点族（8 档以上只会更慢，放出来是骗用户）
-    用户要更多可以改代码里的常量；UI 只在这个区间里给选项。"""
+    现在两档的真实差别是内存：8 线程峰值 ~748MB（4 线程 ~400MB），
+    主因同样是每线程各自解码一套素材，不是缓存预算（实测把预算从 256MB
+    压到 96MB 峰值仍是 ~700MB，fps 反而掉 6%）。所以：
+      - 默认 = clamp(核数//4, 2, 4)：稳妥档，内存不翻倍
+      - 上限 = clamp(核数//2, 4, 8)：给内存充裕的机器手动加速
+    再往上（12/23 档）实测无增益（受内存带宽与 GIL 限制），不放出。"""
     try:
         cores = os.cpu_count() or 4
     except Exception:
@@ -1855,6 +1985,9 @@ try:
                 # 滑动窗口（NW*2）防止 n 帧 futures 全量积压内存。
                 # NW 由用户选（对话框），归一化时已按核数封顶。
                 nw = self.workers
+                # 层缓存容量随线程数定档（否则 8 线程互相逐出 → 每帧重算滤镜，
+                # 实测 94fps→18.7fps；依据见 tune_cache_capacity 注释）
+                tune_cache_capacity(nw)
                 pool = ThreadPoolExecutor(max_workers=nw)
                 window = deque()
                 nxt = 0

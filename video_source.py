@@ -80,15 +80,28 @@ class FrameSource(object):
 
 
 # ---------------- 静态图片 ----------------
-def _imread_rgb(path):
-    """BGR imread + 中文路径 imdecode 兜底 -> RGB uint8 (H,W,3)。失败抛 ValueError。"""
-    img = cv2.imread(path, cv2.IMREAD_COLOR)
+def _imread_any(path, flag):
+    """读图统一入口。Windows 下 `cv2.imread` 按 ANSI 代码页解析窄字符串，
+    **非 ASCII 路径必然失败**——旧写法先让它失败一次（还打一条 WARN）再走
+    fromfile+imdecode 兜底。并行导出里 stderr 写是进程级串行的，素材名带
+    中文时每线程每次开源都要白付一次失败 open + 一次日志锁（23 线程实测把
+    吞吐拖到 28fps 的帮凶之一）。这里非 ASCII 直接走兜底，行为完全一致，
+    只是不再绕那条注定失败的路。"""
+    img = None
+    if str(path).isascii():
+        img = cv2.imread(path, flag)
     if img is None:
         try:
             raw = np.fromfile(path, dtype=np.uint8)
-            img = cv2.imdecode(raw, cv2.IMREAD_COLOR)
+            img = cv2.imdecode(raw, flag)
         except Exception:
             img = None
+    return img
+
+
+def _imread_rgb(path):
+    """BGR imread + 中文路径 imdecode 兜底 -> RGB uint8 (H,W,3)。失败抛 ValueError。"""
+    img = _imread_any(path, cv2.IMREAD_COLOR)
     if img is None:
         raise ValueError("无法解码图片: %s" % path)
     return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -99,13 +112,7 @@ def _imread_rgba(path):
     返回 RGB (H,W,3)（无 alpha 素材，行为同 _imread_rgb）或
     RGBA (H,W,4)（素材带 alpha 通道；BGRA 已转 RGBA）。失败抛 ValueError。
     消费端 video_export.paste_layer 已按通道数自动走混合/直贴。"""
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-    if img is None:
-        try:
-            raw = np.fromfile(path, dtype=np.uint8)
-            img = cv2.imdecode(raw, cv2.IMREAD_UNCHANGED)
-        except Exception:
-            img = None
+    img = _imread_any(path, cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError("无法解码图片: %s" % path)
     if img.ndim == 2:
