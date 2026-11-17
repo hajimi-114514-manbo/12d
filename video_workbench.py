@@ -515,7 +515,12 @@ class VideoWorkbench(QWidget):
         self.timeline = CT.ClipTimelinePanel(self, wb=self)
         self.timeline.seeked.connect(self.seek)
         self.timeline.selection_changed.connect(self._on_selection)
-        self.timeline.edit_committed.connect(self._after_edit)
+        # 面板 docstring 约定「任何成功的模型操作后发 edit_committed，
+        # 外层负责 push history」——原来只连了 _after_edit（刷新），
+        # 时间轴上的拖动/删除/切分**从没进过撤销栈**（撤销会直接跳回
+        # 更早的状态）。多选成组编辑一次改一片，这个缺陷会被放大成
+        # "删了十几个片段撤销不回来"，所以这里补上 push。
+        self.timeline.edit_committed.connect(self._on_timeline_edit)
         self.timeline.setMinimumHeight(SPLIT_V_MIN_TIMELINE)
 
         # ---------- 垂直 splitter：上方区域 | 时间轴 ----------
@@ -1923,13 +1928,26 @@ class VideoWorkbench(QWidget):
         self._after_edit()
 
     def _delete_selected(self):
-        if self._sel_clip:
-            ok, _m = V.remove_clip(self.proj, self._sel_clip)
-            if ok:
-                self._sel_clip = None
-                self.push_history()
-                self.timeline.refresh()
-                self._after_edit()
+        # 多选（框选/Ctrl 加选）时成组删；单选集合就一个元素，行为同旧。
+        ids = self.timeline.selected_clip_ids() or (
+            [self._sel_clip] if self._sel_clip else [])
+        if not ids:
+            return
+        ok, _m = V.remove_clips(self.proj, ids)
+        if ok:
+            self._sel_clip = None
+            self.push_history()
+            self.timeline.refresh()
+            self._after_edit()
+
+    def _on_timeline_edit(self):
+        """时间轴一次成功编辑（拖/裁/切/删）：先 push 快照再刷新。
+
+        面板约定是「先改数据、后发 edit_committed」，所以这里 push 的是
+        **改之后**的状态，撤销栈因此能停在编辑前那一格（push_history 自带
+        与栈顶相同则跳过的去重，成组操作只发一次信号也只进一条）。"""
+        self.push_history()
+        self._after_edit()
 
     def _after_edit(self):
         """任何成功编辑后：刷新预览/时长/属性。"""

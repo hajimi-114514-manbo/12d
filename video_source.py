@@ -269,7 +269,17 @@ class PuppetSource(FrameSource):
     _cum_transforms（BFS 累积 3x3）+ 按 rig["draw_order"] 从底到顶 warpAffine
     子矩形 warp + 预乘 src-over 混合 + 黑底展平为 RGB uint8。
     确定性：同 t 两次调用逐像素相等（无随机/时间源/缓存副作用）。
+
+    **类级默认值**（`_l2d_*`）：`frame()` 会无条件读这几个属性，但只有
+    `_cubism2_atlas`（真 L2D 分支）才显式赋值；骨架工程走主构造路径
+    （有 layers_meta.json）根本不调它 —— 早先只在 cubism2 分支设默认，
+    骨架工程 `frame()` 直接 AttributeError 崩导出（video_preset_test 抓到）。
+    放类级兜底，任何构造分支都安全，默认关动画/关预渲染。
     """
+
+    _l2d_prefetch = None
+    _l2d_animate = False
+    _l2d_miss_logged = False
 
     def __init__(self, project_dir):
         self.path = str(project_dir)

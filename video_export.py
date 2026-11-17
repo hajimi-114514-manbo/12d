@@ -1040,7 +1040,7 @@ def _paste_prep(img, lay, W, H):
     h, w = img.shape[:2]
     if img.shape[2] == 3:
         img = np.dstack([img, np.full((h, w), 255, np.uint8)])
-    s0 = min(W / w, H / h)
+    s0 = max(W / w, H / h) if lay.get("cover") else min(W / w, H / h)
     s = s0 * sc
     nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
     interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
@@ -1428,11 +1428,17 @@ def layer_rect(w, h, W, H, lay):
     """按 layout 计算素材在画布上的外接矩形（StageView 命中/画框与
     paste_layer 共用同一数学，取整一致）。
 
-    - fit 基准 s0=min(W/w,H/h)，实际缩放 = s0*lay["scale"]
+    - **cover=True 基准 s0=max(W/w,H/h)（铺满并裁掉溢出），否则 min（fit
+      留边）**；实际缩放 = s0*lay["scale"]
     - 中心放 (x*W, y*H)
     - rot==0：精确矩形；rot!=0：旋转后的外接矩形（与 paste_layer 同式）
     返回 (px, py, pw, ph) 画布像素坐标。
-    """
+
+    这里**必须**认 cover：paste_layer/_paste_prep 先按 cover 把图放大到
+    1920×1440，再拿本函数的矩形决定贴多大——早先本函数硬编码 min，
+    于是 4:3 背景放大后只贴进 1365×1024 的 fit 框，左右各剩 277px 黑边
+    （用户报「背景没有占满画面」）。旧 cover 用例没抓到是因为拿 16:9 图
+    测的：cover 后尺寸恰好等于画布，两种口径结果相同。"""
     try:
         x, y = lay["x"], lay["y"]
         sc, rot = lay["scale"], lay["rot"]
@@ -1440,7 +1446,7 @@ def layer_rect(w, h, W, H, lay):
         return (0, 0, 0, 0)
     if w <= 0 or h <= 0 or W <= 0 or H <= 0:
         return (0, 0, 0, 0)
-    s0 = min(W / w, H / h)
+    s0 = max(W / w, H / h) if lay.get("cover") else min(W / w, H / h)
     s = s0 * sc
     nw = max(1, int(round(w * s)))
     nh = max(1, int(round(h * s)))

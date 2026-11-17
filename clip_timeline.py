@@ -60,7 +60,10 @@ C_TEXT = TP.C_TEXT
 C_TEXT_HI = TP.C_TEXT_HI
 C_PLAYHEAD = TP.C_PLAYHEAD
 C_SNAP = QColor("#ffd166")           # 吸附辅助线
-C_SEL_EDGE = QColor("#f2f6fa")       # 选中描边
+C_SEL_EDGE = QColor("#f2f6fa")       # 选中描边（主选中）
+C_SEL_EDGE_DIM = QColor(242, 246, 250, 130)   # 多选非主选中（淡一档）
+C_MARQUEE = QColor(120, 170, 255)    # 框选矩形
+C_MARQUEE_FILL = QColor(120, 170, 255, 36)
 C_WAVE = QColor("#bfe3cc")           # 波形折线
 C_CLIP_EDGE = QColor("#10151d")      # clip 暗描边
 
@@ -134,6 +137,11 @@ class ClipTimelinePanel(QWidget):
         self.view_t0 = 0.0                     # 内部视图起点（秒）
         self.follow_playhead = False
         self._t = 0.0                          # 播放头时刻
+        # 选择模型：_sels = 有序集合（可多选，框选/Ctrl 加选/Shift 连选），
+        # _sel = 主选中（_sels 最后一个）。**保留 _sel 是给既有调用点**：
+        # 外层 _on_selection、属性面板、paint 单选描边、测试断言都读它，
+        # 单选场景下两者等价，多选时 _sel 仍是"最后操作的那个"。
+        self._sels = []
         self._sel = None                       # 选中 clip id
 
         lay = QVBoxLayout(self)
@@ -222,6 +230,7 @@ class ClipTimelinePanel(QWidget):
         """存引用不拷贝；重置选择，保留播放头时刻（越界由 set_time 钳）。"""
         if isinstance(proj, dict) and proj.get("type") == VM.PROJECT_TYPE:
             self.proj = proj
+        self._sels = []
         self._sel = None
         self.view_t0 = 0.0
         self._sync_buttons()
@@ -233,6 +242,7 @@ class ClipTimelinePanel(QWidget):
         时间轴只显示**当前幕**的轨道 —— 一幕一条独立时间轴（设计 §2.2）。
         单幕工程（v1）传什么都无影响（act_view 投影回顶层 tracks）。"""
         self._aid = aid
+        self._sels = []
         self._sel = None
         self.refresh()
 
@@ -461,7 +471,12 @@ class ClipTimelinePanel(QWidget):
 
     # ================= 选择 =================
     def _set_sel(self, cid, emit=True):
-        if self._sel == cid:
+        """单选入口（点 clip / 外部调用）。多选集合跟着重置为这一个。"""
+        self._sels = [] if cid is None else [cid]
+        self._apply_sel(cid, emit)
+
+    def _apply_sel(self, cid, emit=True):
+        if self._sel == cid and list(self._sels) == ([] if cid is None else [cid]):
             return
         self._sel = cid
         self._sync_buttons()
@@ -469,8 +484,69 @@ class ClipTimelinePanel(QWidget):
             self.selection_changed.emit(cid)
         self.area.update()
 
+    def set_selection(self, ids, primary=None, emit=True):
+        """批量设置多选集合。primary 缺省取最后一个（= 主选中）。"""
+        seen, out = set(), []
+        for i in (ids or ()):
+            if i is not None and i not in seen:
+                seen.add(i)
+                out.append(i)
+        prim = primary if primary is not None else (out[-1] if out else None)
+        # 框选每挪一像素都会回调这里；集合没变就不发信号（否则外层
+        # 属性面板每秒被刷几十次，还会往 selection_changed 灌重复事件）
+        if out == self._sels and prim == self._sel:
+            return
+        self._sels = out
+        self._sel = prim
+        self._sync_buttons()
+        if emit:
+            self.selection_changed.emit(self._sel)
+        self.area.update()
+
+    def selected_clip_ids(self):
+        """多选集合（顺序稳定）。单选调用点继续用 selected_clip_id()。"""
+        return list(self._sels)
+
+    def _toggle_sel(self, cid):
+        """Ctrl+点：加选/去选。"""
+        if cid in self._sels:
+            self._sels = [i for i in self._sels if i != cid]
+            prim = self._sels[-1] if self._sels else None
+        else:
+            self._sels = self._sels + [cid]
+            prim = cid
+        self.set_selection(self._sels, prim)
+
+    def _select_range(self, cid):
+        """Shift+点：连选。
+
+        **同轨**时取时间区间内该轨全部 clip（剪映/PR 口径，最符合直觉）；
+        主选中与被点 clip **不同轨**时只收这两个端点——跨轨按时间扫会
+        莫名其妙捞进别的轨，用户很难预期。"""
+        tr_c, c_t = VM.find_clip(self.proj, cid)
+        if not self._sel or cid is None or cid == self._sel or c_t is None:
+            self._set_sel(cid)
+            return
+        a = self._clip_start(self._sel)
+        b = float(c_t["start"])
+        lo, hi = (a, b) if a <= b else (b, a)
+        tr_p, _c = VM.find_clip(self.proj, self._sel)
+        if tr_p is not None and tr_p.get("id") == tr_c.get("id"):
+            ids = [c["id"] for c in tr_c["clips"]
+                   if lo - 1e-9 <= float(c["start"]) <= hi + 1e-9]
+        else:
+            ids = [self._sel, cid]
+        if not ids:
+            self._set_sel(cid)
+            return
+        self.set_selection(ids, cid)
+
+    def _clip_start(self, cid):
+        tr, c = VM.find_clip(self.proj, cid)
+        return float(c["start"]) if c else 0.0
+
     def _sync_buttons(self):
-        has = self._sel is not None
+        has = bool(self._sels) or self._sel is not None
         self.btn_split.setEnabled(has)
         self.btn_delete.setEnabled(has)
 
@@ -482,25 +558,45 @@ class ClipTimelinePanel(QWidget):
         return c
 
     def split_selected_at_playhead(self):
-        """[✂] 按钮 / 外部调用：在播放头处切分选中 clip，失败静默。"""
-        if not self._sel:
+        """[✂] / 外部调用：在播放头处切分**所有**选中 clip。
+
+        多选时逐个切（框选一批再切一刀是常见剪映用法）；任一成功只发
+        **一次** edit_committed（外层据此 push 一条历史，撤销才能一步回到
+        切分前 —— 每个 clip 发一次会把一次操作拆成 N 条历史）。
+        失败（太短/锁定/越界）静默跳过，与单选语义一致。"""
+        ids = self._sels or ([self._sel] if self._sel else [])
+        if not ids:
             return False
-        ok, _msg, _rid = VM.split_clip(self.proj, self._sel, self._t)
-        if ok:
+        n = 0
+        for cid in ids:
+            ok, _msg, _rid = VM.split_clip(self.proj, cid, self._t)
+            if ok:
+                n += 1
+        if n:
             self.edit_committed.emit()
             self.refresh()
-        return ok
+        return bool(n)
 
     def remove_selected(self):
-        """[🗑] / Delete：删除选中 clip，失败（锁定等）静默。"""
-        if not self._sel:
+        """[🗑] / Delete：删除选中 clip（多选成组删），失败（锁定等）静默。"""
+        ids = self._sels or ([self._sel] if self._sel else [])
+        if not ids:
             return False
-        ok, _msg = VM.remove_clip(self.proj, self._sel)
+        ok, _msg = VM.remove_clips(self.proj, ids)
         if ok:
             self._set_sel(None)
             self.edit_committed.emit()
             self.refresh()
         return ok
+
+    def select_all(self):
+        """Ctrl+A：选中当前幕全部可见轨的 clip（隐藏轨排除）。"""
+        ids = [c["id"] for tr in self._tracks() if not tr.get("hidden")
+               for c in tr["clips"]]
+        if not ids:
+            return False
+        self.set_selection(ids, ids[-1] if ids else None)
+        return True
 
     def _on_follow_toggled(self, checked):
         self.follow_playhead = bool(checked)
@@ -518,6 +614,10 @@ class ClipTimelinePanel(QWidget):
             self.remove_selected()
             ev.accept()
             return
+        if ev.key() == Qt.Key_A and ev.modifiers() & Qt.ControlModifier:
+            self.select_all()           # Ctrl+A：全选当前幕可见 clip
+            ev.accept()
+            return
         super().keyPressEvent(ev)
 
 
@@ -533,6 +633,11 @@ class _ClipArea(QWidget):
         self.panel = panel
         self._drag = None                # 拖拽状态 dict
         self._scrub = False
+        # 框选状态：{"x0","y0","x1","y1","active","add"}。
+        # **按下时不 active**：空白处按下后若没移动就松手，按老语义
+        # 走「取消选中 + scrub 播放头」（测试 3d/11f/17a 锁的就是这个）；
+        # 移动超过阈值才升级为框选。
+        self._marquee = None
         # v3.4.7：头列眼睛/锁按钮 hover 反馈（"eye"/"lock"，None=无）
         self._hover_icon = None
         self._hover_row = None           # (y0, h) hover 所在行
@@ -613,8 +718,13 @@ class _ClipArea(QWidget):
     def _preview_geom(self, c):
         """拖拽中：返回该 clip 的预览 (start, dur)；否则返回实际数据。"""
         d = self._drag
-        if (d is None or not d.get("moved") or d.get("pv") is None
-                or d["id"] != c["id"]):
+        if d is None or not d.get("moved"):
+            return float(c["start"]), float(c["dur"])
+        # 成组拖动：组内成员整体平移同一个 delta（dur 不变）
+        if d.get("group") and c["id"] in d["group"]:
+            s0, dur0 = d["group"][c["id"]]
+            return s0 + d["delta"], dur0
+        if d.get("pv") is None or d["id"] != c["id"]:
             return float(c["start"]), float(c["dur"])
         if d["kind"] == self.EDGE_MOVE:
             return d["pv"], d["dur0"]
@@ -629,6 +739,7 @@ class _ClipArea(QWidget):
             return
         if self._drag is not None or self._scrub:
             self._finish_drag()
+        self._marquee = None            # 新按下作废上一发挂起的空白点击
         x, y = ev.position().x(), ev.position().y()
         ruler_h = self.panel.scaled_ruler_h()
 
@@ -657,30 +768,85 @@ class _ClipArea(QWidget):
 
         hit = self._hit_clip(x, y)
         if hit is None:
-            # 空白（含行以下）：取消选中 + scrub；隐藏轨整行不可交互
+            # 空白（含行以下）：**先挂起**，不立刻取消/scrub。
+            # 没移动就松手 -> 老语义（取消选中 + scrub 播放头）；
+            # 移动超阈值 -> 升级为框选。隐藏轨整行完全不可交互。
             row = self._row_at(y)
             if row is not None and row[0].get("hidden"):
                 return
-            self.panel._set_sel(None)
-            self._begin_scrub(x)
+            self._marquee = {"x0": x, "y0": y, "x1": x, "y1": y,
+                             "active": False,
+                             "add": bool(ev.modifiers() & Qt.ControlModifier)}
             return
         tr, c, zone = hit
         if tr.get("hidden"):
             return                       # 隐藏轨不可交互
-        self.panel._set_sel(c["id"])
+        mods = ev.modifiers()
+        if mods & Qt.ControlModifier:
+            self.panel._toggle_sel(c["id"])   # 加选/去选，不进拖拽
+            return
+        if mods & Qt.ShiftModifier:
+            self.panel._select_range(c["id"])
+            return
+        if c["id"] in self.panel._sels and len(self.panel._sels) > 1:
+            # 组内点击（未按修饰键）：保持整组选中可成组拖，但把被点的
+            # 提为主选中 -> 属性面板跟着显示它（剪映/PR 一致）
+            self.panel.set_selection(self.panel._sels, c["id"])
+        else:
+            self.panel._set_sel(c["id"])
         if tr.get("locked"):
             return                       # 锁定轨：可选中，不可拖/trim
+        grp = {}
+        if zone == self.EDGE_MOVE and len(self.panel._sels) > 1 \
+                and c["id"] in self.panel._sels:
+            # 成组拖动：只收**可动**成员（锁定轨/隐藏轨的留在原地）
+            for cid in self.panel._sels:
+                t2, c2 = VM.find_clip(self.panel.proj, cid)
+                if c2 is None or t2.get("locked") or t2.get("hidden"):
+                    continue
+                grp[cid] = (float(c2["start"]), float(c2["dur"]))
         self._drag = {
             "kind": zone, "id": c["id"], "c": c,
             "x0px": x, "t0": self.x_to_t(x),
             "start0": float(c["start"]), "dur0": float(c["dur"]),
             "pv": None, "snap_x": None, "moved": False,
+            "group": grp,
         }
 
     def _begin_scrub(self, x):
         self._scrub = True
         self.panel.seeked.emit(self._scrub_t(x))
         self.panel.area.update()
+
+    def _marquee_select(self, mods):
+        """框选命中：矩形与 clip 矩形**相交**即选中（剪映/PR 口径，
+        比"完全包含"好用——长 clip 拖一小段也能捞进来）。
+        Ctrl 按住 = 并集（在已有选择上追加），否则整盘替换。"""
+        mq = self._marquee
+        rx0, rx1 = sorted((mq["x0"], mq["x1"]))
+        ry0, ry1 = sorted((mq["y0"], mq["y1"]))
+        hit_ids = []
+        for y0, rh, tr in self.panel.row_geometry():
+            if tr.get("hidden"):
+                continue
+            if ry1 < y0 or ry0 > y0 + rh:      # 矩形没盖到这一行
+                continue
+            for c in tr["clips"]:
+                cx0 = self.t_to_x(c["start"])
+                cx1 = cx0 + float(c["dur"]) * self.panel.pps
+                if cx1 >= rx0 and cx0 <= rx1:
+                    hit_ids.append(c["id"])
+        if mods & Qt.ControlModifier:
+            merged = list(self.panel._sels)
+            for i in hit_ids:
+                if i not in merged:
+                    merged.append(i)
+            self.panel.set_selection(merged,
+                                     hit_ids[-1] if hit_ids else
+                                     (merged[-1] if merged else None))
+        else:
+            self.panel.set_selection(hit_ids,
+                                     hit_ids[-1] if hit_ids else None)
 
     def _edge_autoscroll(self, x):
         """v3.5.2：拖拽/scrub 中光标贴左右缘 -> 内容自动横向滚。
@@ -701,6 +867,17 @@ class _ClipArea(QWidget):
 
     def mouseMoveEvent(self, ev):
         x, y = ev.position().x(), ev.position().y()
+        mq = self._marquee
+        if mq is not None and self._drag is None and not self._scrub:
+            if not mq["active"] and (abs(x - mq["x0"]) > DRAG_THRESHOLD
+                                     or abs(y - mq["y0"]) > DRAG_THRESHOLD):
+                mq["active"] = True      # 升级为框选（此前的 scrub 挂起作废）
+            if mq["active"]:
+                self._edge_autoscroll(x)
+                mq["x1"], mq["y1"] = x, y
+                self._marquee_select(ev.modifiers())
+                self.update()
+            return
         d = self._drag
         if d is not None:
             if not d["moved"] and abs(x - d["x0px"]) > DRAG_THRESHOLD:
@@ -735,6 +912,35 @@ class _ClipArea(QWidget):
     def _update_preview(self, d, x):
         p = self.panel
         dt = p.x_to_t(x) - d["t0"]
+        if d.get("group"):
+            # 成组移动：吸附整组的**公共位移 delta**，而不是逐条各自吸附
+            # （逐条吸会把组内相对间距打散，用户摆好的错位就没了）。
+            # 候选吸点 = 组内每个成员的左/右边界，delta 取使其中某个边界
+            # 落到组外吸点上的最小调整量。
+            ids = set(d["group"])
+            pts = VM.snap_points_multi(p.proj, exclude_ids=ids)
+            raw = dt
+            best, bd = raw, SNAP_EPS
+            for cid, (s0, du0) in d["group"].items():
+                for edge in (s0 + raw, s0 + raw + du0):
+                    for q in pts:
+                        cand = raw + (q - edge)
+                        if abs(cand - raw) <= bd:
+                            best, bd = cand, abs(cand - raw)
+            best = round(best, 3)
+            d["delta"] = best
+            d["pv"] = round(max(0.0, d["start0"] + best), 3)
+            d["snap_x"] = None
+            if bd <= SNAP_EPS:
+                for cid, (s0, du0) in d["group"].items():
+                    for q in pts:
+                        if abs((s0 + best) - q) <= 1e-6:
+                            d["snap_x"] = p.t_to_x(q)
+                            break
+                    if d["snap_x"] is not None:
+                        break
+            self.update()
+            return
         pts = VM.snap_points(p.proj, exclude_id=d["id"])
         if d["kind"] == self.EDGE_MOVE:
             raw = d["start0"] + dt
@@ -760,6 +966,15 @@ class _ClipArea(QWidget):
         self.update()
 
     def mouseReleaseEvent(self, ev):
+        mq, self._marquee = self._marquee, None
+        if mq is not None and self._drag is None:
+            if mq["active"]:
+                self.update()            # 框选结果已在 move 中实时生效
+                return
+            # 没移动 = 空白处点击：走老语义（取消选中 + scrub 播放头）
+            x = mq["x0"]
+            self.panel._set_sel(None)
+            self._begin_scrub(x)
         if self._scrub:
             self._scrub = False
             self.panel.playhead_drag_stopped.emit()
@@ -767,10 +982,22 @@ class _ClipArea(QWidget):
 
     def _finish_drag(self):
         d, self._drag = self._drag, None
-        if d is None or not d.get("moved") or d.get("pv") is None:
+        if d is None or not d.get("moved"):
             self.update()
             return
         p = self.panel
+        if d.get("group"):
+            # 成组移动：任一成员撞组外 -> 整组回弹（move_clips 原子）
+            delta = d.get("delta")
+            if delta is not None and abs(delta) > 1e-9:
+                ok, _msg = VM.move_clips(p.proj, list(d["group"]), delta)
+                if ok:
+                    p.edit_committed.emit()
+            p.refresh()
+            return
+        if not d.get("moved") or d.get("pv") is None:
+            self.update()
+            return
         if d["kind"] == self.EDGE_MOVE:
             if abs(d["pv"] - d["start0"]) > 1e-9:
                 ok, _msg = VM.move_clip(p.proj, d["id"], d["pv"])
@@ -874,6 +1101,15 @@ class _ClipArea(QWidget):
             p.setPen(QPen(C_SNAP, 1))
             p.drawLine(QPointF(d["snap_x"], ruler_h), QPointF(d["snap_x"], h))
 
+        # ---- 框选矩形（画在 clip 之上、播放头之下）----
+        mq = self._marquee
+        if mq is not None and mq.get("active"):
+            rx0, rx1 = sorted((mq["x0"], mq["x1"]))
+            ry0, ry1 = sorted((mq["y0"], mq["y1"]))
+            p.setPen(QPen(C_MARQUEE, 1))
+            p.setBrush(QBrush(C_MARQUEE_FILL))
+            p.drawRect(QRectF(rx0, ry0, rx1 - rx0, ry1 - ry0))
+
         # ---- 播放头 ----
         px = pal.t_to_x(pal._t)
         if 0 <= px <= w:
@@ -955,6 +1191,12 @@ class _ClipArea(QWidget):
             p.drawPath(path)
             if pal._sel == c["id"]:
                 p.setPen(QPen(C_SEL_EDGE, 1.5))
+                p.setBrush(Qt.NoBrush)
+                p.drawPath(path)
+            elif c["id"] in pal._sels:
+                # 多选（非主选中）：淡一档描边，与单选可区分；框选一批
+                # 之后能一眼看出捞到了哪几个
+                p.setPen(QPen(C_SEL_EDGE_DIM, 1.2))
                 p.setBrush(Qt.NoBrush)
                 p.drawPath(path)
 

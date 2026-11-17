@@ -589,6 +589,19 @@ def snap_time(points, t, eps=SNAP_STEP * 3):
     return round(best, 3)
 
 
+def snap_points_multi(proj, exclude_ids=None):
+    """snap_points 的多 id 版（成组移动时整组互不吸附）。"""
+    ex = set(exclude_ids or ())
+    pts = {0.0}
+    for t in _tracks_of(proj):
+        for c in t["clips"]:
+            if c["id"] in ex:
+                continue
+            pts.add(round(c["start"], 3))
+            pts.add(round(clip_end(c), 3))
+    return sorted(pts)
+
+
 def _overlap(a0, a1, b0, b1):
     return a0 + EPS < b1 - EPS and b0 + EPS < a1 - EPS
 
@@ -670,6 +683,73 @@ def move_clip(proj, clip_id, new_start, new_track_id=None):
         tr["clips"].remove(c)
         dst["clips"].append(c)
     c["start"] = new_start
+    return True, ""
+
+
+def _clash_any(proj, track, start, dur, exclude_ids):
+    """同轨重叠检查，排除**一组** id（成组移动用：组内互不判撞）。"""
+    ex = set(exclude_ids or ())
+    for c in track["clips"]:
+        if c["id"] in ex:
+            continue
+        if _overlap(start, start + dur, c["start"], clip_end(c)):
+            return c
+    return None
+
+
+def move_clips(proj, clip_ids, delta):
+    """成组平移（框选后拖动）：整组同位移，全部合法才落数据（原子）。
+
+    与 move_clip 的三点区别：
+    - 排除集是**整组**（组内互不判重叠，否则一起动就自己撞自己）；
+    - 整组一起顶到 0 之前时按最左者整体右推，**保持相对间距**
+      （逐条钳 0 会改变组内相对位置，等于把用户摆好的错位打乱）；
+    - 锁定轨的 clip 留在原地（与「锁定轨可选中但不可拖」的单选语义一致），
+      但**只有全部成员都锁着**才算失败回弹。
+    任一可动成员撞组外片段 -> 整组不动（部分成功会把成组移动变成撕裂）。"""
+    ids = [str(i) for i in (clip_ids or ())]
+    if not ids:
+        return False, "未选中片段"
+    try:
+        delta = float(delta)
+    except (TypeError, ValueError):
+        return False, "位移非法"
+    moving = []
+    for cid in ids:
+        tr, c = find_clip(proj, cid)
+        if c is None:
+            return False, "clip 不存在"
+        if tr.get("locked"):
+            continue
+        moving.append((tr, c))
+    if not moving:
+        return False, "轨道已锁定"
+    if abs(delta) < EPS:
+        return True, ""
+    moved_ids = {c["id"] for _t, c in moving}
+    lo = min(float(c["start"]) + delta for _t, c in moving)
+    shift = -lo if lo < 0 else 0.0
+    for tr, c in moving:
+        ns = round(float(c["start"]) + delta + shift, 3)
+        if _clash_any(proj, tr, ns, float(c["dur"]), moved_ids):
+            return False, "与组外片段重叠"
+    for tr, c in moving:
+        c["start"] = round(float(c["start"]) + delta + shift, 3)
+    return True, ""
+
+
+def remove_clips(proj, clip_ids):
+    """成组删除：逐个走 remove_clip（锁定轨静默跳过）。ok = 至少删掉一个。"""
+    n = 0
+    last_msg = ""
+    for cid in list(clip_ids or ()):
+        ok, msg = remove_clip(proj, cid)
+        if ok:
+            n += 1
+        else:
+            last_msg = msg
+    if not n:
+        return False, last_msg or "clip 不存在"
     return True, ""
 
 
