@@ -66,6 +66,12 @@ _COMMANDS = frozenset((
     # 编辑器时间轴模型里没有"滤镜轨"，所以这两个命令是**读到即跳过**
     # （不记警告：它们是有意的合法指令，不是错误）。
     "setTransform", "setTempAnimation",
+    # v3.5.14：`setTransition`（场景切换淡入淡出）**也必须在白名单里**。
+    # 与 setTransform 同一类坑：不在白名单就会掉进台词分支，被当成
+    # who="setTransition" 的一句台词，导出时再拼成
+    # `setTransition:-target=bg-main;`（残缺），回环逐字节一致性直接崩。
+    # 它由导出端自动重新生成，所以分发层直接跳过（见 _AUTO_REGEN）。
+    "setTransition",
 ))
 # 明确不支持的语句：跳过 + 记警告，不报错。
 _UNSUPPORTED = frozenset((
@@ -76,6 +82,12 @@ _UNSUPPORTED = frozenset((
 # （编辑器不建模画面特效；用户从 WebGAL 脚本导入时这些指令本就属于
 #  导出目标引擎的执行范畴，不是木偶工作室时间轴要表达的内容。）
 _SILENT_SKIP = frozenset(("setTransform", "setTempAnimation"))
+# v3.5.14：`setTransition` 由**导出端自动生成**（淡入淡出，脚本最前 4 行），
+# 导入时必须**静默丢弃** —— 保留它反而破坏回环一致性：
+# 不识别的话会走台词分支（who=setTransition），第二遍导出把它导成
+# `setTransition:-target=…;` 残缺行；留着不丢则第二遍导出又插一遍，
+# 两遍逐字节不一致（26f/28e 回环锚实测红）。导出端每次都会重插，丢弃无损。
+_AUTO_REGEN = frozenset(("setTransition",))
 _SLOT_X = {"left": 0.2, "center": 0.5, "right": 0.8}
 # v3.5.13：`changeBg:black` / `changeBg:none` 是引擎内置纯色背景关键字
 # （实测均为真黑屏，页面中心亮度 0.00），**不是素材文件**。导入时识别成
@@ -1025,6 +1037,10 @@ class _Builder:
                       "if": self.do_if,
                       "changeScene": self.do_change_scene}.get(head)
                 if fn is None:
+                    if head in _AUTO_REGEN:
+                        # 导出端每次会自动重新生成（淡入淡出），导入时直接
+                        # 跳过 —— 见 _AUTO_REGEN 的注释（保住回环逐字节一致）。
+                        continue
                     if head in _SILENT_SKIP:
                         # 画面特效：**留档但不进时间轴**（编辑器无滤镜轨）。
                         # 存「原始行」+ 当前时刻，导出端按 t 重新 emit。

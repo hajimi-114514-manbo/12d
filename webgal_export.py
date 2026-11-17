@@ -59,6 +59,31 @@ import sys
 import zlib
 
 AUDIO_BGM_MIN = 3.0          # 秒：>=3s 视作 bgm，否则音效
+# v3.5.13：「该角色紧接着回到同一槽位」的判定窗口（秒）。
+# 只有一个 clip 结束、下一个 clip 几乎同时（换动作）才算"没离场"，
+# none 可以丢（避免每次换动作都卸载+重载 -> 200ms 淡入闪烁）。
+# 超过这个窗口 = 真的离场过，none 必须保留，否则旧模型挂在槽位上，
+# 回来时与新实例叠在一起 = **人物残留**（第4话睦实报）。
+NONE_REJOIN_EPS = 1.0
+# v3.5.14：场景切换淡入淡出（用户要求「之后的切换场景都用变暗+变亮过渡，
+# 保证人物动作不卡顿」）。
+#
+# 用什么：引擎内置动画 `enter`（alpha 0→1，300ms）与 `exit`（alpha 1→0，
+# 300ms）——查 animationTable.json 确认存在，且实测在真实剧本里插入
+# `setTransition: -target=… -enter=enter -exit=exit;` 后引擎**零报错、
+# 画面正常**（见 transition_real_test）。
+#
+# 为什么能"保证人物动作不卡顿"：L2D 模型换装/换动作时，引擎是卸载旧实例 +
+# 加载新实例（几百 ms 的空白）；直接硬切会看到人物「闪一下/卡一下」。
+# 淡出→切换→淡入 让这段时间落在黑场里，视觉上连贯。
+#
+# 目标元素：`bg-main`（背景层）与 `fig-*`（各立绘槽位）。用 setTransition
+# 而不逐条写动画，是因为它**设置的是该元素进入/退出的默认动画**，
+# 之后所有切换自动带上，不污染脚本行数。
+TRANSITION_ON = True
+TRANSITION_ENTER = "enter"
+TRANSITION_EXIT = "exit"
+TRANSITION_TARGETS = ("bg-main", "fig-left", "fig-center", "fig-right")
 Y_DEV = 0.15                 # 立绘纵向偏离 0.5 超过该值 -> 插手动调整提示
 DEFAULT_LAYOUT = {"x": 0.5, "y": 0.5, "scale": 1.0, "rot": 0.0}
 GAME_SUBDIRS = ("scene", "background", "figure", "bgm", "vocal",
@@ -2485,8 +2510,11 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         for _ev in _NONE_PENDING:
             _t, _prio, _seq, _sl, _ref, _fid = _ev
             if _fid:
-                # 平移态：按 id 判定"之后还回不回这个句柄"（与槽位无关）
-                _again = any(t >= _t - 0.005 and i == _fid
+                # 平移态：按 id 判定"之后还回不回这个句柄"（与槽位无关）。
+                # v3.5.13：同样要限定**紧接着**才算换动作（见 NONE_REJOIN_EPS
+                # 的说明）——隔了几百秒再回来那是真退场后重新入场。
+                _again = any(t >= _t - 0.005 and (t - _t) <= NONE_REJOIN_EPS
+                             and i == _fid
                              for (t, _r, _s2, i) in _fig_events)
                 if _again:
                     continue
@@ -2497,11 +2525,22 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             # 用 >= ：同角色 clip 首尾相接时（上一 clip 结束点 == 下一 clip
             # 起点），新的 changeFigure 与 none **同一时刻**，那也是"继续
             # 在场"（只是换动作），不能判成退场。
-            _same_slot_again = any(
-                t >= _t - 0.005 and s == _sl and r == _ref
+            #
+            # v3.5.13 修（用户报「第4话右边睦有残留」）：这里原先只要
+            # 「之后**任何时刻**回到同槽位」就丢弃 none —— 完全没看间隔。
+            # 实测第4话：睦在 210.40s 离开 right 槽位、422.80s 才回来，
+            # 中间空了 **212.4 秒**（换了场景、换了背景），none -right 却
+            # 被丢掉 -> 模型一直挂在槽位上；回来时对同一槽位再发
+            # changeFigure，引擎认定为"新实例"，与旧实例叠加 = **人物残留**。
+            #
+            # 正确判据：只有「紧接其后」才算换动作（间隔 < NONE_REJOIN_EPS）。
+            # 中间有明显空档 = 真的离场了，none 必须保留，让引擎卸载。
+            _same_slot_rejoin = any(
+                t >= _t - 0.005 and (t - _t) <= NONE_REJOIN_EPS
+                and s == _sl and r == _ref
                 for (t, r, s, _i) in _fig_events)
-            if _same_slot_again:
-                continue      # 同角色还会回这个槽位 -> 不是退场 -> 丢弃 none
+            if _same_slot_rejoin:
+                continue      # 同角色紧接着回这个槽位 -> 换动作 -> 丢弃 none
             # 该角色不再回这个槽位：none 表示真退场，保留
             _keep.append((_t, _prio, _seq,
                           ["changeFigure:none -%s;" % _sl]))
@@ -2509,7 +2548,23 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
 
     # ---- 规则 6：事件排序输出 ----
     events.sort(key=lambda e: (round(_f(e[0]), 3), e[1], e[2]))
+    # v3.5.14：场景切换淡入淡出。setTransition 设的是**元素进入/退出的
+    # 默认动画**，一次设置全程生效，所以放在脚本最前面即可（不需要在
+    # 每个 changeBg/changeFigure 前重复）。多幕工程由编排器只在第一幕
+    # 输出一次（见 ctx["trans_done"]），避免每幕重复刷同样的行。
+    # **空工程不插**：没有任何场景切换就无所谓淡入淡出，而且插了会让
+    # stmt_lines 非空、跳过 _EMPTY_SCRIPT 分支（丢 intro/空白注释）。
+    has_content = bool(events)
     stmt_lines = []
+    if TRANSITION_ON and has_content:
+        _tdone = ctx.get("trans_done")
+        if not _tdone:
+            ctx["trans_done"] = True
+            for _tg in TRANSITION_TARGETS:
+                stmt_lines.append(
+                    "setTransition: -target=%s -enter=%s -exit=%s;"
+                    % (_tg, TRANSITION_ENTER, TRANSITION_EXIT))
+            stats["transition"] = "on"
     for _, _, _, lines in events:
         stmt_lines.extend(lines)
 
