@@ -5,7 +5,51 @@
 
 ---
 
+## v3.5.9（2026-11-17 上午）导出再提速：alpha-over 包围盒裁剪（单帧 96→34ms，端到端 83fps）
+
+> 用户说「继续优化」。cProfile 定位到 compose_frame 本体 70ms/帧的大头是
+> fig 层 alpha-over 的全帧 numpy 复合运算（产生 7 个 25MB 临时数组）。
+> 真实工程 1080p：单帧 **96.4 → 34.4ms**（-64%），端到端 **1 线程 60.4fps、
+> 4 线程 83.1fps**（v3.5.8 为 28.4 / 57.9），519 秒工程 4 线程 **~3 分钟**。
+
+### 一、fig alpha-over 包围盒裁剪（-40ms/帧，最大单项）
+
+- 立绘通常只占画面一块（实测 40% 区域），**bbox 外的 fig 全透明，混合
+  恒等（canvas 不变）**。改为先用 numpy 行列 any 算 alpha 非零包围盒，
+  只在该区域做 `fig*a + canvas*(1-a)` 复合运算。probe 实测 71.65 →
+  31.69ms（-56%），**逐像素 maxdiff 0**（纯实现替换，cv2 float/uint16
+  变体有舍入差被否决）。
+- bbox 计算方式对比：**numpy 行列 any 2.38ms 优于 cv2.findNonZero
+  7.02ms**（省 4.6ms/帧）。fig 全透明时整个跳过。
+
+### 二、字幕 panel+name 预合成（blend 3→2 次）
+
+- 名字同句不变 → `_panel_named_layer(W,H,who)` 把 name band 以
+  RGBA-over-RGBA source-over 预叠进 panel band 并缓存（含 premul 重算），
+  每帧 blend 从 3 次（panel/name/text）减到 2 次。结合律严格成立，
+  与分两次 blend 的差异仅 uint8 舍入顺序（probe maxdiff 2，容差内）。
+
+### 三、probe 否决项（避免反向优化，留档）
+
+- `canvas[...] = bgc`（numpy 隐式转换 2.33ms）已优于 cv2.convertScaleAbs
+  （3.06）与 cv2.multiply dst 直写（3.99）——保持现状
+- `np.zeros` 分配 float32 全帧 0.01ms（calloc 零页几乎免费），**复用缓冲
+  fill(0) 反而 1.04ms（memset 24.9MB）**——不引入缓冲池
+- 编码 cv2.cvtColor + VideoWriter 合计 ~7ms/帧，帧级并行下不是瓶颈，
+  不换编码器
+
+### 四、验证
+
+- parallel_export_test 9 项（workers=1/2/4 产物 sha256 一致）、
+  subtitle_burn 27、subtitle_typing 8、fx_map 32、video_export 35、
+  update_patch 95、export_dialog 23、worker_limits 全绿。
+- 端到端（12 秒 360 帧）：1 线程 60.4 / 4 线程 83.1 / 8+ 线程 ~38.5fps
+  （多线程仍受内存带宽+GIL 限制，上限口径不变）。
+
+---
+
 ## v3.5.8（2026-11-17 凌晨）导出提速二轮（~85ms/帧）+ 增量更新链式化 + 剪映式导出参数
+
 
 > 三条线：①用户报「导出还是好慢」——24 核只用了 1 核+逐帧重画冗余，真实工程
 > 1080p 导出从 v3.5.7 的 ~240-315ms/帧 压到 **~85ms/帧**（2.9x，全片 ~37 分钟）；
