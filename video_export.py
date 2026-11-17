@@ -1460,6 +1460,12 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                 continue
             try:
                 src = src_get(clip["source"])
+                # v3.5.11：L2D 源必须先按 clip 灌 motion/expression，否则
+                # 查询预渲染缓存用的键是空的 -> miss -> 退回占位卡（剪影）。
+                # FX 分支同样处理，两条路径都要有。
+                setp = getattr(src, "set_preset", None)
+                if callable(setp):
+                    setp(clip.get("motion", ""), clip.get("expression", ""))
                 img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
             except Exception:
                 continue
@@ -1482,6 +1488,12 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
             is_fig = str(tr.get("name") or "").startswith("FIG")
             try:
                 src = src_get(clip["source"])
+                # v3.5.11：真 L2D 源按自身 clip 的 motion/expression 渲染
+                # （渲染器出图是「透明底立绘本体」，layout 仍由 _paste_rgba
+                # 应用，与图片源同一条路径）
+                setp = getattr(src, "set_preset", None)
+                if callable(setp):
+                    setp(clip.get("motion", ""), clip.get("expression", ""))
                 img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
             except Exception:
                 continue

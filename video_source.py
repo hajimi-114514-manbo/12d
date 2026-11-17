@@ -325,9 +325,20 @@ class PuppetSource(FrameSource):
 
         调用方（video_workbench）在 render 前按当前 clip 字段灌入，因此
         seek/撤销/重做后重设，不会残留错值。
+        v3.5.11：真 L2D 渲染分支下，这两个字段直接透传给渲染后端。
         """
         self._motion_id = str(motion_id or "")
         self._expression_id = str(expression_id or "")
+        self._l2d_motion = self._motion_id
+        self._l2d_expression = self._expression_id
+
+    def set_layout(self, layout):
+        """v3.5.11：保留接口（布局由导出侧 _paste_rgba 应用）。
+
+        预渲染产物是**未定位的透明底立绘本体**，x/y/scale/rot 仍由
+        导出侧统一应用（与图片源/占位卡同一条路径），所以这里不需要
+        把布局传给渲染器——保留空实现只为兼容既有调用点。"""
+        return
 
     def _role_nodes(self, role, nodes):
         """role -> 匹配的节点名列表（按关键词子串匹配，全部命中）。"""
@@ -459,11 +470,16 @@ class PuppetSource(FrameSource):
         return np.asarray(img)
 
     def _cubism2_atlas(self, mj_path):
-        """Cubism2 模型目录 -> 剪影占位卡（H2r）。
-        解析 model.json 的 FileReferences.Textures[0]（v2 顶层 textures 兼容，
-        含嵌套 list 形态）——图集**只用于校验与取尺寸**（摆位缩放语义不变），
-        内容不渲染（atlas 直贴=碎尸拼贴，用户实机判吓人）。
-        坏 JSON / 无 textures / 图集文件读不出 -> ValueError（三态抛错不动）。"""
+        """Cubism2/Cubism3 模型目录 -> 立绘帧源（v3.5.11）。
+
+        **优先走真渲染后端**（l2d_renderer：离屏 QWebEngine + pixi-live2d-
+        display，与实时预览同一套渲染，画面完整）；后端不可用（没装
+        WebEngine / runtime 缺失 / 渲染失败）才回退**剪影占位卡**——
+        占位卡是历史上的兜底形态（用户实机判"保龄球"，只在无法渲染时
+        才该出现）。
+
+        返回：真渲染就绪 -> self.is_static=False（每帧可能不同，逐帧问
+        后端要图）；占位 -> is_static=True（恒定图，贴层可缓存）。"""
         try:
             d = json.load(open(mj_path, encoding="utf8"))
         except Exception:
@@ -502,6 +518,39 @@ class PuppetSource(FrameSource):
                           .replace("\\", os.sep))
         atlas = _imread_rgba(ap)      # 校验语义：缺文件/解不出 -> ValueError
         self.height, self.width = atlas.shape[:2]
+
+        # ---- v3.5.11：真 L2D 立绘（方案 B：主线程预渲染 + 导出线程查缓存）----
+        # 为什么不在导出线程直接渲染：QWebEngine 渲染依赖主线程事件循环，
+        # 在导出 QThread 里会死锁（实测 startTimer 报事件分发器已销毁）。
+        # 所以导出前由主线程把唯一状态渲染好（真实工程仅 8 个状态/0.2s），
+        # 这里只做查表，零渲染开销、零线程问题。
+        self._l2d_prefetch = None
+        try:
+            import l2d_prefetch as LP
+            pf = LP.prefetch()
+            if pf.ready():
+                self._l2d_prefetch = pf
+        except Exception:
+            self._l2d_prefetch = None
+
+        if self._l2d_prefetch is not None:
+            self._atlas = None
+            self.is_static = False      # 状态可随 clip 变（motion/expression）
+            self.fps = 30.0
+            self.src_dur = 600.0
+            self.placeholder = ""
+            self._l2d_layout = None
+            self._l2d_motion = ""
+            self._l2d_expression = ""
+            self._l2d_miss_logged = False
+            # 预渲染分支提前 return，必须自己补齐 __init__ 末尾那批字段
+            # （否则 frame() 里 self._motion_id 直接 AttributeError，
+            #  导出侧 getattr 吞掉后静默退回占位卡——实测踩过）
+            self._motion_id = ""
+            self._expression_id = ""
+            self._preset_role_warned = set()
+            return
+
         label = os.path.basename(os.path.normpath(self.path)) or "model"
         self._atlas = self._silhouette_card(self.width, self.height, label)
         self.is_static = True    # v3.5.8：占位卡路径 frame() 恒返回
@@ -514,6 +563,25 @@ class PuppetSource(FrameSource):
     def frame(self, t=0.0):
         if self._closed:
             raise SourceClosed("PuppetSource 已关闭: %s" % self.path)
+        # v3.5.11：真 L2D 立绘 —— 查主线程预渲染缓存（本线程零渲染）
+        if self._l2d_prefetch is not None:
+            try:
+                img = self._l2d_prefetch.get(
+                    self.path, self._motion_id, self._expression_id)
+                if img is not None and getattr(img, "size", 0):
+                    return img
+                if not self._l2d_miss_logged:
+                    self._l2d_miss_logged = True
+            except Exception:
+                pass
+            # 未命中（该状态没预渲染到）：回退占位卡，绝不阻断导出
+            if self._atlas is not None:
+                return self._atlas
+            if not hasattr(self, "_miss_card"):
+                self._miss_card = self._silhouette_card(
+                    self.width, self.height,
+                    os.path.basename(os.path.normpath(self.path)) or "model")
+            return self._miss_card
         if self._atlas is not None:
             return self._atlas              # H2r 回退：恒返回同一张剪影占位卡
         t = min(max(float(t), 0.0), self.src_dur)
@@ -537,6 +605,10 @@ class PuppetSource(FrameSource):
         self._rig = None
         self._keyframes = None
         self._atlas = None
+        # v3.5.11：预渲染缓存是进程级单例，这里只放弃自己的引用
+        self._l2d_prefetch = None
+        self._l2d_motion = ""
+        self._l2d_expression = ""
 
 
 # ---------------- 统一入口 ----------------

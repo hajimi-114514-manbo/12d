@@ -81,6 +81,17 @@
     muppetLoadLib(__MUPPET_LIB2__),
     muppetLoadLib(__MUPPET_LIB4__),
   ]);
+  // v3.5.11：引擎主包 gameConfigInit 末尾会调 window.renderPromiseResolve()
+  // 作为「渲染就绪」握手（主包最外层 await 它）。官方 index.html 由引擎自己
+  // 提供该函数；我们的宿主页必须自备，否则主包在
+  // `window.renderPromiseResolve()` 处抛 TypeError -> 主包求值中断 ->
+  // window.PIXI 永不建立 -> L2D 无法渲染（实测根因）。
+  // 约定：主包调它表示「配置就绪、可以渲染了」，我们记录后 resolve。
+  window.__muppetRenderReady = new Promise(function (res) {
+    window.renderPromiseResolve = function () {
+      try { res(true); } catch (e) { /* 已 resolve 忽略 */ }
+    };
+  });
 </script>
 </head>
 <body>

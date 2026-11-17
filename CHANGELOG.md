@@ -5,6 +5,87 @@
 
 ---
 
+## v3.5.11（2026-11-17 上午）导出视频里的立绘改成**完整 L2D**（不再是保龄球剪影）
+
+> 用户报「目前导出视频内人物应当是完整 l2d 而不是保龄球模型」。这是本版
+> 最重要的问题：**实时预览里人物是完整的，只有导出是剪影**，两边不一致。
+
+### 一、根因
+
+立绘素材是 **Cubism2 模型目录**（`.chara/model.moc` 695KB + 两张 1024²
+纹理图集 + physics.json + model.json），而导出管线的 `PuppetSource` 遇到
+这类目录走 `_cubism2_atlas()` 回退，**渲染成一张圆头+椭圆身体的灰色剪影
+占位卡**（用户口中的"保龄球"，卡上还印着目录名）。实测占位卡只有 **19 种
+颜色**，而真实纹理图集是完整人物（脸、五官、发丝、身体部件全套）。
+
+根因是 Cubism2 `.moc` 是专有二进制格式，Python 侧没有渲染器，当初只能做
+剪影占位。但项目里**早就有完整渲染能力**——`webgal_preview.py` 的实时预览
+通过 WebGAL 运行时自带的 pixi-live2d-display 把真模型渲染进 QWebEngine。
+
+### 二、方案（方案 B：主线程预渲染 + 导出线程查缓存）
+
+**为什么要预渲染而不是实时渲染**：QWebEngine 渲染依赖 GUI 主线程事件循环，
+在导出 QThread 里跑会死锁（实测报 `QObject::startTimer: current thread's
+event dispatcher has already been destroyed`）。所以：
+
+- 导出前在主线程把全工程**唯一立绘状态**渲染好（真实工程只有 **8 个状态、
+  ~2 秒、内存 6.5MB**）
+- 导出线程逐帧只做「按 clip 查缓存 + 贴图」，零渲染、零线程问题
+- 状态键 = (模型路径归一化, motion, expression)；None 与 "" 统一归一
+
+**代价与取舍（必须写清）**：同一 clip 内画面恒定（不含呼吸/眨眼逐帧变化）。
+换来导出可重现 + 速度。逐帧动画需要方案 A（主线程队列式渲染），是更大的
+架构改动，留待后续。
+
+### 三、实现（新增两个模块）
+
+- **`l2d_renderer.py`**：离屏 QWebEngine 渲染器。复用 `webgal_preview` 的
+  muppet:// scheme + 宿主页，把「推状态显示」变成「推状态 + 抓一帧像素」。
+  `render(state) -> (H,W,4) RGBA`，输出**透明底、已裁到人物本体**的立绘，
+  位置变换仍由导出侧 `_paste_rgba` 应用（与图片源同一条路径）。
+- **`l2d_prefetch.py`**：状态收集 + 预渲染缓存（线程安全只读），
+  `build_for_project(proj)` 主线程构建。
+
+### 四、路上排掉的五个硬关卡（都是静默失败，不排查就是黑图/剪影）
+
+1. **`window.PIXI` 永不建立** → 引擎主包在 `window.renderPromiseResolve()`
+   处抛 TypeError 中断求值 → 宿主页必须自备该握手函数
+2. **`/game/` 路由缺失** → 主包启动请求 `game/config.txt` 被 scheme handler
+   拒绝（AxiosError）→ 在 `resolve()` 里补 `/game/**` 路由
+3. **命令信封格式错** → 宿主页读 `{cmd, args:{...}}`，发成 `{act, ...}` 会被
+   **静默丢弃**（症状：渲染"成功"但纯色，unique colors=1）
+4. **抓帧时机太早** → 模型加载需 ~5s（主包求值+SDK+moc解析+贴图），必须
+   轮询 `__muppetState().models` 等模型真正进 stage
+5. **`QImage.bits()` 是视图不是拷贝** → QImage 离开作用域后内存被复用，
+   下游拿到悬垂数据（保存成 0 字节 + 进程崩溃）→ 必须 `np.array(copy=True)`
+
+另外两个静默坑：
+- **预渲染分支提前 return 漏初始化 `_motion_id`** → `frame()` 抛
+  AttributeError → 导出侧 `getattr` 吞掉 → 静默退回占位卡
+- **旧逐轨路径（fx=False，预览走这条）没灌 `set_preset`** → 缓存键为空
+  → miss → 占位卡（预览也会是剪影）
+
+### 五、性能
+
+- 单帧渲染 265ms → **26ms**（去掉固定 250ms 死等，改成按需等一帧）
+- 真实工程全片（519s）：预渲染 2s + 导出与 v3.5.9 同档
+- 预览侧走同一条 `compose_frame` 路径 → **预览与导出画面一致**
+
+### 六、验证
+
+- 新增 `l2d_render_test.py` **23 项**：状态键归一化 / 状态收集去重 /
+  预渲染产物是透明底完整立绘（颜色数 >2000 vs 占位卡 19）/ PuppetSource
+  接入 / 无 preset 兜底不崩 / 线程内查缓存不死锁 / **compose_frame 两条
+  路径（fx=True/False）都命中缓存且整帧颜色数 >10000**
+- 回归：fx_map 32 / subtitle_burn 27 / video_export 35 / parallel_export 9 全绿
+- 端到端：真实导出 mp4 抽帧 **45101 种颜色**（占位卡时代 <1000），
+  肉眼确认是完整素世立绘
+- 退出清理：应用退出时 `l2d_renderer.shutdown()` 销毁离屏 view，
+  进程退出码 0（不再 0xC0000005 崩溃）
+
+---
+
+
 ## v3.5.10（2026-11-17 上午）导出冗余清理：单帧 96→27ms，端到端 4 线程 93fps
 
 > 用户说「还是有点慢，看看是不是代码冗余」。先做**逐项插桩审计**（不拍脑袋）：

@@ -161,7 +161,7 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.5.10"
+VERSION = "3.5.11"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
@@ -5400,6 +5400,24 @@ def run_app():
     app.aboutToQuit.connect(lambda: _APP_EXITING.__setitem__(0, True))
     # task-27 / A4：退出前停掉 DSH 联动远程命令通道（RC 缺失时容错）
     app.aboutToQuit.connect(lambda: (RC.stop() if RC is not None else None))
+
+    # v3.5.11：L2D 离屏渲染器的 QWebEngineView 必须在退出前销毁，
+    # 否则 Qt 报 "Release of profile requested but WebEnginePage still
+    # not deleted. Expect troubles !"，严重时进程退出崩溃（0xC0000005）。
+    def _shutdown_l2d():
+        try:
+            import l2d_renderer as L2R
+            L2R.shutdown()
+        except Exception:
+            pass
+        try:
+            import l2d_prefetch as LP
+            LP.prefetch().clear()
+        except Exception:
+            pass
+
+    app.aboutToQuit.connect(_shutdown_l2d)
+
     QTimer.singleShot(1500, _start_tier_warmup)
     sys.exit(app.exec())
 

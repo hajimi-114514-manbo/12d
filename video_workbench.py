@@ -28,7 +28,7 @@ from PySide6.QtCore import Qt, QTimer, QSize, QSettings, QEvent
 from PySide6.QtGui import QImage, QPixmap, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
                                QFileDialog, QStackedLayout, QFrame, QSplitter,
-                               QMessageBox)
+                               QMessageBox, QApplication)
 from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
                             ToolButton, ComboBox, SpinBox, DoubleSpinBox,
                             StrongBodyLabel, BodyLabel, CaptionLabel,
@@ -1957,6 +1957,23 @@ class VideoWorkbench(QWidget):
     def _start_export(self, path, scale, fps=None, workers=None):
         self.stop_play()
         self.act_export.setEnabled(False)
+        # v3.5.11：L2D 立绘预渲染（**必须在主线程做**——渲染依赖
+        # QWebEngine 事件循环，导出 QThread 里会死锁）。只渲染唯一状态
+        # （真实工程 8 个 / 0.2s），导出线程逐帧只查缓存。
+        # 失败/无 WebEngine 时静默跳过，导出自动回退占位卡，不阻断。
+        self.act_export.setText("准备立绘…")
+        QApplication.processEvents()
+        n_states = 0
+        try:
+            import l2d_prefetch as LP
+            n_states = LP.build_for_project(self.proj)
+        except Exception:
+            n_states = 0
+        if n_states:
+            InfoBar.info("立绘已预渲染",
+                         "%d 个立绘状态已就绪（导出视频含完整 L2D）" % n_states,
+                         parent=self, position=InfoBarPosition.TOP,
+                         duration=4000)
         # v3.5.8：导出进度计时（滑动平均估速 -> 剩余时间）
         self._export_t0 = time.monotonic()
         self._export_last_t = self._export_t0

@@ -397,6 +397,15 @@ if HAS_WEBENGINE:
                     return None, False
                 return (self._under(root, sub), True) \
                     if self._under_ok(root, sub) else (None, False)
+            # v3.5.11：/game/** -> runtime 自带 game 资源（config.txt 等）。
+            # 离屏渲染 L2D 时会 import 运行时主包，主包启动即请求 game/config.txt
+            # 等文件；缺这条路由会 AxiosError: Network Error -> boot 中断 ->
+            # window.PIXI 永不建立（实测根因）。
+            if path.startswith("/game/"):
+                rel = path[len("/game/"):]
+                gdir = os.path.join(self._runtime, "game")
+                return (self._under(gdir, rel), True) \
+                    if self._under_ok(gdir, rel) else (None, False)
             return None, False
 
         @staticmethod
