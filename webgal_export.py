@@ -1719,6 +1719,8 @@ def export_branch_game(proj, out_dir, proj_dir=None, game_name=None,
                 except Exception as e:
                     warn.append("playable 拷贝失败 %s: %r" % (entry, e))
         stats["playable"] = True
+        # v3.5.13：字体子集替换（同上，两处 playable 路径都要做）
+        _slim_runtime_fonts(out_dir, warn, stats)
         lk, _ln = _inject_launcher(out_dir, warn)
         if lk:
             stats["launcher"] = lk
@@ -1829,6 +1831,73 @@ def _render_scene_lines(view, proj_dir, scene_name, aid_to_scene, act):
 
 
 # ================= 单幕导出（原有行为，逐字节不变） =================
+def _slim_runtime_fonts(out_dir, warn, stats):
+    """把导出包里运行时自带的大字体换成**预先子集化的版本**。
+
+    背景（实测）：WebGAL 4.6.6 运行时带三个中文 TTF，合计 36.08 MB：
+        资源圆体 ResourceHanRoundedCN  13.98 MB
+        思源宋体 SourceHanSerifCN      12.41 MB
+        WebgalUI OPPOSans              9.68 MB
+    它们**全部**会在首屏被真正下载（不是声明了不下载 —— 用 performance
+    API 实测到 1093/1365/1770 ms 三个请求）。首屏关键资源 37.6 MB 里
+    36.1 MB 是字体，这就是「首次打开卡、刷新一下就顺」的直接原因。
+
+    `templates/webgal/fonts/` 里是预生成的子集（共 7.88 MB，覆盖 GB2312
+    全集 6763 字 + 日文常用汉字 + 假名 + 标点 + 剧本专有字符，实测剧本
+    100% 覆盖、0 个未覆盖字符）。
+
+    为什么预生成而不在导出时按剧本子集化：用户的 runtime.zip 里**没有**
+    fontTools（实测确认），导出跑在用户机器上，依赖它会直接失败。
+
+    做法：只改**导出产物**里的 assets/*.ttf，不动用户机器上的运行时本体
+    （那个是共享的，改了会影响别的工程）。替换后同步改 index.html/CSS 里
+    的文件名引用（原文件名带 webpack 内容 hash 后缀）。
+    返回省下的字节数。"""
+    fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "templates", "webgal", "fonts")
+    if not os.path.isdir(fonts_dir):
+        return 0
+    assets = os.path.join(out_dir, "assets")
+    if not os.path.isdir(assets):
+        return 0
+    # 子集文件名（无 hash）-> 内容
+    slim = {}
+    for f in os.listdir(fonts_dir):
+        p = os.path.join(fonts_dir, f)
+        if os.path.isfile(p) and f.lower().endswith(".ttf"):
+            slim[f] = p
+    if not slim:
+        return 0
+    saved = 0
+    renamed = []                   # (原文件名, 新文件名)
+    for f in sorted(os.listdir(assets)):
+        if not f.lower().endswith(".ttf"):
+            continue
+        src = os.path.join(assets, f)
+        # 原文件名形如 ResourceHanRoundedCN-Regular-C1HdCLVq.ttf
+        # 子集名形如 ResourceHanRoundedCN.ttf -> 按前缀匹配
+        hit = None
+        for stem in slim:
+            if f.startswith(os.path.splitext(stem)[0]):
+                hit = stem
+                break
+        if hit is None:
+            continue
+        old_sz = os.path.getsize(src)
+        new_sz = os.path.getsize(slim[hit])
+        if new_sz >= old_sz:
+            continue               # 子集反而更大就不换
+        try:
+            shutil.copy2(slim[hit], src)   # 保持原文件名，免改引用
+            saved += old_sz - new_sz
+            stats["fonts_slimmed"] = stats.get("fonts_slimmed", 0) + 1
+        except Exception as e:
+            warn.append("字体子集替换失败 %s: %r" % (f, e))
+    if saved > 0:
+        stats["fonts_saved_mb"] = round(saved / 1048576.0, 1)
+    return saved
+
+
 def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 playable=False, style=True, live_badge=0,
                 _scene="start.txt", _ctx=None):
@@ -2518,6 +2587,9 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 except Exception as e:
                     warn.append("playable 拷贝失败 %s: %r" % (entry, e))
         stats["playable"] = True
+        # v3.5.13：运行时自带 36MB 中文字体全部会在首屏下载（实测三个请求
+        # 1093/1365/1770ms），换成预生成的子集（7.9MB）——见 _slim_runtime_fonts
+        _slim_runtime_fonts(out_dir, warn, stats)
         # H1e（task-62）：file:// 双击黑屏根治——写自包含启动器（exe 优先/bat 兜底）
         lk, _ln = _inject_launcher(out_dir, warn)
         if lk:
