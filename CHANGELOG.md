@@ -5,6 +5,102 @@
 
 ---
 
+## v3.5.14（2026-11-18）场景切换不再丢人物 + 淡入淡出过渡 + 开场黑屏
+
+> 用户实报三件事：「第四话这里总是有残留」（截图右侧睦有重影）、
+> 「之后的切换场景都用变暗+变亮过渡，保证人物动作不卡顿」、
+> 「这个背景就不要了，让他黑屏好了」（樱花标题图）。
+
+### 一、修场景切换人物残留（none 后向判定过宽）
+
+**根因**：导出器 `_exit_none` 的后向判定，判断的是「该角色之后还回不回
+这个槽位」。但它原先只要「之后**任何时刻**回到同槽位」就丢弃 `none`，
+**完全没看间隔有多长**。
+
+实测第 4 话：睦在 **210.40s** 离开 right 槽位、**422.80s** 才回来，
+中间空了 **212.4 秒**（换了场景、换了背景）。这段时间里 `none -right`
+被丢掉了，睦的模型一直挂在槽位上没卸载；回来时对同一槽位再发
+`changeFigure`，引擎认定为**新实例**，与旧实例叠加 —— 用户看到的就是
+人物重影残留。
+
+**修法**：只有「紧接其后」（间隔 < `NONE_REJOIN_EPS` = 1.0 秒）才算
+「换动作、人没走」，才丢弃 `none`；有明显空档就是真离场，`none` 必须
+保留，让引擎真正卸载。平移态（`-id`）的判定同样收紧。
+
+修复后第 4 话：`changeFigure` 51 → 52 条（补回丢失的那条 `none -right`），
+4 条 `none` 全部对应真实退场，44 处换动作一处没多发。
+
+### 二、场景切换淡入淡出（保证人物动作不卡顿）
+
+用户要「变暗+变亮过渡」，后确认「淡入淡出也可以」。
+
+引擎内置动画 `enter`（alpha 0→1，300ms）与 `exit`（alpha 1→0，300ms）
+——查 `animationTable.json` 确认存在。导出时在脚本最前插 4 条：
+
+```
+setTransition: -target=bg-main   -enter=enter -exit=exit;
+setTransition: -target=fig-left  -enter=enter -exit=exit;
+setTransition: -target=fig-center -enter=enter -exit=exit;
+setTransition: -target=fig-right -enter=enter -exit=exit;
+```
+
+`setTransition` 设的是元素**进入/退出的默认动画**，一次设置全程生效，
+之后的每个 `changeBg`/`changeFigure` 自动带淡入淡出。切场景时 L2D 模型
+卸载重载的那几百毫秒空白，落在 300ms 淡出里，视觉上不卡。
+
+- 多幕工程只在第一幕输出一次（`ctx["trans_done"]`），不重复刷
+- **空工程不插**：没有场景切换就无所谓；且插了会让 `stmt_lines` 非空、
+  跳过 `_EMPTY_SCRIPT` 分支，丢掉 `intro` 与空白注释
+- `TRANSITION_ON` 开关留着，将来可关
+
+实测（真实剧本插入后跑引擎）：零报错，带过渡与不带过渡末帧亮度一致
+（243.4 / 243.4），画面正常。
+
+### 三、开场樱花标题图改黑屏
+
+14 话剧本共 28 处 `changeBg:background/WebGAL_MyGO_Title_Image.webp -next;`
+全部换成 `changeBg:black;`。
+
+`changeBg:black` 是**实测确认**的，不靠文档推测：写了 black / none /
+空路径三个候选包，逐个起服务抓帧量中心亮度 —— `black` 与 `none` 都是
+**0.00**（真黑屏），空路径 38.87（不黑）。选 `black`：语义明确，也不
+触发「背景退场」的其他副作用。
+
+配套四处修复（否则这句会被当成"缺素材"刷噪声）：
+- 导入端 `_COLOR_BG_KEYWORDS` 识别 `black`/`none`/`white`，落一个
+  `path="color:black"` 的伪路径（不发文件请求、不报缺失）
+- 导出端把 `color:` 前缀原样写回 `changeBg:black;`，不拷文件
+- `_abs_path` 放行 `color:` 前缀（早先会拼成 `D:\...\color:black`，
+  报「源文件缺失未拷入」并把背景跳过）
+- 素材体检（`asset_audit`）跳过 `color:` 前缀，不再提示「背景缺 1」
+  与「相近候选」
+
+### 四、修导入端 setTransition 归错类
+
+`setTransition` 原先不在 `_COMMANDS` 白名单，于是掉进台词分支被当成
+`who="setTransition"` 的一句台词，导出时拼成
+`setTransition:-target=bg-main;`（残缺行），**回环逐字节一致性直接崩**
+（26f/28e 回归锚实测红）。
+
+修法：加进 `_COMMANDS` + `_AUTO_REGEN` 静默跳过（导出端每次自动重新
+生成，丢弃无损）。
+
+### 测试
+
+新增常驻用例：`none_logic_test`（6 项：真离场必须有 none、换动作不许有
+none、none 数不超过「真离场+收尾」上限）、`transition_test`（10 项：
+动画名在引擎表里真实存在、开头恰 4 条、stats 记录、开关可关、空工程
+不插）。`webgal_export_test` 补 3 项过渡相关断言（169 项全绿，
+含 26f/28e 回环锚）。
+
+回归全绿：webgal_export 169 / webgal_import / webgal_expr_ref /
+none_logic 6 / motion_e2e 8 / transition 10 / font_subset 13 /
+asset_paths 24 / video_model 56 / video_preset / bg_cover 33 /
+clip_marquee 59 / clip_timeline 93 / subtitle_burn 27 /
+update_patch 95 / v3_ui 43。
+
+---
+
 ## v3.5.13（2026-11-17）导出游戏首屏提速 66%（字体子集化）+ 素材库扩到 138 套立绘
 
 > 承接 v3.5.12 的「场景切换人物卡顿」：上一版修掉了引擎 404 与冗余模型
