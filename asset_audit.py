@@ -192,6 +192,12 @@ def audit_project(proj, proj_dir=None):
                 if sk not in ("image", "puppet", "audio", "video"):
                     continue
                 path = _abs(src.get("path"), proj_dir)
+                # v3.5.13：纯色背景（`changeBg:black` 导入成
+                # path="color:black"）是引擎内置关键字，**没有对应文件**，
+                # 不算缺失素材。早先会报「背景缺 1（black）」并提示相近
+                # 候选，纯粹是噪声——用户被误导去找一张不存在的图。
+                if str(src.get("path") or "").startswith("color:"):
+                    continue
                 if not path or os.path.exists(path):
                     continue
                 k = _clip_kind(tr, src)

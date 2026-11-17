@@ -5276,8 +5276,26 @@ def _build_video_menus(win, wb, set_proj):
                         triggered=lambda: _video_import_script(win, wb)))
     mf.addAction(Action(FluentIcon.PLAY, "导出视频",
                         triggered=wb._open_export_dialog))
-    mf.addAction(Action(FluentIcon.SEND, "导出 WebGAL 工程…",
-                        triggered=lambda: _video_export_webgal(win, wb)))
+    # v3.5.13（用户要求）：「导出 WebGAL」在素材库不可用时灰掉。
+    # 导出 WebGAL 包必须能定位素材库（background/figure/bgm 都从那里拷），
+    # 素材库找不到时点了只会产出一个没有素材的空包 —— 不如直接灰掉，
+    # 并在 tooltip 里说清原因和怎么修。
+    _act_webgal = Action(FluentIcon.SEND, "导出 WebGAL 工程…",
+                         triggered=lambda: _video_export_webgal(win, wb))
+    try:
+        import asset_paths as _AP
+        if not _AP.available():
+            _act_webgal.setEnabled(False)
+            _act_webgal.setToolTip(
+                "素材库未找到，无法导出 WebGAL 包。\n"
+                "期望目录里要有 asset_index.json 与 figure/。\n"
+                "把素材库放到程序目录旁，或设环境变量 "
+                "MUPPET_ASSET_INDEX 指向它。")
+        else:
+            _act_webgal.setToolTip("素材库：%s" % _AP.asset_library_dir())
+    except Exception:
+        pass
+    mf.addAction(_act_webgal)
     mf.addSeparator()
     # 最近工程：只列 type=video 的工程，点击=打开工程同款流程
     recent = RoundMenu("最近工程", parent=win)
@@ -5337,10 +5355,62 @@ def _show_maximized(win):
         pass
 
 
+_prewarm_done = False       # 进程内只预热一次（反复开视频窗不重复扫盘）
+
+
+def _prewarm_asset_library(win=None):
+    """首次打开视频编辑时确认素材库位置（用户要求，v3.5.13）。
+
+    用户原话：「第一次打开视频编辑扫盘确认 asset_library 的位置，然后记住，
+    如果之后原位置找不到文件了就再扫，扫不到就让导出 webgal 按钮灰掉」。
+
+    为什么要放**后台线程**：扫盘要列各盘符根目录（可能几百上千个目录），
+    在主线程做会让窗口卡住几百毫秒到几秒。这里异步跑，结果回主线程：
+      - 找到 -> 记住（asset_paths 内部已 remember）+ 不打扰用户
+      - 找不到 -> InfoBar 提示一次（只在**确实不可用**时提示，不刷屏）
+
+    幂等：进程内只跑一次（`_prewarm_done`），避免反复开视频窗都去扫盘。
+    """
+    global _prewarm_done
+    if _prewarm_done:
+        return
+    _prewarm_done = True
+
+    def work():
+        try:
+            import asset_paths as AP
+            # 记忆/已知候选命中时这里毫秒级返回，不会走到扫盘
+            d = AP.ensure_library(scan=True)
+            ok = AP.available()
+        except Exception:
+            d, ok = None, False
+
+        def done():
+            if ok and d:
+                return          # 正常：不打扰
+            try:
+                InfoBar.warning(
+                    "素材库未找到",
+                    "导出 WebGAL 需要素材库（含 asset_index.json 与 figure/）。\n"
+                    "已把「导出 WebGAL 工程」暂时灰掉；放好素材库后重开视频窗口即可。",
+                    parent=win, position=InfoBarPosition.TOP, duration=8000)
+            except Exception:
+                pass
+
+        if win is not None:
+            QTimer.singleShot(0, win, done)
+        else:
+            done()
+
+    threading.Thread(target=work, daemon=True).start()
+
+
 def _open_video_window(proj_dir=None):
     """新建/打开视频工程。返回 (win, wb)；打开失败返回 None（留在欢迎页）。"""
     import video_workbench as VW
     win = FluentShellWindow()
+    # v3.5.13：首次打开视频编辑确认素材库位置（异步，不卡窗口）
+    _prewarm_asset_library(win)
     wb = VW.VideoWorkbench(None)
     win.setCentralInterface(wb)
     _register_video_win(win, wb)      # task-27：登记供 DSH 联动接管（销毁自动注销）

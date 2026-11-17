@@ -77,6 +77,10 @@ _UNSUPPORTED = frozenset((
 #  导出目标引擎的执行范畴，不是木偶工作室时间轴要表达的内容。）
 _SILENT_SKIP = frozenset(("setTransform", "setTempAnimation"))
 _SLOT_X = {"left": 0.2, "center": 0.5, "right": 0.8}
+# v3.5.13：`changeBg:black` / `changeBg:none` 是引擎内置纯色背景关键字
+# （实测均为真黑屏，页面中心亮度 0.00），**不是素材文件**。导入时识别成
+# `color:black` 伪路径（不发文件请求、不报缺失警告），导出时原样写回。
+_COLOR_BG_KEYWORDS = frozenset(("black", "none", "white"))
 _IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff")
 _VID_EXT = (".mp4", ".webm", ".mov", ".avi", ".mkv")
 _AUD_EXT = (".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac")
@@ -728,7 +732,31 @@ class _Builder:
 
     # ---- 命令处理 ----
     def do_change_bg(self, game_dir, arg):
-        path, k = self._locate(game_dir, _parse_file(arg))
+        # v3.5.13：`changeBg:black` / `changeBg:none` 是**引擎内置关键字**
+        # （实测都是纯黑屏，亮度 0.00），不是素材文件。早先这里无条件当
+        # 路径去定位，于是：
+        #   - 报「素材库找不到 black」+ 「有相近候选」一堆噪声警告
+        #   - clip 的 source.path 指向一个不存在的 "black" 文件
+        # 正确做法是识别成纯色背景，落一个【不发文件请求】的 source：
+        # 导出时原样写回 `changeBg:black;`，视频合成时铺黑。
+        raw = _parse_file(arg)
+        if str(raw).strip().lower() in _COLOR_BG_KEYWORDS:
+            bt = self._track("BG", "video")
+            if bt is None:
+                return
+            self._close(bt)
+            src = {"kind": "image",
+                   "path": "color:%s" % str(raw).strip().lower(),
+                   "w": int(self.proj.get("width") or 1920),
+                   "h": int(self.proj.get("height") or 1080),
+                   "fps": 0.0, "src_dur": 0.0}
+            clip = self._new_clip(bt, src, self.t)
+            if clip is not None:
+                clip["layout"] = dict(self.VM.default_layout())
+                clip["layout"]["cover"] = True
+                self._open[bt] = clip
+            return
+        path, k = self._locate(game_dir, raw)
         bt = self._track("BG", "video")
         if bt is None:
             return

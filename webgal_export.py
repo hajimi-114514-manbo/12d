@@ -261,6 +261,12 @@ class _NamePool:
 
 def _abs_path(p, proj_dir):
     p = str(p or "")
+    # v3.5.13：`color:black` 这类**伪路径**（引擎内置纯色背景）不是文件，
+    # 不能拼 proj_dir —— 拼了会变成 D:\...\color:black，于是 "文件缺失"
+    # 警告 + 背景被跳过（实测导出的包开场没背景）。原样返回，交给调用方
+    # 按前缀识别。
+    if p.startswith("color:"):
+        return p
     if not p or os.path.isabs(p):
         return p
     return os.path.join(proj_dir, p) if proj_dir else p
@@ -2092,6 +2098,16 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             raw_name = _src_filename(path)
 
             if sk == "image":
+                # v3.5.13：纯色背景（导入端把 `changeBg:black` 记成
+                # path="color:black"）**优先于一切文件判断**——它没有真实
+                # 文件，_is_fullscreen/_has_alpha 都会因 stat 失败而误判。
+                # 引擎原生支持 changeBg:black（实测真黑屏），原样写回即可。
+                _cp = str(path)
+                if _cp.startswith("color:"):
+                    _kw = (_cp.split(":", 1)[1] or "black").strip() or "black"
+                    events.append((t0, 0, seq, ["changeBg:%s;" % _kw]))
+                    seq += 1
+                    continue
                 if tr_kind == "video" and tr.get("id") == bottom_tid and \
                         (_is_bg_name(tr) or _is_fullscreen(lay, src, W, H)) \
                         and not _has_alpha(path):
