@@ -1470,8 +1470,7 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
         # ---- v3.5.6 分层合成（滤镜按 target 作用层）----
         ctx = {"t": t,
                "seed": int(t * max(1.0, float(proj.get("fps") or 30))) & 0x7FFFFFFF}
-        bgc = np.zeros((H, W, 3), np.float32)       # 背景层（黑底 RGB）
-        fig = np.zeros((H, W, 4), np.uint8)         # 立绘层（非预乘 RGBA）
+        fig = None                                # v3.5.9：惰性分配（命中直接 over）
         bg_jobs, fig_jobs, main_jobs = [], [], []
         for tr in V._tracks_of(proj, aid):
             if tr.get("kind") != "video" or tr.get("hidden"):
@@ -1513,16 +1512,25 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                 with _CACHE_LOCK:
                     hit = _BG_FX_CACHE.get(ck2) if bg_key in _BG_CACHE else None
                 if hit is not None:
-                    bgc[...] = hit
+                    # v3.5.9 冗余修复：命中的是 uint8 层，**直写 canvas**——
+                    # 旧路 hit(uint8)→bgc(float32)→canvas(uint8) 是双重转换
+                    # 还白分配 25MB float32，这里省掉全部中间环节。
+                    canvas[...] = hit
                     return
+            # 非命中才分配 float32 bgc（命中路径零分配）
+            bgc = np.zeros((H, W, 3), np.float32)
             _paste_bg_layer(bgc, bg_jobs, W, H)
             if bg_fx:
                 _fx_chain(bgc, bg_fx, ctx)
             np.clip(bgc, 0, 255, out=bgc)
+            canvas[...] = bgc
             if ck2 is not None:
-                _fx_cache_put(_BG_FX_CACHE, ck2, bgc)
+                # 缓存存 uint8（与 canvas 的 float32→uint8 截断转换逐像素
+                # 一致），命中时才能直写 canvas；存储体积也降到 1/4。
+                _fx_cache_put(_BG_FX_CACHE, ck2, bgc.astype(np.uint8))
 
         def _fig_pass():
+            nonlocal fig                        # v3.5.9：惰性分配需回写外层
             # v3.5.8：全部立绘为静态源（is_static）+ 纯空间 fig 滤镜 ->
             # 立绘层整层缓存（paste+chain ~80ms -> copy ~12ms）
             fsig = _fx_sig(fig_fx)
@@ -1538,11 +1546,27 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
             if fkey is not None:
                 hit = _fx_cache_get(_FIG_FX_CACHE, fkey)
                 if hit is not None:
-                    fig[...] = hit
+                    # v3.5.9：跳过 fig 层分配与拷贝，直接随 bbox over 叠进
+                    # canvas——命中帧消除 8.3MB 分配 + 全帧拷贝。
+                    alpha = hit[..., 3]
+                    rows_nz = np.any(alpha > 0, axis=1)
+                    if rows_nz.any():
+                        cols_nz = np.any(alpha > 0, axis=0)
+                        ys = np.nonzero(rows_nz)[0]
+                        xs = np.nonzero(cols_nz)[0]
+                        by, bx = int(ys[0]), int(xs[0])
+                        bh, bw = int(ys[-1]) - by + 1, int(xs[-1]) - bx + 1
+                        sub_fig = hit[by:by + bh, bx:bx + bw]
+                        sub = canvas[by:by + bh, bx:bx + bw]
+                        a = sub_fig[..., 3:4].astype(np.float32) / 255.0
+                        sub[...] = (sub_fig[..., :3] * a
+                                    + sub * (1 - a)).astype(np.uint8)
                     return
             for img, lay, st in fig_jobs:
+                if fig is None:
+                    fig = np.zeros((H, W, 4), np.uint8)   # 非命中才分配
                 _paste_rgba(fig, img, lay, static=st)
-            if fig_fx:
+            if fig_fx and fig is not None:
                 _fx_chain_rgba(fig, fig_fx, ctx)
             if fkey is not None:
                 _fx_cache_put(_FIG_FX_CACHE, fkey, fig)
@@ -1558,15 +1582,18 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
         else:
             _bg_pass()
             _fig_pass()
-        canvas[...] = bgc
+        # canvas 已由 _bg_pass 填好（命中=缓存直写、非命中=转换拷贝）
         # v3.5.9：fig 层 alpha-over 先裁剪到 alpha 非零包围盒——立绘通常
         # 只占画面一块，bbox 外的 fig 全透明（混合恒等，canvas 不变），
         # 全帧 numpy 复合运算只在有内容的区域做。实测 1080p 立绘占 40%
         # 画面时 71.7 → 31.7ms，**逐像素 maxdiff 0**（纯实现替换）。
-        # fig 全透明（无立绘/立绘屏外）时整个跳过。
+        # fig 全透明/为 None（缓存命中已直接 over）时整个跳过。
         # bbox 用 numpy 行列 any（2.4ms）而非 cv2.findNonZero（7.0ms）。
-        alpha = fig[..., 3]
-        rows_nz = np.any(alpha > 0, axis=1)
+        if fig is not None:
+            alpha = fig[..., 3]
+            rows_nz = np.any(alpha > 0, axis=1)
+        else:
+            rows_nz = np.zeros(0, bool)
         if rows_nz.any():
             cols_nz = np.any(alpha > 0, axis=0)
             ys = np.nonzero(rows_nz)[0]

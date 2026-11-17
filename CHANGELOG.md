@@ -5,7 +5,49 @@
 
 ---
 
+## v3.5.10（2026-11-17 上午）导出冗余清理：单帧 96→27ms，端到端 4 线程 93fps
+
+> 用户说「还是有点慢，看看是不是代码冗余」。先做**逐项插桩审计**（不拍脑袋）：
+> 把 compose_frame 里每帧要做的事逐段计时——结论是**怀疑的 Python 级冗余
+> 全部不成立**（`_active_fx`/`_tracks_of`/`act_view`/`layout_at`/`source_key`
+> 的 normpath/`_fx_sig`/台词线性扫描 加起来 <0.05ms/帧，字典操作在毫秒预算
+> 里可忽略）。但顺着查到了**真正的数组级冗余**，全部清掉。
+
+### 一、背景层命中路径双重转换（主要收益）
+
+- 缓存命中时旧路是 `hit(uint8) → bgc(float32 25MB) → canvas(uint8)`——
+  两次全帧转换 + 每帧白分配 25MB。改为**命中直写 canvas**（零中间数组），
+  缓存改存 **uint8**（与 canvas 的截断转换逐像素一致，存储还降到 1/4）。
+  非命中路径才分配 float32 bgc。
+
+### 二、fig 层惰性分配
+
+- `fig = np.zeros((H,W,4))` 每帧必分配 8.3MB，即使缓存命中根本用不到。
+  改为 `fig = None` 惰性创建；**命中时直接把缓存层按 bbox over 进 canvas**，
+  连分配和全帧拷贝一起省掉（`_fig_pass` 加 `nonlocal fig` 回写）。
+
+### 三、实测（真实工程 1080p，519 秒）
+
+| 指标 | v3.5.9 | v3.5.10 |
+|---|---|---|
+| 单帧合成 | 34.4ms | **26.8ms** |
+| 1 线程 | 60.4fps | **72.8fps** |
+| 4 线程 | 83.1fps | **93.0fps** |
+| 全片（4 线程） | ~3.1 分钟 | **~2.8 分钟** |
+
+从 v3.5.7 累计：单帧 412 → 26.8ms（**15.4x**）。
+
+### 四、验证
+
+- **产物 sha256 与优化前完全相同**（workers=1/4/8 三方一致，说明是纯冗余
+  清理、像素零变化）。
+- fx_map 32 / subtitle_burn 27 / subtitle_typing 8 / parallel_export 9 /
+  video_export 35 / update_patch 95 / export_dialog 23 / worker_limits 全绿。
+
+---
+
 ## v3.5.9（2026-11-17 上午）导出再提速：alpha-over 包围盒裁剪（单帧 96→34ms，端到端 83fps）
+
 
 > 用户说「继续优化」。cProfile 定位到 compose_frame 本体 70ms/帧的大头是
 > fig 层 alpha-over 的全帧 numpy 复合运算（产生 7 个 25MB 临时数组）。
