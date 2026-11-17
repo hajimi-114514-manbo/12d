@@ -5,11 +5,13 @@
 
 ---
 
-## v3.5.12（2026-11-17）字幕烧录提速 + 导出立绘逐帧动画（呼吸眨眼真的在动）+ 时间轴框选多选
+## v3.5.12（2026-11-17）字幕烧录提速 + 导出立绘逐帧动画 + 时间轴框选 + WebGAL 导出瘦身
 
-> 用户先要「先优化字幕」，再要「继续 L2D 逐帧动画」，并拍板**动画优先**。
-> 本版把这两件事都落地，且**逐帧动画导出仍然逐位可复现**（两次导出产物
-> sha256 完全相同），没有牺牲可复现性。
+> 用户先要「先优化字幕」，再要「继续 L2D 逐帧动画」，并拍板**动画优先**；
+> 随后报「视频编辑没有框选功能」、`背景没有占满画面`、
+> 「webgal 场景切换和滤镜添加太卡 / 场景切换会影响人物，使得人物动作
+> 卡顿」，以及导入脚本免重复选择整合包目录。本版把这些全部落地，
+> 且**逐帧动画导出仍然逐位可复现**（两次导出产物 sha256 完全相同）。
 
 ### 一、字幕烧录提速（blend 管线 6 pass → 2 pass）
 
@@ -117,6 +119,63 @@ v3.5.11 的方案 B（导出前预渲染每个状态一张定格图）代价是 
   删除会一次丢十几个还撤销不回来——缺陷被多选放大，故补 `_on_timeline_edit`
   先 push 再刷新；侧栏「删除片段」按钮也跟着走多选集合。
 
+### 六、WebGAL 导出瘦身：场景切换时人物动作不再卡（整包 147.3 → 94.6 MB）
+
+用户报「webgal 场景切换和滤镜添加太卡」「场景切换会影响人物，使得人物
+动作卡顿」。**先测量再动手**：导出本身只花 0.28-0.8 秒，慢不在导出计算，
+而在导出包本身的加载负担。用真实运行时 + 真实导出包在页面侧量到：
+
+```
+[XHRLoader] Failed to load resource as json (Status 404):
+  game/figure/soyo/.mtn_exp/expressions/__base__/soyo/default.exp.json
+[ExpressionManager] Failed to load expression: ...default.exp.json
+Texture added to the cache with an id [...] that already had an entry
+```
+
+三个真实缺陷（每个都靠产物实测定位）：
+
+- **剧本引用了不存在的表情文件 → 引擎每次 404**。台词级动作原样把工程里
+  的 motion/expression 写进脚本，**完全不做键名表校验**。工程里存
+  `soyo/default`，而 `default` 不是任何模型 `model.json` 的真实键名（瘦身
+  后更不会有），引擎请求 `default.exp.json` 必然 404 —— ExpressionManager
+  报错，**人物动作卡顿**。而素材库里它确实存在：
+  `<role>/.mtn_exp/expressions/__base__/<role>/default.exp.json`。
+  修法是 `_add_default_expression` 在瘦身后显式把它补进键表 + 按需拷贝，
+  同时台词级动作改走 `_match_motion_name` 校验（与 clip 级口径对齐），
+  匹配不到的选项**不写**，杜绝坏引用。
+- **跨角色前缀匹配失败把键表清空**。`_match_motion_name` 只做精确/末段
+  前缀匹配，工程里写 `soyo/default` 而某模型键名表里叫 `anon/default`
+  时匹配失败 → 走 fallback → 键表被清空 → **3842 个被引用的池文件根本
+  没有对应文件**。补「去角色前缀按末段名再匹配一次」。
+- **角色根整棵拷贝，未使用的服装目录带着原始 232 表情 / 664 动作进包**。
+  soyo 有 14 个服装目录、sakiko 有 5 个，实际只用到 3 个；没用到的服装
+  目录里那份原始 `model.json`，引擎一旦扫到就请求几千个不存在的池文件。
+  现在 `copytree` 只拷**用到的**服装目录，且同角色其它用到的服装目录也
+  一起瘦身（早先只瘦身当前 `model_dir`）。
+
+实测（真实工程 `video_project.json`）：
+
+| 指标 | 优化前 | 优化后 |
+|---|---|---|
+| figure/ 体积 | 25.2 MB / 255 文件 | **4.1 MB / 43 文件** |
+| 整包体积 | 147.3 MB | **94.6 MB** |
+| 引擎加载模型的请求条目 | ~900 / 模型 | **3 个模型共 33 条** |
+| 缺失引用 | 3842 | **0** |
+
+### 七、导入脚本记住整合包目录（不再每次重复选）
+
+用户要：「导入脚本第一次选择脚本文件，第二次选择整合包文件，第二次选完
+就默认是这个地址不要再重复选择，直到某次导入时找不到整合包文件」。
+
+- 选过之后记进 `import_game_dir.json`（独立文件，不塞进
+  `recent_projects.json` —— 那是「工程」列表，混进去会污染欢迎页/最近菜单）
+- 下次导入直接用记住的目录，**不再弹框**
+- 直到 `is_game_dir` 判定它失效（目录被删 / 没有 `game/scene`）才重新弹框；
+  判据看 `game/scene` 而不是「目录存在」，否则把空目录记进去会让导入拿到
+  空资源
+- 脚本自身就在 `game/` 下时直接用它，不问也不记
+- 失效时弹框的起始目录给旧路径的父级，少点几层
+
 ### 测试
 
 新增常驻用例：`subtitle_blend_precision_test`（26 项，锁 _blend_band 绝对
@@ -130,11 +189,16 @@ scrub 的老语义回归保护**、成组拖动含保持间距与整组回弹与
 `move_clips`/`remove_clips`/`snap_points_multi` 单元级、信号只在变化时发）、
 `bg_cover_test`（33 项：4:3/竖图 cover 铺满、fit 语义零 diff、
 `layer_rect`/`paste_layer`/`_paste_prep` 三处口径逐像素一致、cover×scale
-叠加、偏移布局溢出裁切、真实素材）。
+叠加、偏移布局溢出裁切、真实素材）、`webgal_expr_ref_test`（8 项：导出包
+里 start.txt 引用的每个 motion/expression **文件必须存在**、default 进
+键表且文件在包、键表文件全在、无孤儿表情、引擎按相对路径能取到每个文件）、
+`import_gdir_test`（15 项：整合包目录判据/存-取往返/目录被删后失效/持久化
+文件损坏不崩/ts 字段）。
 回归全绿：subtitle_burn 27 / typing_cache 8 / video_export 35 /
 parallel_export 9 / fx_map 32 / export_dialog 28 / l2d_render 23 /
 update_patch 95 / clip_timeline 93 / video_model 56 / hscroll 24 /
-v3_ui 43 / f2_l5 37 / video_preset 全过 / stage_view / script_editor。
+v3_ui 43 / f2_l5 37 / video_preset 全过 / stage_view / script_editor /
+webgal_export 167 / bg_cover 33 / clip_marquee 59 / import_gdir 15。
 
 ---
 
