@@ -28,6 +28,7 @@ from PySide6.QtGui import (QImage, QPixmap, QPainter, QPainterPath, QColor, QKey
                            QShortcut, QIcon, QCursor, QPen, QBrush,
                            QIntValidator, QPolygon)
 
+import ui_theme as TH
 from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
                             PrimaryPushButton, ToolButton, ToggleToolButton,
                             TransparentToolButton, TransparentToggleToolButton,
@@ -604,7 +605,7 @@ class RigCanvas(QWidget):
         p.fillRect(self.rect(), QColor("#1b1f27"))
         if not self.pixmap:
             if self.hint:
-                p.setPen(QColor("#8a93a5"))
+                p.setPen(TH.qcolor("text_dim"))
                 f = p.font(); f.setPointSize(13); p.setFont(f)
                 p.drawText(self.rect(), Qt.AlignCenter, self.hint)
             return
@@ -1751,30 +1752,30 @@ class LayerItemDelegate(ListItemDelegate):
         is_press = self.pressedRow == row
         is_hover = self.hoverRow == row
         if is_sel:
-            bg = QColor("#2f3d5c")
+            bg = TH.qcolor("ed_sel")
         elif is_press:
-            bg = QColor("#2a3142")
+            bg = TH.qcolor("row_press")
         elif is_hover:
-            bg = QColor("#262c38")
+            bg = TH.qcolor("row_hover")
         else:
-            bg = QColor("#242935")
+            bg = TH.qcolor("row_bg")
         painter.fillRect(rect, bg)
         # 选中指示条（保留 qfluentwidgets 的选中视觉线索）
         if is_sel:
             painter.fillRect(QRect(rect.left(), rect.top(), 3, rect.height()),
-                             QColor("#4d88ff"))
+                             TH.qcolor("accent"))
         # ---- 眼睛区 ----
         ex = rect.left() + 12
         ey = rect.center().y()
-        painter.setPen(QPen(QColor("#8a93a5"), 2))
+        painter.setPen(QPen(TH.qcolor("text_dim"), 2))
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(QPoint(ex, ey), 6, 3.5)
         if vis:
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#e6ebf5"))
+            painter.setBrush(TH.qcolor("text_hi"))
             painter.drawEllipse(QPoint(ex, ey), 2.2, 1.6)
         else:
-            painter.setPen(QPen(QColor("#e6ebf5"), 2))
+            painter.setPen(QPen(TH.qcolor("text_hi"), 2))
             painter.drawLine(QPoint(ex - 7, ey - 2), QPoint(ex + 7, ey + 2))
         # ---- 缩略图区（棋盘底 + 缩放后的层图）----
         tx = rect.left() + self.EYE_W + 4
@@ -1787,12 +1788,13 @@ class LayerItemDelegate(ListItemDelegate):
         # ---- 名称 + tag ----
         tx2 = tx + self.THUMB + 10
         tw = max(1, rect.right() - tx2 - self.LOCK_W - 6)
-        painter.setPen(QColor("#e6ebf5") if vis else QColor("#6b7382"))
+        painter.setPen(TH.qcolor("text_hi") if vis
+                       else TH.qcolor("text_mute"))
         painter.drawText(QRect(tx2, rect.top() + 4, tw, 20),
                          Qt.AlignLeft | Qt.AlignVCenter, name)
         tag = layer.get("tag")
         if tag:
-            painter.setPen(QColor("#7c8593"))
+            painter.setPen(TH.qcolor("text_mute"))
             painter.drawText(QRect(tx2, rect.top() + 24, tw, 18),
                              Qt.AlignLeft | Qt.AlignVCenter, tag)
         # ---- 锁定标记（右缘）----
@@ -2149,6 +2151,26 @@ class Workbench(AssetMenuMixin, QWidget):
     # 与 WebEngine 预览包（那是视频编辑页才用得到的）。
     ASSET_PAGE = "skeleton"
 
+    def _apply_theme(self):
+        """切主题时重刷工具栏/分隔条等跟随主题的样式。"""
+        try:
+            self.tool_bar.setStyleSheet(
+                "background:%s; border-radius:8px;" % TH.t("card_bg"))
+        except Exception:
+            pass
+        try:
+            self.split.setStyleSheet(SPLIT_QSS)
+        except Exception:
+            pass
+        try:
+            self.vsplit.setStyleSheet(SPLIT_QSS)
+        except Exception:
+            pass
+        try:
+            self.update()
+        except Exception:
+            pass
+
     def __init__(self, win):
         super().__init__(win)
         self.win = win
@@ -2177,6 +2199,8 @@ class Workbench(AssetMenuMixin, QWidget):
         # 启动即空工作台（不自动载入任何工程）
         self.cur_dir = None
         self.act_new(False)   # 启动初始化：不弹尺寸对话框
+        _STYLED_WIDGETS.append(self)
+        self._apply_theme()
 
     def _build(self):
         root = QHBoxLayout(self)
@@ -2186,6 +2210,7 @@ class Workbench(AssetMenuMixin, QWidget):
         split.setHandleWidth(1)
         split.setChildrenCollapsible(False)
         split.setStyleSheet(SPLIT_QSS)
+        self.split = split
         root.addWidget(split)
 
         # ===== v2.11.0 时间轴（底部面板）=====
@@ -2250,6 +2275,17 @@ class Workbench(AssetMenuMixin, QWidget):
                            triggered=self.act_export_l2d))
         m.addAction(Action(FluentIcon.PLAY, "导出 MP4", triggered=self._choose_mp4))
         m.addAction(Action(FluentIcon.IMAGE_EXPORT, "导出 GIF", triggered=self._choose_gif))
+        # 界面主题：白色（半透明磨砂）/ 黑色，选择会记到
+        # %APPDATA%\MuppetStudio\ui_theme.json，下次启动沿用。
+        m.addSeparator()
+        _theme_menu = RoundMenu("界面主题", parent=self)
+        _theme_menu.setIcon(FluentIcon.BRUSH)
+        _theme_menu.addAction(Action(FluentIcon.BRUSH, "白色（半透明磨砂）",
+                                     triggered=lambda: self._switch_theme("light")))
+        _theme_menu.addAction(Action(FluentIcon.BRUSH, "黑色",
+                                     triggered=lambda: self._switch_theme("dark")))
+        m.addMenu(_theme_menu)
+        self._theme_menu = _theme_menu
         menu.setMenu(m)
         self.menu_btn = menu
         self.menu_ref = m          # 防止被 GC
@@ -2365,7 +2401,7 @@ class Workbench(AssetMenuMixin, QWidget):
         _tbl.addStretch(1)
         self.tool_bar.setFixedWidth(44)
         self.tool_bar.setStyleSheet(
-            "background:#252a33; border-radius:8px;")
+            "background:%s; border-radius:8px;" % TH.t("card_bg"))
 
         # ===== 画布上方选项栏（PS 风格）：按模式显示不同控件组 =====
         # 套索模式 -> 羽化/曲线/重新应用；自由变换模式 -> 宽/高/角度/提交/取消。
@@ -4628,7 +4664,7 @@ class SidebarIcon(QIcon):
         pm.fill(Qt.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing)
-        col = QColor("#e8ecf4") if not active else QColor("#4d88ff")
+        col = TH.qcolor("text_hi") if not active else TH.qcolor("accent")
         pen = QPen(col, 1.6)
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
@@ -4638,9 +4674,68 @@ class SidebarIcon(QIcon):
         return pm
 
 # ---------------- 主窗 ----------------
-# 1px 深色细线分隔条（默认 6px 白条太抢眼）
-SPLIT_QSS = ("QSplitter::handle { background: #3a3f4a; }"
-             "QSplitter::handle:hover { background: #4d88ff; }")
+# 1px 细线分隔条（默认 6px 白条太抢眼）
+def _split_qss():
+    return ("QSplitter::handle { background: %s; }"
+            "QSplitter::handle:hover { background: %s; }"
+            % (TH.t("split_handle"), TH.t("accent")))
+SPLIT_QSS = _split_qss()
+
+# 存活的 Workbench / MainWindow，切主题时重刷它们的样式
+_STYLED_WIDGETS = []
+
+
+def _refresh_styles():
+    """ui_theme 切主题时回调：重算 SPLIT_QSS + 重刷所有存活窗口。"""
+    global SPLIT_QSS
+    SPLIT_QSS = _split_qss()
+    for w in list(_STYLED_WIDGETS):
+        try:
+            w._apply_theme()
+        except Exception:
+            pass
+
+
+TH.register(_refresh_styles)
+
+
+def _apply_window_frost(win):
+    """给窗口铺主题底色。
+
+    浅色主题的"磨砂"是画出来的：窗口底铺一层柔和斜向渐变，各面板用
+    半透明白叠在上面，渐变从面板底下透出来就有磨砂层次感。
+    FluentWindow 自己会刷一层不透明背景，所以这里连 stackedWidget 的
+    三层容器一起设成透明，让渐变真正露出来。
+    """
+    try:
+        bg = TH.t("window_bg")
+        win.setStyleSheet("QMainWindow{background:%s;}" % bg
+                          if False else
+                          "QWidget#frostRoot{background:%s;}" % bg)
+    except Exception:
+        pass
+    for attr in ("stackedWidget",):
+        o = getattr(win, attr, None)
+        if o is None:
+            continue
+        try:
+            o.setStyleSheet("background:transparent;")
+        except Exception:
+            pass
+        for sub in ("view", "stackedWidget"):
+            s = getattr(o, sub, None)
+            if s is not None:
+                try:
+                    s.setStyleSheet("background:transparent;")
+                except Exception:
+                    pass
+    # 关键：让 FluentWindow 自己不画不透明底，改成主题渐变
+    try:
+        win.setCustomBackgroundColor(TH.qcolor("window_bg"),
+                                     TH.qcolor("window_bg"))
+    except Exception:
+        pass
+
 
 class MainWindow(FluentWindow):
     def __init__(self):
@@ -4727,7 +4822,7 @@ class MainWindow(FluentWindow):
         self.nav_grip.setCursor(Qt.SizeHorCursor)
         self.nav_grip.setStyleSheet(
             "#navGrip{background:transparent;}"
-            "#navGrip:hover{background:#4d88ff;}")
+            "#navGrip:hover{background:%s;}" % TH.t("accent"))
         self.nav_grip.setToolTip("拖动调节导航栏宽度（双击恢复默认 140）")
         self.nav_grip.installEventFilter(self)
         self.nav_grip.setVisible(False)   # 导航栏显示时才显示
@@ -4778,6 +4873,38 @@ class MainWindow(FluentWindow):
         QShortcut(QKeySequence("Ctrl+1"), self, activated=cv.set_actual)
         QShortcut(QKeySequence("Ctrl+="), self, activated=lambda: cv.zoom_step(True))
         QShortcut(QKeySequence("Ctrl+-"), self, activated=lambda: cv.zoom_step(False))
+        _STYLED_WIDGETS.append(self)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """切主题时重刷主窗自己那几处跟随主题的样式。"""
+        try:
+            self.nav_grip.setStyleSheet(
+                "#navGrip{background:transparent;}"
+                "#navGrip:hover{background:%s;}" % TH.t("accent"))
+        except Exception:
+            pass
+        try:
+            self.wb._apply_theme()
+        except Exception:
+            pass
+        try:
+            self.wb.canvas.update()
+            self.wb.layer_list.viewport().update()
+        except Exception:
+            pass
+        try:
+            self.update()
+        except Exception:
+            pass
+
+    def _switch_theme(self, mode):
+        """切换界面主题（"light" 半透明磨砂白 / "dark" 黑），并记住选择。"""
+        TH.set_mode(mode)
+
+    def switch_theme(self, mode):
+        """对外接口：切换界面主题。"""
+        self._switch_theme(mode)
 
     def _wb_save_for_exit(self):
         """closeEvent 专用 do_save：act_save（可能转另存为）后，
@@ -5551,12 +5678,9 @@ def run_app():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
-    setTheme(Theme.DARK)
-    # qfluentwidgets 的 setTheme 不管 QToolTip：暗色下 tooltip 仍是系统默认
-    # 黑字深底看不清，这里显式给一套浅色字深色底（只影响 tooltip，不动其它控件）
-    app.setStyleSheet(
-        "QToolTip { color:#e6e6e6; background-color:#2b3140;"
-        " border:1px solid #3c4354; padding:4px 6px; }")
+    # 界面主题：深色 / 浅色（半透明磨砂白）。用户上次的选择存在
+    # %APPDATA%\MuppetStudio\ui_theme.json，apply 时读回来并套上全局 QSS。
+    TH.apply(app)
     # 启动先进欢迎页（选项目类型 / 打开历史项目），选定后才进工作台。
     # 测试与内部调用仍可直接 MainWindow()，不受门控影响。
     wel, _holder = _welcome_gate()

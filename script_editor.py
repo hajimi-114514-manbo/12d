@@ -24,29 +24,64 @@ from qfluentwidgets import (PushButton, StrongBodyLabel, CaptionLabel,
                             LineEdit, DoubleSpinBox, ComboBox)
 
 import video_model as V
+import ui_theme as TH
 
 try:
     import motion_table as MT
 except Exception:                              # pragma: no cover
     MT = None
 
-_HL_COLOR = "#2f3d5c"          # 当前时刻生效行高亮
+# ---- 主题色（v3.x：跟随 ui_theme；占位值导入时立刻被 _refresh_colors 覆盖）----
+_HL_COLOR = "#2f3d5c"          # 当前时刻生效行高亮（TH.t("ed_sel")）
 # v3.4.7：QTableWidget / QPlainTextEdit 是裸 Qt 控件，不吃 qfluentwidgets
 # 深色主题 —— 深色工作台里是一整块系统默认白底 + 小号系统默认字体，
 # 与 fluent 组件（深底、14px）拼在一起又白又字小。统一铺深色 + 字号。
-_PANEL_QSS = (
-    "QTableWidget{background:#1b1e24;color:#e8ecf4;gridline-color:#262b34;"
-    "border:1px solid #262b34;border-radius:6px;"
-    "selection-background-color:#2f3d5c;selection-color:#f2f6fa;}"
-    "QTableWidget::item{padding:2px 4px;}"
-    "QHeaderView::section{background:#23262e;color:#c8d1dc;"
-    "border:none;border-right:1px solid #262b34;border-bottom:1px solid #262b34;"
-    "padding:4px 6px;font-size:12px;}"
-    "QTableCornerButton::section{background:#23262e;border:none;}")
-_EDITOR_QSS = (
-    "QPlainTextEdit{background:#1b1e24;color:#e8ecf4;"
-    "border:1px solid #262b34;border-radius:6px;"
-    "selection-background-color:#2f3d5c;selection-color:#f2f6fa;}")
+_PANEL_QSS = ""                # 由 _refresh_colors() 按主题重建
+_EDITOR_QSS = ""               # 同上
+_WIDGETS = []                  # 存活实例，切主题时逐个重刷 QSS
+
+
+def _panel_qss():
+    return (
+        "QTableWidget{background:%s;color:%s;gridline-color:%s;"
+        "border:1px solid %s;border-radius:6px;"
+        "selection-background-color:%s;selection-color:%s;}"
+        "QTableWidget::item{padding:2px 4px;}"
+        "QHeaderView::section{background:%s;color:%s;"
+        "border:none;border-right:1px solid %s;border-bottom:1px solid %s;"
+        "padding:4px 6px;font-size:12px;}"
+        "QTableCornerButton::section{background:%s;border:none;}"
+    ) % (TH.t("ed_bg"), TH.t("ed_text"), TH.t("ed_border"), TH.t("ed_border"),
+         TH.t("ed_sel"), TH.t("ed_sel_fg"), TH.t("ed_head"),
+         TH.t("ed_text_dim"), TH.t("ed_border"), TH.t("ed_border"),
+         TH.t("ed_head"))
+
+
+def _editor_qss():
+    return (
+        "QPlainTextEdit{background:%s;color:%s;"
+        "border:1px solid %s;border-radius:6px;"
+        "selection-background-color:%s;selection-color:%s;}"
+    ) % (TH.t("ed_bg"), TH.t("ed_text"), TH.t("ed_border"), TH.t("ed_sel"),
+         TH.t("ed_sel_fg"))
+
+
+def _refresh_colors():
+    """按当前主题重建 QSS/高亮色，并重刷所有存活实例。"""
+    global _HL_COLOR, _PANEL_QSS, _EDITOR_QSS
+    _HL_COLOR = TH.t("ed_sel")
+    _PANEL_QSS = _panel_qss()
+    _EDITOR_QSS = _editor_qss()
+    for w in list(_WIDGETS):
+        try:
+            w._apply_theme()
+        except Exception:
+            pass
+
+
+TH.register(_refresh_colors)
+_refresh_colors()
+
 _COL_T, _COL_WHO, _COL_TEXT, _COL_DUR = 0, 1, 2, 3
 _COL_MOTION, _COL_EXPR = 4, 5
 _NCOL = 6
@@ -173,6 +208,15 @@ class ScriptEditor(QWidget):
         self.branch_panel.setMinimumWidth(150)
         self.branch_panel.setVisible(False)
         lay.addWidget(self.branch_panel, 1)
+
+        _WIDGETS.append(self)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """切主题时重刷 QSS + 生效行高亮（由 _refresh_colors 调用）。"""
+        self.table.setStyleSheet(_PANEL_QSS)
+        self.ed_content.setStyleSheet(_EDITOR_QSS)
+        self.refresh_highlight()
 
     # ---------- 数据 ----------
     def _dialogue(self):
@@ -590,6 +634,13 @@ class _BranchPanel(QWidget):
         self.btn_next.clicked.connect(self._set_next)
         nr.addWidget(self.btn_next)
         lay.addLayout(nr)
+
+        _WIDGETS.append(self)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """切主题时重刷选择点表 QSS（由 _refresh_colors 调用）。"""
+        self.tbl.setStyleSheet(_PANEL_QSS)
 
     # ---------- 数据 ----------
     def _act(self):

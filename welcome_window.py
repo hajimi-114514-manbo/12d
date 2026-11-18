@@ -28,6 +28,25 @@ from qfluentwidgets import (PrimaryPushButton, PushButton, LineEdit,
                             InfoBarPosition, TogglePushButton,
                             ToolButton, FluentIcon, ProgressBar)
 
+import ui_theme as TH
+
+# ---------------- 配色（跟随 ui_theme：深色 / 浅色磨砂白） ----------------
+# QSS 类样式走 _apply_theme() 里现取令牌；模块级存一份存活控件表，
+# 切主题时 _refresh_themed() 逐个重刷。
+_WELCOME_WIDGETS = []
+
+
+def _refresh_themed():
+    """切主题时由 TH.register 调用：重刷所有存活欢迎页控件。"""
+    for w in list(_WELCOME_WIDGETS):
+        try:
+            w._apply_theme()
+        except Exception:
+            pass
+
+
+TH.register(_refresh_themed)
+
 # 更新检查（task-13）：只依赖它自己的 QtCore，方向单向，无循环 import
 import update_checker as _UC
 
@@ -150,14 +169,22 @@ class _TypeCard(QFrame):
             t.setEnabled(False)
             dsc.setEnabled(False)
         self._refresh()
+        _WELCOME_WIDGETS.append(self)
 
     def _refresh(self):
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """按当前主题重刷卡片 QSS（切主题时由 _refresh_themed 调用）。"""
         if not self.enabled:
-            ss = "#typeCard{background:#24272e;border:1px solid #2c3038;border-radius:8px;}"
+            ss = "#typeCard{background:%s;border:1px solid %s;border-radius:8px;}" \
+                 % (TH.t("wel_card"), TH.t("wel_card_border"))
         elif self.selected:
-            ss = "#typeCard{background:#263042;border:2px solid #4d88ff;border-radius:8px;}"
+            ss = "#typeCard{background:%s;border:2px solid %s;border-radius:8px;}" \
+                 % (TH.t("wel_card_sel"), TH.t("accent"))
         else:
-            ss = "#typeCard{background:#24272e;border:1px solid #3a3f4a;border-radius:8px;}"
+            ss = "#typeCard{background:%s;border:1px solid %s;border-radius:8px;}" \
+                 % (TH.t("wel_card"), TH.t("wel_card_border"))
         self.setStyleSheet(ss)
 
     def mousePressEvent(self, ev):
@@ -242,9 +269,8 @@ class WelcomeWindow(QWidget):
         self._upd_thread = None    # UpdateThread（检查更新，task-13）
         self._upd_gen = 0          # 更新轮次号：ready 后 1.5s 的隐藏定时器按代失效
         self.resize(1060, 660)
-        self.setStyleSheet(
-            "#welcomeRoot{background:#1f2126;}"
-            "QFrame#sideBar{background:#262932;border-radius:0px;}")
+        self._apply_theme()
+        _WELCOME_WIDGETS.append(self)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -267,7 +293,7 @@ class WelcomeWindow(QWidget):
         sl.addWidget(self.btn_open)
         sl.addStretch(1)
         tip = CaptionLabel("每种工程最多保留 50 个", side)
-        tip.setStyleSheet("color:#8a93a2;")
+        tip.setStyleSheet("color:%s;" % TH.t("text_dim"))
         sl.addWidget(tip)
         # ---------- 左下角：检查更新（task-13）+ 可见下载进度（task-19）----------
         # 侧栏内容宽仅 260-24*2=212px：按钮 32 + 进度条 150 + 百分比 ~40 挤不进
@@ -286,13 +312,10 @@ class WelcomeWindow(QWidget):
             self.btn_update.setIcon(_up_icon)   # 双保险：旧版构造签名只认 parent
         self.btn_update.setCursor(Qt.PointingHandCursor)
         self.btn_update.setToolTip("检查更新")
-        self.btn_update.setStyleSheet(
-            "#btnUpdate{border-radius:16px;background:#2c3038;}"
-            "#btnUpdate:hover{background:#3a4150;}")
         self.btn_update.clicked.connect(self._on_check_update)
         upd_row.addWidget(self.btn_update)
         self.update_lbl = CaptionLabel("", side)
-        self.update_lbl.setStyleSheet("color:#8a93a2;")
+        self.update_lbl.setStyleSheet("color:%s;" % TH.t("text_dim"))
         self.update_lbl.setWordWrap(False)
         upd_row.addWidget(self.update_lbl, 1)
         upd_row.addStretch(1)
@@ -307,7 +330,7 @@ class WelcomeWindow(QWidget):
         self.update_bar.setValue(0)
         self.update_bar.hide()
         self.upd_pct_lbl = CaptionLabel("", side)
-        self.upd_pct_lbl.setStyleSheet("color:#8a93a2;")
+        self.upd_pct_lbl.setStyleSheet("color:%s;" % TH.t("text_dim"))
         self.upd_pct_lbl.setFixedWidth(40)
         self.upd_pct_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.upd_pct_lbl.hide()
@@ -329,13 +352,13 @@ class WelcomeWindow(QWidget):
         f.setBold(True)
         self.title.setFont(f)
         self.title.setAlignment(Qt.AlignHCenter)
-        self.title.setStyleSheet("color:#f2f6fa;")
+        self.title.setStyleSheet("color:%s;" % TH.t("text_hi"))
         ml.addWidget(self.title)
         ml.addSpacing(22)
 
         head = QHBoxLayout()
         h_lbl = StrongBodyLabel("最近使用项", main)
-        h_lbl.setStyleSheet("color:#c8d1dc;")
+        h_lbl.setStyleSheet("color:%s;" % TH.t("text"))
         head.addWidget(h_lbl)
         head.addSpacing(16)
         # 类型分段：全部 | 图片工程 | 视频工程
@@ -349,7 +372,7 @@ class WelcomeWindow(QWidget):
             self._tabs[key] = tb
         head.addStretch(1)
         cap = CaptionLabel("筛选", main)
-        cap.setStyleSheet("color:#8a93a2;")
+        cap.setStyleSheet("color:%s;" % TH.t("text_dim"))
         head.addWidget(cap)
         self.ed_filter = LineEdit(main)
         self.ed_filter.setPlaceholderText("筛选最近的文件")
@@ -383,7 +406,7 @@ class WelcomeWindow(QWidget):
         self.empty_lbl = BodyLabel(
             "暂无历史项目 —— 点击左侧「新建项目」开始", main)
         self.empty_lbl.setAlignment(Qt.AlignCenter)
-        self.empty_lbl.setStyleSheet("color:#8a93a2;")
+        self.empty_lbl.setStyleSheet("color:%s;" % TH.t("text_dim"))
         self.empty_lbl.hide()
         ml.addWidget(self.empty_lbl)
 
@@ -392,7 +415,7 @@ class WelcomeWindow(QWidget):
         pager.addStretch(1)
         self.btn_prev = PushButton("‹ 上一页", main)
         self.page_lbl = CaptionLabel("第 1 / 1 页", main)
-        self.page_lbl.setStyleSheet("color:#c8d1dc;")
+        self.page_lbl.setStyleSheet("color:%s;" % TH.t("text"))
         self.btn_next = PushButton("下一页 ›", main)
         self.btn_prev.clicked.connect(lambda: self._goto_page(self._page - 1))
         self.btn_next.clicked.connect(lambda: self._goto_page(self._page + 1))
@@ -406,6 +429,19 @@ class WelcomeWindow(QWidget):
 
         root.addWidget(main, 1)
         self._populate()
+
+    def _apply_theme(self):
+        """按当前主题重刷根 QSS 与按钮底色（切主题时由 _refresh_themed 调用）。"""
+        try:
+            self.setStyleSheet(
+                "#welcomeRoot{background:%s;}"
+                "QFrame#sideBar{background:%s;border-radius:0px;}"
+                "#btnUpdate{border-radius:16px;background:%s;}"
+                "#btnUpdate:hover{background:%s;}"
+                % (TH.t("wel_bg"), TH.t("wel_side"),
+                   TH.t("wel_card_border"), TH.t("wel_card_sel")))
+        except Exception:
+            pass
 
     # ---------------- 数据 ----------------
     @staticmethod

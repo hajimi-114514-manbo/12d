@@ -26,6 +26,24 @@ from PySide6.QtWidgets import QWidget, QSizePolicy
 
 import video_model as V
 import video_export as VE
+import ui_theme as TH
+
+# ---- 主题色（v3.x：跟随 ui_theme；占位值导入时立刻被 _refresh_colors 覆盖）----
+# paintEvent 每帧读全局名，TH 切主题时统一 update() 全部控件即刻生效。
+# 注意：_draw_subtitle 里的黑描边/白字/蓝名牌是**合成画面的一部分**
+# （预览与导出共用），属语义色，不跟随界面主题。
+C_CANVAS = QColor("#0d0f13")   # 画布外底板（TH.qcolor("canvas_bg")）
+C_ACCENT = QColor("#4d88ff")   # 选中虚线框 + 缩放手柄（TH.qcolor("accent")）
+
+
+def _refresh_colors():
+    global C_CANVAS, C_ACCENT
+    C_CANVAS = TH.qcolor("canvas_bg")
+    C_ACCENT = TH.qcolor("accent")
+
+
+TH.register(_refresh_colors)
+_refresh_colors()
 
 
 class StageView(QWidget):
@@ -487,7 +505,7 @@ class StageView(QWidget):
 
     def paintEvent(self, e):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0d0f13"))
+        painter.fillRect(self.rect(), C_CANVAS)
         ox, oy, s, dw, dh = self._geom()
         if self._pixmap is not None and dw > 0 and dh > 0:
             # v3.5.2 性能：pixmap 已在 _build_pixmap 里缩到接近显示尺寸，
@@ -499,11 +517,11 @@ class StageView(QWidget):
         if self._selected:
             r = self._rect_widget(self._clip(self._selected))
             if r is not None:
-                painter.setPen(QPen(QColor("#4d88ff"), 2, Qt.DashLine))
+                painter.setPen(QPen(C_ACCENT, 2, Qt.DashLine))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawRect(QRectF(r[0], r[1], r[2] - r[0], r[3] - r[1]))
                 painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor("#4d88ff"))
+                painter.setBrush(C_ACCENT)
                 painter.drawRect(QRectF(r[2] - self._HANDLE,
                                         r[3] - self._HANDLE,
                                         self._HANDLE, self._HANDLE))

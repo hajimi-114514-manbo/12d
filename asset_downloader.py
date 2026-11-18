@@ -21,6 +21,10 @@ import zipfile
 
 import numpy as np  # noqa: F401  (保持与应用一致的依赖导入顺序)
 
+import weakref
+
+import ui_theme as TH
+
 from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QWidget)
 from qfluentwidgets import (ProgressBar, BodyLabel, CaptionLabel, PushButton,
@@ -750,13 +754,33 @@ class AssetDownloadThread(QThread):
             return
         self.finished_ok.emit(target + note)
 
+# 活跃下载对话框登记（切主题时重刷 QSS；窗口生命周期短，weakref 防泄漏）
+_DLGS = []
+
+
+def _refresh_dlg_theme():
+    for wr in list(_DLGS):
+        d = wr()
+        if d is None:
+            _DLGS.remove(wr)
+            continue
+        try:
+            d._apply_theme()
+        except Exception:
+            pass
+
+
+TH.register(_refresh_dlg_theme)
+
+
 class AssetDownloadDialog(QDialog):
     """下载进度对话框：进度条 + 速度 + 取消。
 
     v3.4.7 修颜色问题：裸 QDialog 不吃 qfluentwidgets 主题，深色模式下
     是系统默认浅底，而 BodyLabel/CaptionLabel/ProgressBar 深色主题下
     全是浅色文字/浅色轨道 —— 白底白字完全看不清。给对话框与内部
-    QDialog 级控件统一铺工作台深色底（#20232a），文字恢复可读。
+    QDialog 级控件统一铺工作台底色（v3.5.12 起走 ui_theme 令牌，
+    深浅主题都保持文字可读）。
     """
 
     def __init__(self, asset, base_dir, parent=None):
@@ -767,8 +791,7 @@ class AssetDownloadDialog(QDialog):
         self.setWindowTitle("下载 %s" % asset.get("name", asset.get("id", "")))
         self.setFixedSize(460, 180)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setStyleSheet(
-            "QDialog{background:#20232a;}")
+        self._apply_theme()
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 16)
         lay.setSpacing(10)
@@ -786,6 +809,18 @@ class AssetDownloadDialog(QDialog):
         self.btn_cancel.clicked.connect(self._on_cancel)
         row.addWidget(self.btn_cancel)
         lay.addLayout(row)
+        _DLGS.append(weakref.ref(self))
+
+    def _apply_theme(self):
+        """按当前主题重刷对话框底色与文字色（切主题时由 _refresh_dlg 调用）。"""
+        try:
+            self.setStyleSheet(
+                "QDialog{background:%s;}"
+                "QDialog BodyLabel{color:%s;}"
+                "QDialog CaptionLabel{color:%s;}"
+                % (TH.t("panel_bg"), TH.t("text"), TH.t("text_dim")))
+        except Exception:
+            pass
 
     def start(self):
         self.worker = AssetDownloadThread(self.asset, self.base_dir, self)

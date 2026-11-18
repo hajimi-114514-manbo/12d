@@ -12,6 +12,8 @@
 from qfluentwidgets import (MessageBoxBase, PushButton, StrongBodyLabel)
 from PySide6.QtWidgets import QWidget
 
+import ui_theme as TH
+
 EXIT = "exit"
 CANCEL = "cancel"
 SAVE_EXIT = "save_exit"
@@ -59,11 +61,8 @@ class UnsavedCloseDialog(MessageBoxBase):
         self.cancelButton.setText("取消")
         self.btn_exit = PushButton("确认退出", self.buttonGroup)
         self.btn_exit.setObjectName("exitButton")
-        self.btn_exit.setStyleSheet(
-            "#exitButton{background:#b3261e;color:#ffffff;"
-            "border-radius:6px;}"
-            "#exitButton:hover{background:#d33a31;}"
-        )
+        self.btn_exit.clicked.connect(self._on_exit)
+        self._apply_theme()
         # 插到「取消」之前，顺序：保存 | 确认退出 | 取消
         idx = self.buttonLayout.indexOf(self.cancelButton)
         self.buttonLayout.insertWidget(max(0, idx), self.btn_exit)
@@ -76,6 +75,23 @@ class UnsavedCloseDialog(MessageBoxBase):
         self.cancelButton.clicked.connect(self._on_cancel)
 
         self.widget.setMinimumWidth(420)
+
+    def _apply_theme(self):
+        """「确认退出」危险红按主题微调（红色语义不变）：
+        深色 = 原配色（#b3261e 底/#d33a31 hover，暗底上不刺眼）；
+        浅色 = 压深一档（#a01d16 底/#b33028 hover，白底上对比更清晰）。"""
+        try:
+            if TH.is_light():
+                base, hover = "#a01d16", "#b33028"
+            else:
+                base, hover = "#b3261e", "#d33a31"
+            self.btn_exit.setStyleSheet(
+                "#exitButton{background:%s;color:#ffffff;"
+                "border-radius:6px;}"
+                "#exitButton:hover{background:%s;}"
+                % (base, hover))
+        except Exception:
+            pass
 
     def _on_save(self):
         self.choice = "save"

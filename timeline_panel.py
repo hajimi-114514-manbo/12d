@@ -34,24 +34,61 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QSpinBox)
 
 import anim as A
+import ui_theme as TH
 
-# 配色（跟随应用暗色主题）
-# 字色整体调亮：原来 #9aa4b2 在深底上偏灰暗，刻度几乎看不清
+# 配色（跟随 ui_theme 主题：深色 / 浅色半透明磨砂白）
+# 做法：这里的模块级名字由 _refresh_colors() 在切主题时整体重新赋值，
+# 自绘代码在 paintEvent 里每帧读全局名，所以自动跟随，不用改调用点。
 C_BG = QColor("#1b1f27")
 C_ROW_A = QColor("#20252e")
 C_ROW_B = QColor("#1d222a")
-C_GRID = QColor("#3a4356")          # 网格线提亮，原来 #2c3340 几乎与底色同色
-C_TEXT = QColor("#c8d1dc")          # 刻度/次要文字：明显提亮
-C_TEXT_HI = QColor("#f2f6fa")       # 行名/主文字：接近纯白
+C_GRID = QColor("#3a4356")
+C_TEXT = QColor("#c8d1dc")
+C_TEXT_HI = QColor("#f2f6fa")
 C_HEAD = QColor("#252b35")
 C_PLAYHEAD = QColor("#4d88ff")
 C_KF = QColor("#ffd166")
 C_KF_SEL = QColor("#ff6b6b")
 C_LANE = QColor("#171b21")
-C_TICK_MAJOR = QColor("#8fa3bd")    # 整秒刻度文字（比秒内小刻度更亮）
+C_TICK_MAJOR = QColor("#8fa3bd")
 # 顶部高度拖拽条：与右侧面板 QSplitter::handle 同款配色（SPLIT_QSS）
 C_HANDLE = QColor("#3a3f4a")
 C_HANDLE_HL = QColor("#4d88ff")
+C_LINK = QColor("#5b6b82")          # 关键帧之间的连线
+C_KF_INNER = QColor("#3a2f10")      # 未选中菱形内芯
+
+
+def _refresh_colors():
+    """按当前主题重算所有配色（切主题时由 ui_theme 调用）。"""
+    global C_BG, C_ROW_A, C_ROW_B, C_GRID, C_TEXT, C_TEXT_HI, C_HEAD
+    global C_PLAYHEAD, C_KF, C_KF_SEL, C_LANE, C_TICK_MAJOR
+    global C_HANDLE, C_HANDLE_HL, C_LINK, C_KF_INNER
+    C_BG = TH.qcolor("tl_bg")
+    C_ROW_A = TH.qcolor("tl_row_a")
+    C_ROW_B = TH.qcolor("tl_row_b")
+    C_GRID = TH.qcolor("tl_grid")
+    C_TEXT = TH.qcolor("tl_text")
+    C_TEXT_HI = TH.qcolor("tl_text_hi")
+    C_HEAD = TH.qcolor("tl_head")
+    C_PLAYHEAD = TH.qcolor("tl_playhead")
+    C_KF = TH.qcolor("tl_kf")
+    C_KF_SEL = TH.qcolor("tl_kf_sel")
+    C_LANE = TH.qcolor("tl_lane")
+    C_TICK_MAJOR = TH.qcolor("tl_tick_major")
+    C_HANDLE = TH.qcolor("tl_handle")
+    C_HANDLE_HL = TH.qcolor("accent")
+    C_LINK = TH.qcolor("tl_link")
+    C_KF_INNER = TH.qcolor("tl_kf_inner")
+    for p in _PANELS:
+        try:
+            p._apply_theme()
+        except Exception:
+            pass
+
+
+_PANELS = []          # 存活的 TimelinePanel，切主题时重刷头部样式
+TH.register(_refresh_colors)
+_refresh_colors()
 
 # 尺寸（v2.11.2：全部可在运行时缩放，见 TimelinePanel.ui_scale）
 ROW_H = 24          # 每行高度（基准值）
@@ -158,6 +195,21 @@ class TimelinePanel(QWidget):
 
         self._apply_scale()
         self.refresh()
+        _PANELS.append(self)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """把跟随主题的 QSS 重刷一遍（切主题时由模块级 _refresh_colors 调用）。"""
+        try:
+            self._head.setStyleSheet(
+                "QWidget#tlHead{background:%s;}" % C_HEAD.name())
+            self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
+        except Exception:
+            pass
+        try:
+            self.area.update()
+        except Exception:
+            pass
 
     # ---------------- 缩放/尺寸 ----------------
     def _apply_scale(self):
@@ -573,7 +625,7 @@ class _TrackArea(QWidget):
                        QPointF(self.width(), y0 + row_h - 0.5))
             # 关键帧之间的连线
             if len(track) >= 2:
-                p.setPen(QPen(QColor("#5b6b82"), max(1.0, 1.5 * s)))
+                p.setPen(QPen(C_LINK, max(1.0, 1.5 * s)))
                 for a, b in zip(track, track[1:]):
                     p.drawLine(QPointF(panel.t_to_x(a["t"]), y0 + row_h / 2.0),
                                QPointF(panel.t_to_x(b["t"]), y0 + row_h / 2.0))
@@ -584,7 +636,7 @@ class _TrackArea(QWidget):
                 sel = (panel._sel == (node, param, round(kf["t"], 6)))
                 _draw_diamond(p, kx, cy, kf_r,
                               C_KF_SEL if sel else C_KF,
-                              C_TEXT_HI if sel else QColor("#3a2f10"))
+                              C_TEXT_HI if sel else C_KF_INNER)
             # 名字列右侧分隔
             p.setPen(QPen(C_GRID, 1))
             p.drawLine(QPointF(name_w - 0.5, y0),

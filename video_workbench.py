@@ -25,7 +25,8 @@ import time
 import numpy as np
 
 from PySide6.QtCore import Qt, QTimer, QSize, QSettings, QEvent
-from PySide6.QtGui import QImage, QPixmap, QIcon, QKeySequence, QShortcut
+from PySide6.QtGui import (QImage, QPixmap, QIcon, QKeySequence, QShortcut,
+                           QPainter)
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
                                QFileDialog, QStackedLayout, QFrame, QSplitter,
                                QMessageBox, QApplication)
@@ -38,6 +39,7 @@ from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
 
 import video_model as V
 import video_export as VE
+import ui_theme as TH
 from stage_view import StageView
 from script_editor import ScriptEditor
 
@@ -55,16 +57,50 @@ SPLIT_H_MIN = [180, 420, 180]
 SPLIT_V_DEFAULT = [560, 340]         # 上方区域 | 时间轴（约 38%）
 SPLIT_V_MIN_TIMELINE = 120
 
-# handle 颜色与主界面统一：idle #3a3f4a / hover+drag #4d88ff。
+# handle 颜色跟随主题：idle split_handle / hover+drag accent。
 # 用 objectName 限定作用域，避免污染子控件里的其它 QSplitter。
-_SPLIT_QSS = (
-    "QSplitter#wbHSplit::handle { background: #3a3f4a; }"
-    "QSplitter#wbHSplit::handle:hover, QSplitter#wbHSplit::handle:active"
-    " { background: #4d88ff; }"
-    "QSplitter#wbVSplit::handle { background: #3a3f4a; }"
-    "QSplitter#wbVSplit::handle:hover, QSplitter#wbVSplit::handle:active"
-    " { background: #4d88ff; }"
-)
+def _inner_bg():
+    """内层容器底色。
+
+    浅色主题：transparent —— 半透明白只在最外层面板叠一层，否则
+    三层 0.72 alpha 会叠成死白，磨砂渐变全被盖掉。
+    深色主题：panel_bg —— 深色面板近不透明，叠多层也不会发白，
+    但绝不能透明（透明会露出 Qt 默认白底，深色主题会瞎）。
+    """
+    return "transparent" if TH.is_light() else TH.t("panel_bg")
+
+
+def _split_qss():
+    h = TH.t("split_handle")
+    a = TH.t("accent")
+    return (
+        "QSplitter#wbHSplit::handle { background: %s; }"
+        "QSplitter#wbHSplit::handle:hover, QSplitter#wbHSplit::handle:active"
+        " { background: %s; }"
+        "QSplitter#wbVSplit::handle { background: %s; }"
+        "QSplitter#wbVSplit::handle:hover, QSplitter#wbVSplit::handle:active"
+        " { background: %s; }" % (h, a, h, a)
+    )
+
+
+_SPLIT_QSS = _split_qss()
+
+# 存活的 VideoWorkbench 实例，切主题时逐个重刷
+_WORKBENCHES = []
+
+
+def _refresh_all():
+    """ui_theme 切主题时回调：重算 SPLIT_QSS 并重刷每个工作台。"""
+    global _SPLIT_QSS
+    _SPLIT_QSS = _split_qss()
+    for wb in list(_WORKBENCHES):
+        try:
+            wb._apply_theme()
+        except Exception:
+            pass
+
+
+TH.register(_refresh_all)
 
 
 def fmt_time(t):
@@ -98,8 +134,9 @@ class _AssetCard(CardWidget):
         self.img_lbl = QLabel(self)
         self.img_lbl.setFixedSize(100, 58)
         self.img_lbl.setAlignment(Qt.AlignCenter)
-        self.img_lbl.setStyleSheet("background:#14161b;border-radius:4px;"
-                                   "color:#8a93a2;")
+        self.img_lbl.setStyleSheet("background:%s;border-radius:4px;"
+                                   "color:%s;" % (TH.t("thumb_bg"),
+                                                  TH.t("text_dim")))
         if thumb_qpixmap is not None and not thumb_qpixmap.isNull():
             self.img_lbl.setPixmap(thumb_qpixmap.scaled(
                 self.img_lbl.size(), Qt.KeepAspectRatio,
@@ -109,7 +146,7 @@ class _AssetCard(CardWidget):
         lay.addWidget(self.img_lbl)
         nm = os.path.basename(str(source["path"]).rstrip("\\/")) or "工程"
         t = BodyLabel(nm[:14], self)
-        t.setStyleSheet("color:#c8d1dc;")
+        t.setStyleSheet("color:%s;" % TH.t("text"))
         f = t.font()
         f.setPixelSize(11)
         t.setFont(f)
@@ -117,7 +154,7 @@ class _AssetCard(CardWidget):
         d = source.get("src_dur") or 0.0
         cap = CaptionLabel("图片" if source["kind"] == "image"
                            else fmt_time(d), self)
-        cap.setStyleSheet("color:#8a93a2;")
+        cap.setStyleSheet("color:%s;" % TH.t("text_dim"))
         lay.addWidget(cap)
         lay.addStretch(1)
 
@@ -139,11 +176,11 @@ class _TemplateCard(CardWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
         t = BodyLabel(title, self)
-        t.setStyleSheet("color:#e8ecf4; font-size:13px;")
+        t.setStyleSheet("color:%s; font-size:13px;" % TH.t("text_hi"))
         lay.addWidget(t)
         d = CaptionLabel(desc, self)
         d.setWordWrap(True)
-        d.setStyleSheet("color:#8a93a2; font-size:11px;")
+        d.setStyleSheet("color:%s; font-size:11px;" % TH.t("text_dim"))
         lay.addWidget(d, 1)
         b = PushButton("应用", self)
         b.setFixedHeight(26)
@@ -173,11 +210,11 @@ class _RuntimeCard(CardWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
         t = BodyLabel("WebGAL 运行时", self)
-        t.setStyleSheet("color:#e8ecf4; font-size:13px;")
+        t.setStyleSheet("color:%s; font-size:13px;" % TH.t("text_hi"))
         lay.addWidget(t)
         self.status_lbl = CaptionLabel("检测中…", self)
         self.status_lbl.setWordWrap(True)
-        self.status_lbl.setStyleSheet("color:#8a93a2; font-size:11px;")
+        self.status_lbl.setStyleSheet("color:%s; font-size:11px;" % TH.t("text_dim"))
         lay.addWidget(self.status_lbl, 1)
         b1 = PushButton("在线获取", self)
         b1.setFixedHeight(26)
@@ -204,8 +241,190 @@ class _RuntimeCard(CardWidget):
             self.status_lbl.setText("未安装\n导入 zip 即用")
 
 
+class _FrostBackground(QWidget):
+    """磨砂底色层：画主题的窗口渐变（深色主题是纯色）。
+
+    存在的理由：FluentWindow 的 stackedWidget 会把子控件的 QSS 背景
+    盖住（实测设了 background 也看不见），自绘 paintEvent 才可靠。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self._grad = None
+        self.refresh()
+
+    def refresh(self):
+        """按当前主题重建渐变（切主题时调用）。"""
+        from PySide6.QtGui import QLinearGradient, QColor
+        g = QLinearGradient(0, 0, 1, 1)
+        g.setCoordinateMode(QLinearGradient.ObjectBoundingMode)
+        if TH.is_light():
+            # 冷蓝 → 暖白 → 冷蓝：制造可见的明暗起伏，面板透上来才有层次
+            g.setColorAt(0.0, QColor("#a8bcd8"))
+            g.setColorAt(0.28, QColor("#d9e4f2"))
+            g.setColorAt(0.55, QColor("#c2d1e6"))
+            g.setColorAt(0.78, QColor("#e3ebf6"))
+            g.setColorAt(1.0, QColor("#b4c6de"))
+        else:
+            c = TH.qcolor("window_bg")
+            g.setColorAt(0.0, c)
+            g.setColorAt(1.0, c)
+        self._grad = g
+        self.update()
+
+    def paintEvent(self, e):
+        if self._grad is None:
+            self.refresh()
+        p = QPainter(self)
+        p.fillRect(self.rect(), self._grad)
+
+
+class _FrostBackground(QWidget):
+    """磨砂底色层（保留类名供外部兼容；实际绘制已并入 VideoWorkbench）。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self._grad = None
+        self.refresh()
+
+    def refresh(self):
+        from PySide6.QtGui import QLinearGradient, QColor
+        g = QLinearGradient(0, 0, 1, 1)
+        g.setCoordinateMode(QLinearGradient.ObjectBoundingMode)
+        if TH.is_light():
+            g.setColorAt(0.0, QColor("#c9d6e8"))
+            g.setColorAt(0.35, QColor("#e2eaf4"))
+            g.setColorAt(0.62, QColor("#d6e2f0"))
+            g.setColorAt(1.0, QColor("#cfdcee"))
+        else:
+            c = TH.qcolor("window_bg")
+            g.setColorAt(0.0, c)
+            g.setColorAt(1.0, c)
+        self._grad = g
+        self.update()
+
+    def paintEvent(self, e):
+        if self._grad is None:
+            self.refresh()
+        p = QPainter(self)
+        p.fillRect(self.rect(), self._grad)
+
+
 class VideoWorkbench(QWidget):
     """视频编辑工作台。project_dirty_changed(str) 通知外层改标题。"""
+
+    def _frost_tile(self):
+        """生成磨砂噪点纹理（64x64，±6 的极轻抖动），缓存复用。
+
+        磨砂质感来自细微噪点，不是渐变 —— 纯渐变看起来只是渐变。
+        面板半透明叠上去、噪点透出来，才有磨砂玻璃的观感。
+        """
+        tile = getattr(self, "_frost_pm", None)
+        if (tile is not None
+                and getattr(self, "_frost_pm_light", None) == TH.is_light()):
+            return tile
+        import random
+        from PySide6.QtGui import QPixmap, QImage, QColor
+        n = 64
+        img = QImage(n, n, QImage.Format_ARGB32)
+        rnd = random.Random(20261118)      # 固定种子：每次一致，不会闪
+        base = 205 if TH.is_light() else 30
+        for y in range(n):
+            for x in range(n):
+                d = rnd.randint(-5, 5)
+                v = max(0, min(255, base + d))
+                a = 15 if TH.is_light() else 12
+                img.setPixelColor(x, y, QColor(v, v, v, a))
+        tile = QPixmap.fromImage(img)
+        self._frost_pm = tile
+        self._frost_pm_light = TH.is_light()
+        return tile
+
+    def paintEvent(self, e):
+        """自绘磨砂底：主题渐变 + 细微噪点纹理。
+
+        深色主题退化成纯色 + 噪点（暗色下噪点几乎不可见，无副作用）。
+        """
+        from PySide6.QtGui import QLinearGradient, QColor
+        p = QPainter(self)
+        g = QLinearGradient(0, 0, self.width(), self.height())
+        if TH.is_light():
+            # 冷白 → 微冷 → 冷白：幅度小但够看见起伏（太深会透成灰玻璃）
+            g.setColorAt(0.0, QColor("#cfdcec"))
+            g.setColorAt(0.28, QColor("#eef3f9"))
+            g.setColorAt(0.55, QColor("#dee8f4"))
+            g.setColorAt(0.78, QColor("#f2f6fb"))
+            g.setColorAt(1.0, QColor("#d5e1ef"))
+        else:
+            c = TH.qcolor("window_bg")
+            g.setColorAt(0.0, c)
+            g.setColorAt(1.0, c)
+        p.fillRect(self.rect(), g)
+        # 噪点纹理平铺：磨砂的"颗粒感"
+        p.drawTiledPixmap(self.rect(), self._frost_tile())
+
+    def _apply_theme(self):
+        """切主题时重刷那些在 setStyleSheet 里写死颜色的部件。"""
+        self._frost_pm = None       # 噪点纹理按主题重生成
+        try:
+            self.update()
+        except Exception:
+            pass
+        try:
+            global _SPLIT_QSS
+            _SPLIT_QSS = _split_qss()
+            for sp in (getattr(self, "_hsplit", None),
+                       getattr(self, "_vsplit", None)):
+                if sp is not None:
+                    sp.setStyleSheet(_SPLIT_QSS)
+        except Exception:
+            pass
+        try:
+            # 只让最外层面板带半透明白（磨砂卡片），内层 viewport/host
+            # 必须透明：三层都上 0.66 alpha 会叠成纯白，层次全没了。
+            qss = ("#assetPanel{background:%s;border-radius:8px;}"
+                   "QWidget#videoWorkbenchRoot{background:transparent;}"
+                   % TH.t("panel_bg"))
+            self._left_panel.setStyleSheet(qss)
+            ib = _inner_bg()
+            self.asset_scroll.setStyleSheet(
+                "QScrollArea{background:%s;border:none;}"
+                "QScrollArea::viewport{background:%s;}"
+                "QScrollArea > QWidget > QWidget{background:%s;}"
+                "QWidget#assetHost{background:%s;}" % (ib, ib, ib, ib))
+            self.stage.setStyleSheet("background:%s;border-radius:6px;"
+                                     % TH.t("canvas_bg"))
+        except Exception:
+            pass
+        try:
+            ib = _inner_bg()
+            self._right_panel.setStyleSheet(
+                "#propPanel{background:%s;border-radius:8px;}"
+                "#propHost{background:%s;}"
+                "QScrollArea::viewport{background:%s;}"
+                % (TH.t("panel_bg"), ib, ib))
+            self._prop_scroll.setStyleSheet(
+                "QScrollArea{background:%s;border:none;}"
+                "QScrollArea::viewport{background:%s;}"
+                "QScrollArea > QWidget > QWidget{background:%s;}"
+                % (ib, ib, ib))
+        except Exception:
+            pass
+        for attr, extra in (("workers_hint", " font-size:11px;"),
+                            ("anim_hint", " font-size:11px;"),
+                            ("est_lbl", " font-size:11px;")):
+            w = getattr(self, attr, None)
+            if w is not None:
+                try:
+                    w.setStyleSheet("color:%s;%s" % (TH.t("text_dim"), extra))
+                except Exception:
+                    pass
+        try:
+            self.update()
+        except Exception:
+            pass
 
     def __init__(self, parent=None, proj=None, proj_dir=None):
         super().__init__(parent)
@@ -225,11 +444,21 @@ class VideoWorkbench(QWidget):
         self.timer.setTimerType(Qt.PreciseTimer)
         self.timer.timeout.connect(self._advance)
 
+        # 磨砂底：工作台自己画主题渐变，三栏半透明白面板叠在上面。
+        # 不能用 QSS 铺底（FluentWindow 的容器会盖住子控件的 QSS 背景），
+        # 自绘 paintEvent 才可靠；也顺带避免 alpha 叠三层变纯白。
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
 
         # ---------- 顶部 Pivot ----------
+        # 磨砂底：整页铺一层主题渐变，三栏面板都是半透明白叠在上面，
+        # 渐变从面板底下透出来 → 层次感（纯 Qt 绘制，不依赖 DWM 模糊）
+        self.setObjectName("videoWorkbenchRoot")
+        self.setStyleSheet(
+            "QWidget#videoWorkbenchRoot{background:%s;}" % TH.t("window_bg"))
         self.pivot = Pivot(self)
         for key, text in [("media", "媒体"), ("audio", "音频"),
                           ("text", "文本"), ("sticker", "贴纸"),
@@ -271,9 +500,11 @@ class VideoWorkbench(QWidget):
 
         # 左：素材库
         left = QFrame(self)
+        self._left_panel = left
         left.setObjectName("assetPanel")
         left.setMinimumWidth(SPLIT_H_MIN[0])
-        left.setStyleSheet("#assetPanel{background:#20232a;border-radius:8px;}")
+        left.setStyleSheet("#assetPanel{background:%s;border-radius:8px;}"
+                           % TH.t("panel_bg"))
         ll = QVBoxLayout(left)
         ll.setContentsMargins(10, 10, 10, 10)
         ll.setSpacing(8)
@@ -297,9 +528,14 @@ class VideoWorkbench(QWidget):
         # pscroll 修过同款问题，素材库这里漏了）；host 用 objectName 限定，
         # 不用通配选择器，避免盖掉 CardWidget 卡片自绘底色。
         self.asset_host.setObjectName("assetHost")
+        # 内层底色按主题：浅色=transparent（避免三层白叠成死白），
+        # 深色=panel_bg（深色下透明会露出 Qt 默认白底）
+        _ib = _inner_bg()
         self.asset_scroll.setStyleSheet(
-            "QScrollArea::viewport{background:#20232a;}"
-            "QWidget#assetHost{background:#20232a;}")
+            "QScrollArea{background:%s;border:none;}"
+            "QScrollArea::viewport{background:%s;}"
+            "QScrollArea > QWidget > QWidget{background:%s;}"
+            "QWidget#assetHost{background:%s;}" % (_ib, _ib, _ib, _ib))
         self.asset_flow = FlowLayout(self.asset_host, needAni=False)
         self.asset_flow.setContentsMargins(0, 0, 0, 0)
         self.asset_scroll.setWidget(self.asset_host)
@@ -321,7 +557,8 @@ class VideoWorkbench(QWidget):
         # A2：预览画布换成 StageView（可拖拽布置 + 选中联动），最小尺寸不变
         self.stage = StageView(center)
         self.stage.setMinimumSize(320, 180)
-        self.stage.setStyleSheet("background:#0d0f13;border-radius:6px;")
+        self.stage.setStyleSheet("background:%s;border-radius:6px;"
+                                 % TH.t("canvas_bg"))
         self.stage.clip_selected.connect(self._on_stage_select)
         self.stage.layout_changed.connect(self._on_stage_layout_changed)
         self.preview = self.stage          # 兼容旧引用
@@ -368,14 +605,18 @@ class VideoWorkbench(QWidget):
 
         # 右：属性
         right = QFrame(self)
+        self._right_panel = right
         right.setObjectName("propPanel")
         right.setMinimumWidth(SPLIT_H_MIN[2])
         # F1 修复：内层 host 裸 QWidget 无背景 -> 暗主题下近白底浅灰字对比崩。
         # 给 host 定 objectName + 深色背景，ScrollArea viewport 同色，标签才可见。
+        # 半透明白只上最外层 propPanel 一层（内层按主题，见 _inner_bg）
+        _pib = _inner_bg()
         right.setStyleSheet(
-            "#propPanel{background:#20232a;border-radius:8px;}"
-            "#propHost{background:#20232a;}"
-            "QScrollArea::viewport{background:#20232a;}")
+            "#propPanel{background:%s;border-radius:8px;}"
+            "#propHost{background:%s;}"
+            "QScrollArea::viewport{background:%s;}"
+            % (TH.t("panel_bg"), _pib, _pib))
         # 属性内容放进滚动容器：内容多时面板可被压缩，不把时间轴饿死
         host = QWidget(right)
         host.setObjectName("propHost")
@@ -478,12 +719,15 @@ class VideoWorkbench(QWidget):
         self.btn_del_clip.clicked.connect(self._delete_selected)
         rl.addWidget(self.btn_del_clip)
         rl.addStretch(1)
-        pscroll = ScrollArea(right)
+        self._prop_scroll = pscroll = ScrollArea(right)
         pscroll.setWidgetResizable(True)
-        # viewport 与内层 host 同色，避免滚动区露出白底
+        # 内层底色按主题（同素材库）
+        _ib2 = _inner_bg()
         pscroll.setStyleSheet(
-            "QScrollArea::viewport{background:#20232a;}"
-            "QScrollArea > QWidget > QWidget{background:#20232a;}")
+            "QScrollArea{background:%s;border:none;}"
+            "QScrollArea::viewport{background:%s;}"
+            "QScrollArea > QWidget > QWidget{background:%s;}"
+            % (_ib2, _ib2, _ib2))
         pscroll.setWidget(host)
         rlay = QVBoxLayout(right)
         rlay.setContentsMargins(0, 0, 0, 0)
@@ -557,6 +801,8 @@ class VideoWorkbench(QWidget):
         self._restore_splitter_sizes()
 
         v.addWidget(vsplit)
+        _WORKBENCHES.append(self)
+        self._apply_theme()
 
         # 快捷键：Ctrl+S 保存 / Ctrl+Z Y 撤销重做 / 空格播放
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_project)
@@ -2189,7 +2435,8 @@ class _ExportDialog(MessageBoxBase):
             "线程越多越快，但受内存带宽限制，超过甜点反而变慢；"
             "默认值已按本机核数（%d 核）实测调过" % cpu, self)
         self.workers_hint.setWordWrap(True)
-        self.workers_hint.setStyleSheet("color:#8a93a2; font-size:11px;")
+        self.workers_hint.setStyleSheet("color:%s; font-size:11px;"
+                                        % TH.t("text_dim"))
         self.viewLayout.addWidget(self.workers_hint)
 
         # 立绘动画：逐帧（方案 A，主线程渲染泵）/ 定格（方案 B，预渲染图）。
@@ -2207,13 +2454,15 @@ class _ExportDialog(MessageBoxBase):
             "（视频轨/滤镜）越能被并行隐藏，实测只慢 10% 上下；素材简单的"
             "工程慢 2-3 倍。两种模式产物都可逐位复现。", self)
         self.anim_hint.setWordWrap(True)
-        self.anim_hint.setStyleSheet("color:#8a93a2; font-size:11px;")
+        self.anim_hint.setStyleSheet("color:%s; font-size:11px;"
+                                     % TH.t("text_dim"))
         self.viewLayout.addWidget(self.anim_hint)
 
         # 耗时预估（CaptionLabel，随任一下拉变化刷新）
         self.est_lbl = CaptionLabel("耗时预估：—", self)
         self.est_lbl.setWordWrap(True)
-        self.est_lbl.setStyleSheet("color:#8a93a2; font-size:11px;")
+        self.est_lbl.setStyleSheet("color:%s; font-size:11px;"
+                                       % TH.t("text_dim"))
         self.viewLayout.addWidget(self.est_lbl)
 
         self.cmb_out.currentIndexChanged.connect(self._refresh_estimate)

@@ -48,8 +48,11 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
 
 import video_model as VM
 import timeline_panel as TP          # 复用配色 / _nice_step，无循环依赖
+import ui_theme as TH
 
-# ---------------- 配色（沿用工作台暗色主题） ----------------
+# ---------------- 配色（跟随 ui_theme：深色 / 浅色磨砂白） ----------------
+# 这些模块级名字由 _refresh_colors() 在切主题时整体重新赋值，
+# 自绘代码每帧读全局名，自动跟随。
 C_BG = TP.C_BG
 C_ROW_A = TP.C_ROW_A
 C_ROW_B = TP.C_ROW_B
@@ -66,14 +69,77 @@ C_MARQUEE = QColor(120, 170, 255)    # 框选矩形
 C_MARQUEE_FILL = QColor(120, 170, 255, 36)
 C_WAVE = QColor("#bfe3cc")           # 波形折线
 C_CLIP_EDGE = QColor("#10151d")      # clip 暗描边
+C_OTHER = QColor("#5b6b82")          # 未知类型 clip 的兜底色
+C_ICON = QColor("#f2f6fa")           # 轨道头图标（眼/锁）主色
+C_ICON_LOCK = QColor("#ffd166")      # 锁定态金色
+C_ICON_CUT = QColor("#ff7878")       # 隐藏态红斜杠
+C_ICON_HOVER = QColor(255, 255, 255, 36)       # hover 底色
+C_ICON_LOCK_FILL = QColor(255, 209, 102, 60)   # 锁体的淡金色填充
+C_LOCKED_ROW = QColor(255, 209, 102, 18)       # 锁定行淡金底
+C_GRID_SUB = QColor(58, 67, 86, 110)           # 秒内次刻度网格线
+C_ICON_HOVER_A = 36                  # (保留给外部引用)
+C_LOCKED_ROW_A = 18
 
-# source.kind -> clip 底色（规格拍板）
+# source.kind -> clip 底色
 CLIP_COLORS = {
     "video": QColor("#3d6dbf"),
     "image": QColor("#c97b3d"),
     "puppet": QColor("#8a5fc0"),
     "audio": QColor("#3fa06b"),
 }
+
+
+def _refresh_colors():
+    """按当前主题重算配色，并重刷所有存活面板。"""
+    global C_BG, C_ROW_A, C_ROW_B, C_HEAD_BG, C_LANE, C_GRID, C_TEXT
+    global C_TEXT_HI, C_PLAYHEAD, C_SNAP, C_SEL_EDGE, C_SEL_EDGE_DIM
+    global C_MARQUEE, C_MARQUEE_FILL, C_WAVE, C_CLIP_EDGE, C_OTHER
+    global C_ICON, C_ICON_LOCK, C_ICON_CUT, C_ICON_HOVER, C_ICON_LOCK_FILL
+    global C_LOCKED_ROW, C_GRID_SUB, C_ICON_HOVER_A, C_LOCKED_ROW_A
+    C_BG = TP.C_BG
+    C_ROW_A = TP.C_ROW_A
+    C_ROW_B = TP.C_ROW_B
+    C_HEAD_BG = TP.C_HEAD
+    C_LANE = TP.C_LANE
+    C_GRID = TP.C_GRID
+    C_TEXT = TP.C_TEXT
+    C_TEXT_HI = TP.C_TEXT_HI
+    C_PLAYHEAD = TP.C_PLAYHEAD
+    C_SNAP = TH.qcolor("tl_snap")
+    C_SEL_EDGE = TH.qcolor("tl_sel_edge")
+    _se = TH.qcolor("tl_sel_edge")
+    C_SEL_EDGE_DIM = QColor(_se.red(), _se.green(), _se.blue(), 130)
+    C_MARQUEE = TH.qcolor("accent")
+    C_MARQUEE_FILL = QColor(C_MARQUEE.red(), C_MARQUEE.green(),
+                            C_MARQUEE.blue(), 36)
+    C_WAVE = TH.qcolor("tl_wave")
+    C_CLIP_EDGE = TH.qcolor("tl_clip_edge")
+    C_OTHER = TH.qcolor("tl_link")
+    C_ICON = TH.qcolor("tl_icon")
+    C_ICON_LOCK = TH.qcolor("tl_icon_lock")
+    C_ICON_CUT = TH.qcolor("tl_icon_cut")
+    C_ICON_HOVER_A = int(TH.t("tl_icon_hover"))
+    C_LOCKED_ROW_A = int(TH.t("tl_locked_row"))
+    C_ICON_HOVER = QColor(C_ICON.red(), C_ICON.green(), C_ICON.blue(),
+                          C_ICON_HOVER_A)
+    C_ICON_LOCK_FILL = QColor(C_ICON_LOCK.red(), C_ICON_LOCK.green(),
+                              C_ICON_LOCK.blue(), 60)
+    C_LOCKED_ROW = QColor(C_ICON_LOCK.red(), C_ICON_LOCK.green(),
+                          C_ICON_LOCK.blue(), C_LOCKED_ROW_A)
+    C_GRID_SUB = QColor(C_GRID.red(), C_GRID.green(), C_GRID.blue(), 110)
+    for k, tok in (("video", "clip_video"), ("image", "clip_image"),
+                   ("puppet", "clip_puppet"), ("audio", "clip_audio")):
+        CLIP_COLORS[k] = TH.qcolor(tok)
+    for p in _PANELS:
+        try:
+            p._apply_theme()
+        except Exception:
+            pass
+
+
+_PANELS = []
+TH.register(_refresh_colors)
+_refresh_colors()
 
 # ---------------- 尺寸基准 ----------------
 HEAD_H = 34                 # 工具条高度
@@ -102,8 +168,7 @@ def _fmt_sec(t):
 
 
 def _base_color(clip):
-    return CLIP_COLORS.get(clip.get("source", {}).get("kind"),
-                           QColor("#5b6b82"))
+    return CLIP_COLORS.get(clip.get("source", {}).get("kind"), C_OTHER)
 
 
 def _wave_of(clip):
@@ -224,6 +289,21 @@ class ClipTimelinePanel(QWidget):
         # 上下把手完全拖不动）；理想高度由 sizeHint 提供。
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self._sync_buttons()
+        _PANELS.append(self)
+        self._apply_theme()
+
+    def _apply_theme(self):
+        """重刷跟随主题的 QSS（切主题时由模块级 _refresh_colors 调用）。"""
+        try:
+            self._head.setStyleSheet(
+                "QWidget#clipTlHead{background:%s;}" % C_HEAD_BG.name())
+            self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
+        except Exception:
+            pass
+        try:
+            self.update()
+        except Exception:
+            pass
 
     # ================= 数据 / 状态 =================
     def set_project(self, proj):
@@ -1145,7 +1225,7 @@ class _ClipArea(QWidget):
             x = pal.t_to_x(t)
             if NAME_W - 1 <= x <= w:
                 is_major = abs(t / major - round(t / major)) < 1e-6
-                p.setPen(QPen(C_GRID if is_major else QColor(58, 67, 86, 110), 1))
+                p.setPen(QPen(C_GRID if is_major else C_GRID_SUB, 1))
                 if is_major:
                     p.drawLine(QPointF(x, ruler_h - 6), QPointF(x, self.height()))
                     p.setPen(QPen(TP.C_TICK_MAJOR if abs(t - round(t)) < 1e-6 else C_TEXT))
@@ -1238,7 +1318,7 @@ class _ClipArea(QWidget):
 
         # ---- 头列：轨名 + 👁 + 🔒 ----
         if tr.get("locked"):
-            p.fillRect(QRectF(0, y0, NAME_W, rh), QColor(255, 209, 102, 18))
+            p.fillRect(QRectF(0, y0, NAME_W, rh), C_LOCKED_ROW)
         f = QFont()
         f.setPixelSize(max(10, int(round(12 * s))))
         p.setFont(f)
@@ -1264,14 +1344,14 @@ class _ClipArea(QWidget):
         if hover:
             p.fillRect(QRectF(rect.x() + 2, rect.y() + 3,
                               rect.width() - 4, rect.height() - 6),
-                       QColor(255, 255, 255, 36))
+                       C_ICON_HOVER)
         cx = rect.x() + rect.width() / 2.0
         cy = rect.y() + rect.height() / 2.0
         r = 5.5 * s                      # 图标基准半径
         if key == "eye":
             # 眼形：两条二次贝塞尔构成的杏仁形 + 实心瞳孔；隐藏态降透明
             # 并画一条「闭眼」斜杠，与睁眼对比明显（不依赖 emoji 字体）。
-            base = QColor(242, 246, 250)
+            base = QColor(C_ICON)
             base.setAlpha(235 if active else 120)
             pen = QPen(base, max(1.2, 1.3 * s))
             pen.setCapStyle(Qt.RoundCap)
@@ -1288,7 +1368,7 @@ class _ClipArea(QWidget):
                 p.setBrush(QBrush(base))
                 p.drawEllipse(QPointF(cx, cy), r * 0.42, r * 0.42)
             else:
-                cut = QPen(QColor(255, 120, 120, 220), max(1.2, 1.3 * s))
+                cut = QPen(C_ICON_CUT, max(1.2, 1.3 * s))
                 cut.setCapStyle(Qt.RoundCap)
                 p.setPen(cut)
                 p.drawLine(QPointF(cx - w * 0.85, cy + r * 0.75),
@@ -1299,7 +1379,7 @@ class _ClipArea(QWidget):
             body_w = r * 1.5
             body_h = r * 1.15
             body_y = cy - r * 0.15
-            col = QColor(255, 209, 102) if active else QColor(242, 246, 250)
+            col = C_ICON_LOCK if active else C_ICON
             col.setAlpha(235 if active else 130)
             pen = QPen(col, max(1.2, 1.3 * s))
             pen.setCapStyle(Qt.RoundCap)
@@ -1313,7 +1393,7 @@ class _ClipArea(QWidget):
             path = QPainterPath()
             path.addRoundedRect(body, 2.2 * s, 2.2 * s)
             if active:
-                p.setBrush(QBrush(QColor(255, 209, 102, 60)))
+                p.setBrush(QBrush(C_ICON_LOCK_FILL))
                 p.drawPath(path)
                 keyhole = QPointF(cx, body_y + body_h * 0.5)
                 p.setBrush(QBrush(col))
