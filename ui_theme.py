@@ -363,12 +363,32 @@ def _apply_global_qss(app=None):
     if app is None:
         return
     # tooltip 固定白底黑字（用户确认「默认白底黑字也可以」）。
-    # 为什么不用主题令牌：Qt 原生 QToolTip 不吃 qfluentwidgets 的主题，
-    # 深色主题下会出现浅底浅字 / 刺眼白板两种情况，反而更难读。
-    # 固定白底黑字在两套主题下都清楚，也不会因切主题而变化。
+    #
+    # 踩过的坑（别回头）：
+    #   · app.setStyleSheet("QToolTip{...}") 在这里**不可靠**：程序里大量
+    #     控件各自调了 setStyleSheet（主题化改造留下的），Qt 样式表就近
+    #     覆盖，祖先的 app 级 QSS 对那棵子树失效，QToolTip 也跟着不生效
+    #     —— 实测改完仍是黑底灰字（用户截图）。
+    #   · qfluentwidgets 的 Fluent ToolTip 是另一套组件（ToolTipFilter），
+    #     本程序没装 filter，用的就是 Qt 原生 QToolTip。
+    #
+    # 可靠做法：直接改 QApplication 的 palette。Qt 原生 tooltip 读
+    # ToolTipBase（背景）与 ToolTipText（文字），不吃样式表、也不吃
+    # qfluentwidgets 主题，两套主题下都稳定白底黑字。
     app.setStyleSheet(
         "QToolTip { color:#1b1f26; background-color:#ffffff;"
         " border:1px solid #c8cdd6; padding:4px 6px; }")
+    try:
+        from PySide6.QtGui import QPalette, QColor
+        pal = app.palette()
+        pal.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+        pal.setColor(QPalette.ToolTipText, QColor("#1b1f26"))
+        # ToolTip 窗口用 Window/WindowText 画边框与文字，一并钉稳
+        pal.setColor(QPalette.Window, QColor("#ffffff"))
+        pal.setColor(QPalette.WindowText, QColor("#1b1f26"))
+        app.setPalette(pal)
+    except Exception:
+        pass
 
 
 def _repaint_all():

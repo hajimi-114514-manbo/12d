@@ -1832,30 +1832,75 @@ def extract_audio(path):
 
 
 def mix_audio(proj, sr=44100):
-    """整工程混音 -> int16 ndarray（时长=project_duration）。无音频返回 None。"""
+    """整工程混音 -> int16 ndarray（时长=project_duration）。无音频返回 None。
+
+    **每个 clip 只取它自己那一段**（v3.6.1 修 BGM 串音）：
+      · 起点 = 素材的 src_in（被 trim 掉的头不要）
+      · 长度 = clip 的 dur（乘 speed 换算成素材时长）
+    早先的实现直接把整条素材塞进 buf，导致「3 秒片段用了 4 分钟的歌 ->
+    后面一直在响」，相邻/重叠片段也互相串音。
+    """
     dur = V.project_duration(proj)
     if dur <= 0:
         return None
-    buf = np.zeros(int(dur * sr) + sr // 2, np.int16)
+    total = int(dur * sr) + sr // 2
+    buf = np.zeros(total, np.int16)
     any_a = False
-    for tr in proj["tracks"]:
-        for c in tr["clips"]:
-            kind = c["source"]["kind"]
+    for tr in proj.get("tracks", []):
+        if tr.get("hidden"):          # 隐藏轨不参与混音（与画面一致）
+            continue
+        for c in (tr.get("clips") or []):
+            src = c.get("source") or {}
+            kind = src.get("kind")
             if kind in ("puppet", "image"):
                 continue
-            samples, s2 = extract_audio(c["source"]["path"])
-            if samples is None:
+            path = src.get("path")
+            if not path or str(path).startswith("color:"):
+                continue
+            samples, s2 = extract_audio(path)
+            if samples is None or not len(samples):
                 continue          # 素材没声音轨，正常
-            if s2 != sr:
-                k = sr / s2
+            # 先统一采样率
+            if s2 != sr and s2 > 0:
+                k = sr / float(s2)
                 idx = (np.arange(int(len(samples) * k)) / k).astype(np.int32)
                 idx = np.clip(idx, 0, len(samples) - 1)
                 samples = samples[idx]
-            at = int(round((c["start"] - c["src_in"]) * sr))
-            if at >= 0:
-                _place(buf, samples, at)
-            else:                        # 素材头已被 trim 掉
-                _place(buf, samples[-at:], 0)
+
+            # ---- 关键：按 clip 语义切片 ----
+            speed = float(c.get("speed") or 1.0)
+            if speed <= 0:
+                speed = 1.0
+            clip_dur = float(c.get("dur") or 0.0)
+            src_in = max(0.0, float(c.get("src_in") or 0.0))
+            # 素材内起点（秒）-> 采样索引
+            s0 = int(round(src_in * sr))
+            s0 = max(0, min(s0, len(samples)))
+            # 该 clip 需要的素材长度（speed>1 则消耗更多素材）
+            need = int(round(clip_dur * sr * speed))
+            s1 = s0 + need
+            seg = samples[s0:s1]
+            if not len(seg):
+                continue
+            if speed != 1.0:
+                # 变速：重采样到 clip_dur 的采样数
+                want = int(round(clip_dur * sr))
+                if want <= 0:
+                    continue
+                idx2 = (np.arange(want) * (len(seg) / float(want))
+                        ).astype(np.int32)
+                idx2 = np.clip(idx2, 0, len(seg) - 1)
+                seg = seg[idx2]
+
+            # ---- 放到时间轴对应位置，越界安全截断 ----
+            at = int(round(float(c.get("start") or 0.0) * sr))
+            if at < 0:
+                seg = seg[-at:]
+                at = 0
+            if at >= total or not len(seg):
+                continue
+            take = min(len(seg), total - at)
+            _place(buf, seg[:take], at)
             any_a = True
     return buf if any_a and np.any(buf) else None
 
