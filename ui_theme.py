@@ -27,7 +27,7 @@ import json
 import os
 
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QProxyStyle
 
 import qfluentwidgets as qw
 from qfluentwidgets import Theme, setTheme
@@ -294,6 +294,7 @@ def apply(app=None):
     global _mode
     _mode = load_mode()
     _set_qt_theme()
+    install_tooltip_style()      # 必须在 setTheme 之后（style 会被主题重置）
     _apply_global_qss(app)
     for fn in list(_reloaders):
         try:
@@ -311,6 +312,7 @@ def set_mode(m, app=None, save=True):
     if save:
         save_mode(m)
     _set_qt_theme()
+    install_tooltip_style()      # 切主题后 style 可能被重置，重装一次
     _apply_global_qss(app)
     for fn in list(_reloaders):
         try:
@@ -354,6 +356,91 @@ def _reapply_library_sheets():
                         o.repaint()
                     except Exception:
                         pass
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- tooltip 绘制
+class _ToolTipStyle(QProxyStyle):
+    """只接管 QToolTip 的绘制，其余全交回系统 style。
+
+    为什么需要它：真 App 用 windows11 原生 style，该 style 用系统主题画
+    tooltip，**QSS 与 QPalette 都会被忽略**（实测两次改动都无效）。
+    用 ProxyStyle 在 drawControl 里自绘 tooltip 是唯一可靠路径。
+    """
+
+    def drawControl(self, element, opt, painter, widget=None):
+        try:
+            from PySide6.QtWidgets import QStyle
+            if element == QStyle.ControlElement.CE_ToolTipLabel:
+                self._draw_tooltip(opt, painter)
+                return
+        except Exception:
+            pass
+        super().drawControl(element, opt, painter, widget)
+
+    @staticmethod
+    def _draw_tooltip(opt, painter):
+        from PySide6.QtGui import QPainter, QColor, QPainterPath, QPen
+        from PySide6.QtCore import Qt, QRectF
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        r = QRectF(opt.rect).adjusted(0.5, 0.5, -0.5, -0.5)
+        path = QPainterPath()
+        path.addRoundedRect(r, 6.0, 6.0)
+        # 白底 + 淡灰描边（用户要求：全部白底黑字）
+        painter.fillPath(path, QColor("#ffffff"))
+        painter.setPen(QPen(QColor("#c8ccd6"), 1.0))
+        painter.drawPath(path)
+        # 文字：深色，留内边距
+        painter.setPen(QColor("#1b1f26"))
+        f = painter.font()
+        f.setPixelSize(12)
+        painter.setFont(f)
+        txt = opt.text or ""
+        body = QRectF(r).adjusted(8.0, 4.0, -8.0, -4.0)
+        painter.drawText(body,
+                         int(Qt.AlignmentFlag.AlignLeft
+                             | Qt.AlignmentFlag.AlignVCenter),
+                         txt)
+        painter.restore()
+
+
+_style_installed = [False]
+
+
+def install_tooltip_style():
+    """把 QProxyStyle 装到 app 上（只装一次，且不套娃）。
+
+    坑：不能拿 app.style() 当 base —— 若它已经是我们的 proxy，
+    再包一层会让 objectName 变空、style 行为异常（实测 QCommonStyle）。
+    正确做法：显式记录 system style 的类名，每次都从它重建。
+    """
+    if _style_installed[0]:
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    try:
+        from PySide6.QtWidgets import QStyleFactory
+        cur = app.style()
+        # 若已经是 proxy，取它内部的原生 style 名；否则记当前名
+        name = ""
+        try:
+            name = cur.objectName() or ""
+        except Exception:
+            name = ""
+        if not name:
+            # proxy 套娃的情况：用 Windows 默认原生 style
+            for cand in ("windows11", "windowsvista", "fusion"):
+                if QStyleFactory.create(cand) is not None:
+                    name = cand
+                    break
+        base = QStyleFactory.create(name) if name else None
+        if base is None:
+            base = cur
+        app.setStyle(_ToolTipStyle(base))
+        _style_installed[0] = True
     except Exception:
         pass
 
