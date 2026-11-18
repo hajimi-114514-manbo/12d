@@ -38,9 +38,13 @@ ROLE_INFO = [
     ("umiri", "八幡海铃"),
     ("nyamu", "祐天寺若麦"),
     ("mana", "纯田真奈"),
+    ("lib", "其他"),          # 未定角色的模型（如其他企划的改模）
 ]
 _ROLE_NAME = dict(ROLE_INFO)
 _ROLE_ORDER = {s: i for i, (s, _) in enumerate(ROLE_INFO)}
+# 「其他」永远排最后（模型数可能很多，但优先级最低）
+if "lib" in _ROLE_ORDER:
+    _ROLE_ORDER["lib"] = 999
 
 # ---- 改模作者登记 ----------------------------------------------------------
 # 键 = 模型目录名（figure/<角色>/ 下那一层），值 = 作者名。
@@ -316,13 +320,29 @@ def thumb_path(m):
         p = os.path.join(d, n)
         if os.path.isfile(p):
             return p
-    # 改模包常见结构：模型根下有 live2d/chara/... 图集
+    # 改模包常见结构 ①：live2d/chara/<编号角色>/texture_*.png
     l2d = os.path.join(d, "live2d")
     if os.path.isdir(l2d):
         for dp, dn, fn in os.walk(l2d):
             for f in sorted(fn):
                 if f.lower().endswith((".png", ".webp")) and "texture" in f.lower():
                     return os.path.join(dp, f)
+    # 改模包常见结构 ②：data/textures/texture_*.png（紫铜Kris 部分模型）
+    for sub in ("data", "textures"):
+        dd = os.path.join(d, sub)
+        if os.path.isdir(dd):
+            for dp, dn, fn in os.walk(dd):
+                for f in sorted(fn):
+                    if f.lower().endswith((".png", ".webp")) and "texture" in f.lower():
+                        return os.path.join(dp, f)
+    # 兜底：模型目录下任意一层找 texture_*.png
+    for dp, dn, fn in os.walk(d):
+        if os.path.basename(dp).startswith("."):
+            continue
+        for f in sorted(fn):
+            if f.lower().startswith("texture") and f.lower().endswith(
+                    (".png", ".webp")):
+                return os.path.join(dp, f)
     # 退到图集
     ch = os.path.join(d, ".chara")
     if os.path.isdir(ch):
