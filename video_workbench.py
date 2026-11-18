@@ -42,6 +42,7 @@ import video_export as VE
 import ui_theme as TH
 import audio_library as AL
 import character_library as CL
+import model_thumb as MT
 from stage_view import StageView
 from script_editor import ScriptEditor
 

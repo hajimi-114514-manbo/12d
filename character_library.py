@@ -300,12 +300,18 @@ def display_name(m):
 def thumb_path(m):
     """缩略图路径（找不到返回 ""）。
 
-    优先级：模型目录自带的「预览图.*」> 常见缩略图名 > Cubism2 图集
-    （.chara/texture_00）> live2d 子目录里的图集。
+    优先级：
+      1. **_thumb.png** —— L2D 实时渲染后落盘的合成图（最真实，用户要这个）
+      2. 模型目录自带的「预览图.*」等现成合成图
+      3. Cubism2 图集（.chara/texture_00）—— 散件图，仅作最后兜底
     """
     d = (m or {}).get("_dir_abs") or model_path(m)
     if not d or not os.path.isdir(d):
         return ""
+    # 渲染产物优先
+    t = os.path.join(d, "_thumb.png")
+    if os.path.isfile(t):
+        return t
     for n in _PREVIEW_NAMES:
         p = os.path.join(d, n)
         if os.path.isfile(p):
@@ -344,3 +350,31 @@ def stats():
     return {"models": len(all_), "roles": len(roles_),
             "with_author": with_author,
             "library": AP.ensure_library(scan=False) or ""}
+
+
+def needs_render(m):
+    """该模型是否需要 L2D 渲染。
+
+    返回 False 的情况（都不该浪费渲染时间）：
+      · 已经有 _thumb.png（渲染过）
+      · 有现成合成预览图（预览图.jpg 等）
+      · **没有 model.json**（空壳目录：原包解压缺失，渲染必然 404）
+      · 目录不存在
+    """
+    d = (m or {}).get("_dir_abs") or model_path(m)
+    if not d or not os.path.isdir(d):
+        return False
+    if os.path.isfile(os.path.join(d, "_thumb.png")):
+        return False
+    for n in _PREVIEW_NAMES:
+        if os.path.isfile(os.path.join(d, n)):
+            return False
+    # 必须有真实 model.json 才能渲染（空壳目录跳过）
+    if not os.path.isfile(os.path.join(d, "model.json")):
+        return False
+    return True
+
+
+def renderable_models():
+    """真正可渲染的模型（有 model.json 且缺合成图）。"""
+    return [m for m in items() if needs_render(m)]
