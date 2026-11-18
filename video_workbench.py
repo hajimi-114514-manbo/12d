@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """视频工作台（v3.0.0）：剪映式布局壳。
 
-    ┌─ Pivot：媒体 | 音频 | 文本* | 贴纸* | 特效* | 转场* | 模板*（*=敬请期待）─┐
+    ┌─ Pivot：媒体 | 音频 | 文本* | 滤镜 | 转场* | 模板*（*=敬请期待）─┐
     │ 左素材库      │  中预览 + 播放条            │ 右属性面板        │
     │ [添加素材]    │  ┌────────────────┐        │ 工程：分辨率/帧率  │
     │ 卡片流式网格  │  │   画面 fit      │        │ 时长(只读)        │
@@ -40,6 +40,7 @@ from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
 import video_model as V
 import video_export as VE
 import ui_theme as TH
+import audio_library as AL
 from stage_view import StageView
 from script_editor import ScriptEditor
 
@@ -161,6 +162,82 @@ class _AssetCard(CardWidget):
     def mouseDoubleClickEvent(self, ev):
         if self.on_add:
             self.on_add(self.source)
+        super().mouseDoubleClickEvent(ev)
+
+
+class _AudioCard(CardWidget):
+    """素材库音频卡片：名称 + 时长 + 试听按钮；双击上轨。
+
+    用户要求「直接引用包中的，供用户试听和拖入时间轴」：
+      · 卡片数据来自 audio_library（读 asset_index.json），不复制文件；
+      · 单击 ▶ 原地试听（再点停止），不打断时间轴播放；
+      · 双击 / 点「+」把这条音频作为 source 加到音频轨。
+    """
+
+    def __init__(self, item, on_add=None, on_preview=None, parent=None):
+        super().__init__(parent)
+        self.item = item
+        self.on_add = on_add
+        self.on_preview = on_preview
+        self.setFixedSize(158, 76)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(2)
+
+        row = QHBoxLayout()
+        row.setSpacing(4)
+        nm = BodyLabel(str(item.get("name") or "")[:16], self)
+        nm.setStyleSheet("color:%s;" % TH.t("text"))
+        f = nm.font()
+        f.setPixelSize(11)
+        nm.setFont(f)
+        nm.setToolTip(str(item.get("file") or ""))
+        row.addWidget(nm, 1)
+        self.btn_play = ToolButton(self)
+        self.btn_play.setIcon(FluentIcon.PLAY.icon())
+        self.btn_play.setFixedSize(24, 22)
+        self.btn_play.setToolTip("试听")
+        self.btn_play.clicked.connect(self._preview)
+        row.addWidget(self.btn_play)
+        lay.addLayout(row)
+
+        # 第二行：时长 + 类型徽标 + 上轨按钮
+        row2 = QHBoxLayout()
+        row2.setSpacing(4)
+        dur = float(item.get("dur") or 0.0)
+        d = CaptionLabel(fmt_time(dur) if dur > 0 else "—", self)
+        d.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        row2.addWidget(d)
+        kind = "BGM" if item.get("kind") == "bgm" else "SFX"
+        k = CaptionLabel(kind, self)
+        k.setStyleSheet("color:%s;" % TH.t("accent"))
+        row2.addWidget(k)
+        row2.addStretch(1)
+        btn_add = ToolButton(self)
+        btn_add.setIcon(FluentIcon.ADD.icon())
+        btn_add.setFixedSize(24, 22)
+        btn_add.setToolTip("加入音频轨")
+        btn_add.clicked.connect(self._add)
+        row2.addWidget(btn_add)
+        lay.addLayout(row2)
+
+    def _preview(self):
+        if self.on_preview:
+            self.on_preview(self)
+
+    def _add(self):
+        if self.on_add:
+            self.on_add(self)
+
+    def set_playing(self, playing):
+        """试听状态换个图标，用户能看出哪条在响。"""
+        self.btn_play.setIcon(
+            (FluentIcon.PAUSE if playing else FluentIcon.PLAY).icon())
+
+    def mouseDoubleClickEvent(self, ev):
+        if self.on_add:
+            self.on_add(self)
         super().mouseDoubleClickEvent(ev)
 
 
@@ -439,6 +516,9 @@ class VideoWorkbench(QWidget):
         self._playing = False
         self._tick_busy = False
         self._loading = False       # spin 回填防回环
+        self._audio_player = None   # 素材库试听播放器（QMediaPlayer，懒创建）
+        self._audio_out = None      # QAudioOutput
+        self._previewing = None     # 正在试听的 _AudioCard（停止时复位图标）
 
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.PreciseTimer)
@@ -460,9 +540,10 @@ class VideoWorkbench(QWidget):
         self.setStyleSheet(
             "QWidget#videoWorkbenchRoot{background:%s;}" % TH.t("window_bg"))
         self.pivot = Pivot(self)
+        # Pivot 页签：去掉「贴纸」（用户要求），「特效」改为「滤镜」。
         for key, text in [("media", "媒体"), ("audio", "音频"),
-                          ("text", "文本"), ("sticker", "贴纸"),
-                          ("effect", "特效"), ("transition", "转场"),
+                          ("text", "文本"),
+                          ("filter", "滤镜"), ("transition", "转场"),
                           ("template", "模板")]:
             self.pivot.addItem(key, text)
         self.pivot.setCurrentItem("media")
@@ -1125,10 +1206,16 @@ class VideoWorkbench(QWidget):
             self.asset_flow.addWidget(self._runtime_card)
             self.asset_empty.setVisible(False)
             return
+        if filt == "audio":
+            # 音频页 = 素材库音频（用户要求「直接引用包中的，供试听和拖入」）
+            self._rebuild_audio_cards()
+            return
+        if filt == "filter":
+            # 滤镜页：列出可用的画面滤镜（此前「特效」页是空的）
+            self._rebuild_filter_cards()
+            return
         for src in self.assets:
             is_audio = src["kind"] == "audio"
-            if filt == "audio" and not is_audio:
-                continue
             if filt == "media" and is_audio:
                 continue
             if filt not in ("audio", "media"):
@@ -1141,6 +1228,197 @@ class VideoWorkbench(QWidget):
         self.asset_empty.setVisible(
             not any((self.pivot.currentItem() == "media") == (s["kind"] != "audio")
                     for s in self.assets))
+
+    # ---------- 音频页：素材库音频试听 + 上轨 ----------
+    def _rebuild_audio_cards(self):
+        """渲染素材库音频卡片（bgm + sfx，共 320 条上下）。
+
+        条目来自 audio_library（读 asset_index.json），文件留在素材库里
+        被引用，不复制 —— 用户要求「直接引用包中的」。
+        """
+        items = AL.items()
+        if not items:
+            self.asset_empty.setText(
+                "素材库里没有音频\n（确认素材库位置：资产管理里可见）")
+            self.asset_empty.setVisible(True)
+            return
+        for it in items:
+            card = _AudioCard(it, on_add=self._audio_item_to_timeline,
+                              on_preview=self._toggle_audio_preview,
+                              parent=self.asset_host)
+            self.asset_flow.addWidget(card)
+        self.asset_empty.setVisible(False)
+
+    def _ensure_audio_player(self):
+        """懒建 QMediaPlayer。QtMultimedia 缺失时返回 None（不影响上轨）。"""
+        if self._audio_player is not None:
+            return self._audio_player
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+            from PySide6.QtCore import QUrl
+            p = QMediaPlayer(self)
+            out = QAudioOutput(self)
+            out.setVolume(0.8)
+            p.setAudioOutput(out)
+            p.playbackStateChanged.connect(self._on_preview_state)
+            self._audio_player = p
+            self._audio_out = out
+            return p
+        except Exception:
+            return None
+
+    def _on_preview_state(self, st):
+        """播放结束/停止时把卡片图标复原。"""
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer
+            if st == QMediaPlayer.PlaybackState.StoppedState:
+                if self._previewing is not None:
+                    self._previewing.set_playing(False)
+                    self._previewing = None
+        except Exception:
+            pass
+
+    def _toggle_audio_preview(self, card):
+        """试听：点同一条=停止，点别的=切过去。"""
+        pl = self._ensure_audio_player()
+        if pl is None:
+            InfoBar.warning("无法试听",
+                            "缺少 QtMultimedia 组件，但仍可加入时间轴。",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        from PySide6.QtCore import QUrl
+        if self._previewing is card:
+            pl.stop()
+            card.set_playing(False)
+            self._previewing = None
+            return
+        if self._previewing is not None:
+            try:
+                self._previewing.set_playing(False)
+            except Exception:
+                pass
+        path = AL.audio_path(card.item)
+        if not path or not os.path.isfile(path):
+            InfoBar.warning("试听失败", "音频文件不在素材库里：%s" % card.item,
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        pl.setSource(QUrl.fromLocalFile(path))
+        pl.play()
+        card.set_playing(True)
+        self._previewing = card
+
+    def _stop_audio_preview(self):
+        if self._audio_player is not None:
+            try:
+                self._audio_player.stop()
+            except Exception:
+                pass
+        if self._previewing is not None:
+            try:
+                self._previewing.set_playing(False)
+            except Exception:
+                pass
+            self._previewing = None
+
+    def _audio_item_to_timeline(self, card):
+        """把素材库音频作为 source 加到音频轨（引用素材库原文件）。"""
+        it = card.item
+        path = AL.audio_path(it)
+        if not path or not os.path.isfile(path):
+            InfoBar.warning("加入失败",
+                            "音频文件不在素材库里，请检查素材库位置。",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        dur = float(it.get("dur") or 0.0)
+        try:
+            src = V.new_source("audio", path, src_dur=dur)
+        except Exception as e:
+            InfoBar.warning("加入失败", str(e), parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            return
+        # 记下它来自素材库，导出时可直接复用相对路径
+        try:
+            src["lib_file"] = it.get("file")
+            src["lib_name"] = it.get("name")
+        except Exception:
+            pass
+        was = self._asset_tab
+        self._add_asset_to_timeline(src)
+        self._asset_tab = was
+
+    # ---------- 滤镜页 ----------
+    def _rebuild_filter_cards(self):
+        """滤镜页：列出画面滤镜预设（点卡片=应用到选中 clip / 整片）。
+
+        滤镜以 setTransform 参数形式存 clip["filter"]，导出器负责写成
+        WebGAL 的 setTransform 行；预览侧走 video_export 的合成。
+        """
+        presets = self._filter_presets()
+        for name, desc, fn in presets:
+            card = _TemplateCard(name, desc, fn, self.asset_host)
+            self.asset_flow.addWidget(card)
+        self.asset_empty.setVisible(False)
+
+    def _filter_presets(self):
+        """滤镜预设表：(名字, 说明, 应用回调)。"""
+        return [
+            ("原片", "不做任何处理", lambda: self._apply_filter(None)),
+            ("黄昏暖", "偏暖 + 略降饱和", lambda: self._apply_filter(
+                {"brightness": 0.95, "contrast": 0.92, "saturation": 0.85,
+                 "colorRed": 255, "colorGreen": 205, "colorBlue": 171})),
+            ("雨夜冷", "偏冷 + 提对比", lambda: self._apply_filter(
+                {"brightness": 0.85, "contrast": 1.12, "saturation": 0.8,
+                 "colorRed": 170, "colorGreen": 190, "colorBlue": 255})),
+            ("褪色", "低饱和旧照片感", lambda: self._apply_filter(
+                {"brightness": 0.98, "contrast": 0.95, "saturation": 0.45,
+                 "colorRed": 240, "colorGreen": 235, "colorBlue": 225})),
+            ("高反差黑白", "去色 + 强对比", lambda: self._apply_filter(
+                {"brightness": 0.95, "contrast": 1.35, "saturation": 0.0})),
+            ("柔光", "提亮 + 低对比", lambda: self._apply_filter(
+                {"brightness": 1.12, "contrast": 0.85, "saturation": 1.0,
+                 "bloom": 0.8, "bloomBrightness": 0.85, "bloomBlur": 12})),
+        ]
+
+    def _apply_filter(self, filt):
+        """把滤镜写到目标 clip（有选中写选中，否则整幕所有可见 clip）。"""
+        targets = []
+        cid = getattr(self, "_sel_clip", None)
+        if cid:
+            # find_clip 返回 (track, clip) 二元组，取 clip；取不到就不加
+            try:
+                _tr, _c = V.find_clip(self.proj, cid)
+            except Exception:
+                _tr, _c = None, None
+            if isinstance(_c, dict):
+                targets = [_c]
+        if not targets:
+            for tr in self.proj.get("tracks", []):
+                if tr.get("kind") != "video" or tr.get("hidden"):
+                    continue
+                for c in (tr.get("clips") or []):
+                    targets.append(c)
+        if not targets:
+            InfoBar.warning("没有可应用的对象",
+                            "先选中一个片段，或让时间轴上有画面片段。",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=2500)
+            return
+        for c in targets:
+            if filt is None:
+                c.pop("filter", None)
+            else:
+                c["filter"] = dict(filt)
+        self.push_history()
+        self.timeline.refresh()
+        self._after_edit()
+        InfoBar.success(
+            "滤镜已应用",
+            ("清除滤镜" if filt is None
+             else "应用到 %d 个片段" % len(targets)),
+            parent=self, position=InfoBarPosition.TOP, duration=2000)
 
     # ---------- A4 模板页（三张卡片背后的动作） ----------
     @staticmethod

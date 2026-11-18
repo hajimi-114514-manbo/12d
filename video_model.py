@@ -1304,6 +1304,52 @@ def _sanitize_preset(raw, ids_fn):
     return raw if _motion_value_ok(raw, ids) else None
 
 
+# 滤镜（原「特效」页）：只收 setTransform 那套数值键，范围按引擎语义夹紧。
+# 未知键一律丢弃（导出器不认识，留着只会让工程文件漂移）。
+_FILTER_KEYS = {
+    # key: (下限, 上限)  —— brightness/saturation 等是倍率，0.0~3.0 足够覆盖
+    "brightness": (0.0, 3.0),
+    "contrast": (0.0, 3.0),
+    "saturation": (0.0, 3.0),
+    "gamma": (0.1, 3.0),
+    "bloom": (0.0, 2.0),
+    "bloomBrightness": (0.0, 2.0),
+    "bloomBlur": (0.0, 100.0),
+    "colorRed": (0.0, 255.0),
+    "colorGreen": (0.0, 255.0),
+    "colorBlue": (0.0, 255.0),
+}
+_FILTER_BOOL_KEYS = ("glitchFilm", "rgbFilm", "oldFilm", "dotFilm")
+
+
+def _sanitize_filter(raw):
+    """滤镜参数校验：数值键夹到合法区间，布尔键只收真布尔。
+
+    返回 None 表示"没有有效滤镜"（调用方据此不写 filter 键）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for k, (lo, hi) in _FILTER_KEYS.items():
+        if k not in raw:
+            continue
+        v = raw.get(k)
+        if isinstance(v, bool):
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv != fv:            # NaN
+            continue
+        out[k] = round(max(lo, min(hi, fv)), 4)
+    for k in _FILTER_BOOL_KEYS:
+        v = raw.get(k)
+        if isinstance(v, bool) and v:
+            out[k] = True
+    return out or None
+
+
 def _sanitize_clip(c, seen_clip_ids):
     if not isinstance(c, dict):
         return None
@@ -1321,15 +1367,26 @@ def _sanitize_clip(c, seen_clip_ids):
     if dur < MIN_DUR - EPS:
         return None
     src_in = max(0.0, _num(c.get("src_in"), 0.0))
+    _src_out = {"kind": src["kind"], "path": path,
+                "w": int(_num(src.get("w"), 0)),
+                "h": int(_num(src.get("h"), 0)),
+                "fps": _num(src.get("fps"), 0.0),
+                "src_dur": max(0.0, _num(src.get("src_dur"), 0.0))}
+    # 素材库引用标记透传：音频页直接引用包内文件时记下相对路径，
+    # 导出 WebGAL 时可直接写回素材库相对路径，省一次拷贝。
+    for _k in ("lib_file", "lib_name"):
+        _v = src.get(_k)
+        if isinstance(_v, str) and _v.strip():
+            _src_out[_k] = _v.strip()
     out = {"id": cid,
-           "source": {"kind": src["kind"], "path": path,
-                      "w": int(_num(src.get("w"), 0)),
-                      "h": int(_num(src.get("h"), 0)),
-                      "fps": _num(src.get("fps"), 0.0),
-                      "src_dur": max(0.0, _num(src.get("src_dur"), 0.0))},
+           "source": _src_out,
            "start": round(start, 3), "src_in": round(src_in, 3),
            "dur": round(dur, 3), "speed": 1.0,
            "layout": _sanitize_layout(c.get("layout"))}
+    # 滤镜（「特效」页改名后新增）：setTransform 参数的子集，脏值丢键不丢 clip
+    _filt = _sanitize_filter(c.get("filter"))
+    if _filt:
+        out["filter"] = _filt
     # C2：motion / expression 透传（脏值丢键不丢 clip）
     mv = _sanitize_preset(c.get("motion"), _MT.motion_ids)
     ex = _sanitize_preset(c.get("expression"), _MT.expression_ids)
