@@ -1,6 +1,6 @@
 {
-  "version": "3.5.15",
-  "installer_sha256": "bb2426a6034bb99e28625566acd6df5be86fc9f8b108695d9e875b7717708953",
+  "version": "3.6.0",
+  "installer_sha256": "06efaa1fd09498d2a51e6bc2f526b9ff058e67d50aac9d95a9d735c711e1ba25",
   "patches": [
     {
       "from": "3.5.7",
@@ -89,6 +89,14 @@
       "sha256": "08cbbfbc0044c5375e84cd6335d14f85697205d241a17f5a6aa32012277207ac",
       "size": 314633,
       "files": 13
+    },
+    {
+      "from": "3.5.15",
+      "to": "3.6.0",
+      "file": "MuppetStudio-Update-v3.6.0-from-v3.5.15.zip",
+      "sha256": "ab0662a7d46b6480bee4aa179bc2bb1dc959309817f6308c26c4715689d4df35",
+      "size": 262481,
+      "files": 7
     }
   ],
   "notes": "v3.5.3：更新按钮直接拉增量包——version.json 新增 patches 清单，有匹配条目时只下几十~几百 KB 的改动文件（sha256 + 换源交叉校验 + zip slip 防护），退出后自动备份/覆盖/回滚并重启程序；无匹配或校验不符自动回落 420MB 整包（老链路不变）。下完弹「立即重启更新 / 稍后」。"
