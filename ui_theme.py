@@ -26,8 +26,9 @@ import io
 import json
 import os
 
+from PySide6.QtCore import Qt, QObject, QEvent, QTimer
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QProxyStyle
+from PySide6.QtWidgets import QApplication, QProxyStyle, QWidget
 
 import qfluentwidgets as qw
 from qfluentwidgets import Theme, setTheme
@@ -294,8 +295,10 @@ def apply(app=None):
     global _mode
     _mode = load_mode()
     _set_qt_theme()
-    install_tooltip_style()      # 必须在 setTheme 之后（style 会被主题重置）
     _apply_global_qss(app)
+    # 顺序要紧：setStyleSheet 会把 style 换掉（Qt 内部包一层
+    # QStyleSheetStyle），所以必须在设完 QSS **之后**再装 proxy
+    install_tooltip_watcher(app)
     for fn in list(_reloaders):
         try:
             fn()
@@ -312,8 +315,8 @@ def set_mode(m, app=None, save=True):
     if save:
         save_mode(m)
     _set_qt_theme()
-    install_tooltip_style()      # 切主题后 style 可能被重置，重装一次
     _apply_global_qss(app)
+    install_tooltip_style()      # QSS 之后装（见 apply 里的说明）
     for fn in list(_reloaders):
         try:
             fn()
@@ -416,9 +419,17 @@ def install_tooltip_style():
     再包一层会让 objectName 变空、style 行为异常（实测 QCommonStyle）。
     正确做法：显式记录 system style 的类名，每次都从它重建。
     """
-    if _style_installed[0]:
-        return
     app = QApplication.instance()
+    if app is None:
+        return
+    # 幂等：已经是我们的 proxy 才跳过。不能只看标志位 ——
+    # app.setStyleSheet() 会把 style 换掉，标志位却还是 True。
+    try:
+        if isinstance(app.style(), _ToolTipStyle):
+            _style_installed[0] = True
+            return
+    except Exception:
+        pass
     if app is None:
         return
     try:
@@ -441,6 +452,144 @@ def install_tooltip_style():
             base = cur
         app.setStyle(_ToolTipStyle(base))
         _style_installed[0] = True
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------- 自绘 tooltip
+class _FrostToolTip(QWidget):
+    """白底黑字的 tooltip 小窗口（自绘，不吃 style/QSS/palette）。"""
+
+    def __init__(self, text=""):
+        super().__init__(None,
+                         Qt.ToolTip | Qt.FramelessWindowHint
+                         | Qt.WindowStaysOnTopHint | Qt.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._text = str(text or "")
+        f = self.font()
+        f.setPixelSize(12)
+        self.setFont(f)
+        self._pad_x = 9
+        self._pad_y = 5
+        self._resize_to_text()
+
+    def _resize_to_text(self):
+        fm = self.fontMetrics()
+        lines = self._text.split("\n") or [""]
+        w = max(fm.horizontalAdvance(ln) for ln in lines)
+        h = fm.height() * len(lines)
+        self.resize(int(w) + self._pad_x * 2 + 2,
+                    int(h) + self._pad_y * 2 + 2)
+
+    def setText(self, text):
+        self._text = str(text or "")
+        self._resize_to_text()
+        self.update()
+
+    def paintEvent(self, e):
+        from PySide6.QtGui import QPainter, QColor, QPen
+        from PySide6.QtCore import QRectF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(QColor("#c8ccd6"), 1.0))
+        p.setBrush(QColor("#ffffff"))
+        p.drawRoundedRect(r, 6.0, 6.0)
+        p.setPen(QColor("#1b1f26"))
+        p.drawText(r.adjusted(self._pad_x, self._pad_y,
+                              -self._pad_x, -self._pad_y),
+                   int(Qt.AlignLeft | Qt.AlignVCenter
+                       | Qt.TextWordWrap), self._text)
+        p.end()
+
+
+class _ToolTipWatcher(QObject):
+    """拦截 ToolTip 事件，用 _FrostToolTip 替代 Qt 原生 tooltip。
+
+    只在控件确实有 toolTip() 文本时才接管（没文本的直接放过）。
+    """
+
+    def __init__(self, app):
+        super().__init__(app)
+        self._tip = None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._show)
+        self._pending = None
+        self._app = app
+
+    # ---- 事件过滤 ----
+    def eventFilter(self, obj, e):
+        try:
+            et = e.type()
+            if et == QEvent.ToolTip:
+                # 原生 tooltip 一律吞掉，我们自己画
+                if isinstance(obj, QWidget) and obj.toolTip():
+                    self._pending = obj
+                    self._timer.start(300)
+                return True
+            if et in (QEvent.Leave, QEvent.Hide, QEvent.MouseButtonPress):
+                if obj is self._pending:
+                    self._hide()
+                    self._pending = None
+        except Exception:
+            pass
+        return False
+
+    def _show(self):
+        w = self._pending
+        if w is None:
+            return
+        try:
+            txt = w.toolTip()
+            if not txt:
+                return
+            if self._tip is None:
+                self._tip = _FrostToolTip(txt)
+            else:
+                self._tip.setText(txt)
+            self._tip.adjustSize()
+            # 定位：鼠标下方偏右
+            from PySide6.QtGui import QCursor
+            pos = QCursor.pos()
+            screen = self._app.screenAt(pos) or self._app.primaryScreen()
+            g = screen.availableGeometry() if screen else None
+            x, y = pos.x() + 14, pos.y() + 18
+            if g is not None:
+                if x + self._tip.width() > g.right():
+                    x = pos.x() - self._tip.width() - 8
+                if y + self._tip.height() > g.bottom():
+                    y = pos.y() - self._tip.height() - 8
+            self._tip.move(x, y)
+            self._tip.show()
+        except Exception:
+            pass
+
+    def _hide(self):
+        self._timer.stop()
+        if self._tip is not None:
+            try:
+                self._tip.hide()
+            except Exception:
+                pass
+
+
+_watcher = [None]
+
+
+def install_tooltip_watcher(app=None):
+    """装全局 tooltip 接管器（幂等）。"""
+    app = app or QApplication.instance()
+    if app is None:
+        return
+    if _watcher[0] is not None:
+        return
+    try:
+        w = _ToolTipWatcher(app)
+        app.installEventFilter(w)
+        _watcher[0] = w
     except Exception:
         pass
 
@@ -476,6 +625,8 @@ def _apply_global_qss(app=None):
         app.setPalette(pal)
     except Exception:
         pass
+    # 兜底：设 QSS 会重置 style，这里再装一次（install 内部有幂等检查）
+    install_tooltip_watcher(app)
 
 
 def _repaint_all():
