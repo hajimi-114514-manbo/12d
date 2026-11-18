@@ -154,20 +154,34 @@
 - `731135920-1-30280`、`78896502-1-30216`、`A1`、`AAAA834900-1-30280`
 - `到第二1`、`夜晚书`、`大雨还在下`
 
-### 立绘 model（313 套 / 12 角色，Live2D 整合包）
+### 立绘 model（399 套 / 12 角色，Live2D 整合包）
 
-- **sakiko**（丰川祥子） — 84 套服装（casual-2023、【丰川祥子】-HEV防护服、【丰川祥子】-HEV防护服(1)、【丰川祥子】-HEV防护服_20241224_124347 等）
-- **tomori**（高松灯） — 76 套服装（2024_furisode、live2d立绘改模-病号服、【高松灯】-HEV防护服、【高松灯】-品牌联动服装 等）
-- **anon**（千早爱音） — 70 套服装（Harmony_Parade_爱音、birthday_2024_ssr、jo7神父_爱音、【千早爱音】-HEV防护服 等）
-- **taki**（椎名立希） — 20 套服装（arbeit、【椎名立希】-品牌联动服装、【椎名立希】-品牌联动服装(1)、【椎名立希】040_school_summer-羽丘夏季_rip 等）
-- **soyo**（长崎素世） — 18 套服装（birthday_2024_ssr、【长崎素世】039_school_winter-睡衣、【长崎素世】039_school_winter-睡衣(1)、【长崎素世】Mujica演出服 等）
-- **uika**（三角初华） — 12 套服装（[live2d]末日保护者、casual-2023、wego初华、【三角初华】337_school_胜利队-2023_rip 等）
-- **umiri**（八幡海铃） — 11 套服装（casual-2023、【八幡海铃】umiri_339_睡衣、【八幡海铃】umiri_339_睡衣(1)、【八幡海铃】umiri_339_胜利队_rip 等）
-- **mutsumi**（若叶睦） — 8 套服装（casual-2023、【若叶睦】-森美奈美服装、【若叶睦】338_school_winter-睡衣、【若叶睦】明日方舟联动 等）
-- **lib**（其他） — 6 套服装（[live2d]末日保护者、live2d立绘改模-病号服、凤川祥、废弃卡面_摩卡 等）
-- **rana**（要乐奈） — 5 套服装（birthday_2024_ssr、【要乐奈】-品牌联动服装、【要乐奈】-品牌联动服装(1)、【要乐奈】宵崎奏同款服装 等）
-- **nyamu**（祐天寺若麦） — 2 套服装（casual-2023、喵梦亲背心牛仔裤-明逸制作）
-- **mana**（纯田真奈） — 1 套服装（sumimi）
+> **本库分两类：官方原版（97 套）与改模（302 套）。**写脚本**优先用官方原版**——名字干净、无重名副本、经过验证；改模只在剧情明确需要特殊服装时再用。
+
+#### 官方原版（推荐优先使用，名字可直接照抄）
+
+- **tomori**（高松灯） — 16 套：`2024_furisode`、`birthday_2024_ssr`、`casual-2023`、`collabo_a_ur`、`collabo_d_3_ur`、`dream_festival_3_ur`、`live_default`、`live_event_235_ur`、`live_event_240_ssr`、`live_event_250_ur`、`live_event_286_ur`、`live_event_289_ur`、`live_event_297_ur`、`live_sr_01`、`school_summer-2023`、`school_winter-2023`
+- **taki**（椎名立希） — 16 套：`arbeit`、`birthday_2024_ssr`、`casual-2023`、`collabo_a_ur`、`dream_festival_3_ur`、`event_277_story_01`、`live_default`、`live_event_235_sr`、`live_event_240_ur`、`live_event_250_ssr`、`live_event_277_ur`、`live_event_286_r`、`live_event_297_ur`、`live_sr_01`、`school_summer-2023`、`school_winter-2023`
+- **anon**（千早爱音） — 15 套：`birthday_2024_ssr`、`casual-2023`、`collabo_a_ur`、`dream_festival_3_ur`、`live_default`、`live_event_235_ur`、`live_event_240_sr`、`live_event_250_r`、`live_event_253_ur`、`live_event_277_sr`、`live_event_286_sr`、`live_event_297_sr`、`live_sr_01`、`school_summer-2023`、`school_winter-2023`
+- **soyo**（长崎素世） — 14 套：`birthday_2024_ssr`、`casual-2023`、`collabo_a_ur`、`dream_festival_3_ur`、`live_default`、`live_event_235_ur`、`live_event_240_r`、`live_event_250_ur`、`live_event_286_ssr`、`live_event_289_ur`、`live_event_297_ur`、`live_sr_01`、`school_summer-2023`、`school_winter-2023`
+- **rana**（要乐奈） — 14 套：`birthday_2024_ssr`、`casual-2023`、`collabo_a_ur`、`dream_festival_3_ur`、`live_default`、`live_event_235_sr`、`live_event_240_ur`、`live_event_250_sr`、`live_event_286_ur`、`live_event_287_ssr`、`live_event_297_sr`、`live_sr_01`、`school_summer-2023`、`school_winter-2023`
+- **uika**（三角初华） — 6 套：`casual-2023`、`casual-2023_nocap`、`event_297_story_01`、`school_summer-2023`、`school_winter-2023`、`sumimi`
+- **sakiko**（丰川祥子） — 5 套：`casual-2023`、`event_297_story_01`、`jh_school_winter-2023`、`school_summer-2023`、`school_winter-2023`
+- **mutsumi**（若叶睦） — 4 套：`casual-2023`、`event_297_story_01`、`school_summer-2023`、`school_winter-2023`
+- **umiri**（八幡海铃） — 4 套：`casual-2023`、`event_297_story_01`、`school_summer-2023`、`school_winter-2023`
+- **nyamu**（祐天寺若麦） — 2 套：`casual-2023`、`event_297_story_01`
+- **mana**（纯田真奈） — 1 套：`sumimi`
+
+#### 改模（按改模作者分组，仅在需要特殊服装时使用）
+
+- **夜皇依月**（共 194 套）：tomori 56套、anon 50套、sakiko 49套、taki 12套、soyo 6套、uika 6套、umiri 6套、rana 4套、mutsumi 3套、lib 2套
+- **北极暖水港**（共 59 套）：sakiko 22套、tomori 9套、anon 7套、soyo 7套、taki 4套、umiri 4套、mutsumi 3套、uika 2套、lib 1套
+- **紫铜Kris**（共 21 套）：anon 12套、sakiko 3套、lib 2套、tomori 2套、soyo 1套、uika 1套
+- **未署名**（共 20 套）：sakiko 8套、tomori 5套、soyo 3套、taki 3套、mutsumi 1套
+- **冲矢明逸**（共 8 套）：tomori 3套、uika 2套、lib 1套、nyamu 1套、sakiko 1套
+
+> 改模完整清单（含每套的中文服装名）见索引文件或 DS ASSETS 查询；**改模目录名常带中文括号和 `(1)` 副本**，照抄时务必逐字复制，别自己规范化。
+
 
 > **动作/表情键名跨角色通用**：下面这 2224 个键名可给**任何**角色播（`taki/angry01` 也能给 anon 用）；键名前缀只是来源分组，不代表只能该角色用。完整 664+232 条见附件 `motion_keys.json`，日常写脚本用推荐 21 条即可。
 
