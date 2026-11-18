@@ -295,6 +295,114 @@ class _AudioGroupCard(CardWidget):
         super().mousePressEvent(e)
 
 
+class _MarqueeLabel(QWidget):
+    """单行文字：放得下就静态显示；放不下且鼠标悬停时横向滚动。
+
+    需求池第3条：「这个改模人信息显示不全，改成鼠标挪上去时文字滚动展示，
+    鼠标移开停止动效」。
+    """
+
+    SPEED = 2          # 每次步进像素
+    INTERVAL = 50      # 步进间隔 ms
+    PAUSE_MS = 900     # 到尾部停一下再回卷
+
+    def __init__(self, text, parent=None):
+        super().__init__(parent)
+        self._text = str(text or "")
+        self._offset = 0
+        self._timer = None
+        self._hover = False
+        self._pause_left = 0
+        f = self.font()
+        f.setPixelSize(10)
+        self.setFont(f)
+        self.setMouseTracking(True)
+        self.setMinimumHeight(16)
+        self.setToolTip(self._text)
+
+    def setText(self, text):
+        self._text = str(text or "")
+        self._offset = 0
+        self.setToolTip(self._text)
+        self.update()
+
+    def text(self):
+        return self._text
+
+    def _text_w(self):
+        fm = self.fontMetrics()
+        return fm.horizontalAdvance(self._text)
+
+    def _needs_scroll(self):
+        return self._text_w() > self.width() - 2
+
+    def enterEvent(self, e):
+        self._hover = True
+        if self._needs_scroll():
+            self._start()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self._stop()
+        self._offset = 0
+        self.update()
+        super().leaveEvent(e)
+
+    def _start(self):
+        if self._timer is None:
+            from PySide6.QtCore import QTimer
+            self._timer = QTimer(self)
+            self._timer.timeout.connect(self._tick)
+        self._pause_left = self.PAUSE_MS
+        self._timer.start(self.INTERVAL)
+
+    def _stop(self):
+        if self._timer is not None:
+            self._timer.stop()
+
+    def _tick(self):
+        if not self._hover:
+            self._stop()
+            return
+        gap = 24                      # 尾部留白，回卷更自然
+        limit = self._text_w() - max(1, self.width() - 2) + gap
+        if limit <= 0:
+            self._stop()
+            return
+        if self._offset >= limit:
+            if self._pause_left > 0:
+                self._pause_left -= self.INTERVAL
+            else:
+                self._offset = 0
+                self._pause_left = self.PAUSE_MS
+        else:
+            self._offset += self.SPEED
+        self.update()
+
+    def resizeEvent(self, e):
+        if not self._needs_scroll():
+            self._stop()
+            self._offset = 0
+        super().resizeEvent(e)
+
+    def paintEvent(self, e):
+        from PySide6.QtGui import QPainter
+        from PySide6.QtCore import Qt as _Qt
+        p = QPainter(self)
+        p.setPen(self.palette().color(self.foregroundRole()))
+        p.setFont(self.font())
+        fm = p.fontMetrics()
+        y = (self.height() + fm.ascent() - fm.descent()) // 2
+        if self._needs_scroll() and self._offset > 0:
+            p.drawText(-self._offset, y, self._text)
+        else:
+            avail = self.width() - 2
+            txt = fm.elidedText(self._text, _Qt.ElideRight, avail)
+            p.drawText(0, y, txt)
+        p.end()
+
+
 class _ModelCard(CardWidget):
     """角色页的单个模型卡：缩略图 + 服装名（作者）+ 上轨。
 
@@ -323,14 +431,11 @@ class _ModelCard(CardWidget):
             self.img.setText(model["slug"][:4])
         lay.addWidget(self.img)
         txt = CL.display_name(model)
-        t = BodyLabel(txt, self)
-        t.setWordWrap(False)
-        t.setStyleSheet("color:%s;" % TH.t("text"))
-        f = t.font()
-        f.setPixelSize(10)
-        t.setFont(f)
-        t.setToolTip(txt)
+        # 需求池第3条：名字太长显示不全 -> 悬停时横向滚动
+        t = _MarqueeLabel(txt, self)
+        t.setStyleSheet("color:%s;background:transparent;" % TH.t("text"))
         lay.addWidget(t)
+        self.name_lbl = t
         self.btn_add = ToolButton(self)
         self.btn_add.setIcon(FluentIcon.ADD.icon())
         self.btn_add.setFixedSize(22, 18)
@@ -628,6 +733,14 @@ class VideoWorkbench(QWidget):
         self._audio_player = None   # 素材库试听播放器（QMediaPlayer，懒创建）
         self._audio_out = None      # QAudioOutput
         self._previewing = None     # 正在试听的 _AudioCard（停止时复位图标）
+        # 预览混音（用户要求「播放视频预览时要有声音」）
+        self._mix_player = None     # 预览音轨播放器
+        self._mix_out = None        # 预览音轨输出
+        self._mix_file = None       # 混音 wav 路径（缓存）
+        self._mix_key = None        # 缓存对应工程指纹
+        self._mix_busy = False      # 后台混音中
+        self._mix_pending = False   # 混音期间被要求播放（完成后自动起播）
+        self._mix_result = None      # 后台混音结果 ("path", fp)
 
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.PreciseTimer)
@@ -1289,7 +1402,107 @@ class VideoWorkbench(QWidget):
         except Exception:
             return None
 
+    def _viewport_y_of(self, widget):
+        """widget 在滚动视口里的相对 Y（滚动条拉了多少就减多少）。"""
+        try:
+            sb = self.asset_scroll.verticalScrollBar()
+            return widget.y() - sb.value()
+        except Exception:
+            return None
+
+    def _find_card_widget(self, pred):
+        """在 asset_flow 里找第一个满足 pred 的卡片 widget。"""
+        try:
+            for i in range(self.asset_flow.count()):
+                it = self.asset_flow.itemAt(i)
+                w = it.widget() if hasattr(it, "widget") else it
+                if w is not None and pred(w):
+                    return w
+        except Exception:
+            pass
+        return None
+
+    def _rebuild_keeping(self, keep_pred):
+        """重建卡片，并让满足 keep_pred 的那个卡片保持在原视口位置。"""
+        from PySide6.QtCore import QTimer
+        w0 = self._find_card_widget(keep_pred)
+        vy = self._viewport_y_of(w0) if w0 is not None else None
+        self._rebuild_asset_cards()
+        if vy is None:
+            return
+
+        def _fix():
+            w1 = self._find_card_widget(keep_pred)
+            if w1 is None:
+                return
+            try:
+                sb = self.asset_scroll.verticalScrollBar()
+                sb.setValue(max(0, w1.y() - vy))
+            except Exception:
+                pass
+
+        QTimer.singleShot(0, _fix)
+        QTimer.singleShot(40, _fix)
+
     def _rebuild_asset_cards(self):
+        """重建左栏卡片。
+
+        重建会清空再添加，FlowLayout 高度瞬时归零又恢复，
+        QScrollArea 会把滚动条重置到顶部（用户抱怨「展开列表就跳回去」）。
+        这里保存重建前的滚动位置，布局稳定后再恢复。
+        """
+        from PySide6.QtCore import QTimer
+        try:
+            _sb = self.asset_scroll.verticalScrollBar()
+            _old_pos = _sb.value()
+        except Exception:
+            _sb = None
+            _old_pos = 0
+
+        # 记住重建前视口顶部是「第几个卡片」—— 展开/收起会改变布局高度，
+        # 单纯记像素值会在新布局里指向别的内容（实测偏到 161）。
+        _anchor_idx = -1
+        _anchor_dy = 0
+        if _sb is not None and _old_pos > 0:
+            try:
+                _y = _old_pos
+                _acc = 0
+                for _i in range(self.asset_flow.count()):
+                    _it = self.asset_flow.itemAt(_i)
+                    _w = _it.widget() if hasattr(_it, "widget") else _it
+                    if _w is None:
+                        continue
+                    _h = _w.height() or 60
+                    if _acc + _h > _y:
+                        _anchor_idx = _i
+                        _anchor_dy = _y - _acc
+                        break
+                    _acc += _h
+            except Exception:
+                _anchor_idx = -1
+
+        self._rebuild_asset_cards_inner()
+
+        if _sb is not None and _old_pos > 0:
+            def _restore():
+                try:
+                    if _anchor_idx >= 0 and _anchor_idx < self.asset_flow.count():
+                        # 按「第 N 个卡片」定位：累加它前面各卡高度
+                        acc = 0
+                        for i in range(_anchor_idx):
+                            it = self.asset_flow.itemAt(i)
+                            w = it.widget() if hasattr(it, "widget") else it
+                            if w is not None:
+                                acc += (w.height() or 60)
+                        _sb.setValue(max(0, acc - _anchor_dy))
+                    else:
+                        _sb.setValue(_old_pos)
+                except Exception:
+                    pass
+            QTimer.singleShot(0, _restore)
+            QTimer.singleShot(40, _restore)
+
+    def _rebuild_asset_cards_inner(self):
         while self.asset_flow.count():
             it = self.asset_flow.takeAt(0)
             # qfluentwidgets FlowLayout.takeAt 返回的就是 widget 本体（非 QLayoutItem）
@@ -1381,9 +1594,15 @@ class VideoWorkbench(QWidget):
         self.asset_empty.setVisible(False)
 
     def _toggle_role(self, slug):
-        """展开/收起某角色（同一时刻只展开一个）。"""
+        """展开/收起某角色（同一时刻只展开一个）。
+
+        重建后要让被点的角色标题停在原位（需求池第2条），
+        否则列表会跳回顶部、用户找不到刚才点的那个角色。
+        """
         self._role_open = None if self._role_open == slug else slug
-        self._rebuild_asset_cards()
+        self._rebuild_keeping(
+            lambda w: (type(w).__name__ == "_RoleHeaderCard"
+                       and getattr(w, "role", {}).get("slug") == slug))
 
     def _model_thumb_pixmap(self, m):
         """模型缩略图 QPixmap（带缓存）。读不到返回 None。"""
@@ -1465,9 +1684,11 @@ class VideoWorkbench(QWidget):
         self.asset_empty.setVisible(False)
 
     def _toggle_audio_group(self, gid):
-        """展开/收起某个音频分组（同一时刻只展开一组）。"""
+        """展开/收起某个音频分组（同一时刻只展开一组），标题保持原位。"""
         self._audio_open = None if self._audio_open == gid else gid
-        self._rebuild_asset_cards()
+        self._rebuild_keeping(
+            lambda w: (type(w).__name__ == "_AudioGroupCard"
+                       and getattr(w, "group", {}).get("id") == gid))
 
     def _ensure_audio_player(self):
         """懒建 QMediaPlayer。QtMultimedia 缺失时返回 None（不影响上轨）。"""
@@ -2413,6 +2634,8 @@ class VideoWorkbench(QWidget):
         self.timeline.set_time(self._t)
         self.render_frame(self._t)
         self._update_transport()
+        # 画面跳转后音频跟上
+        self._sync_mix()
 
     def _seek_relative(self, direction, seconds=False):
         """v3.5.2：←/→ 逐帧走，Shift+←/→ ±1 秒，Home/End 由 seek() 直达。
@@ -2453,17 +2676,161 @@ class VideoWorkbench(QWidget):
             self.btn_play.setIcon(FluentIcon.PAUSE.icon())
             self.timer.setInterval(max(1, int(round(1000.0 / self.proj["fps"]))))
             self.timer.start()
+            # 预览要有声音（用户要求）：准备混音并起播
+            self._ensure_mix_async(then_play=True)
 
     def stop_play(self):
         self._playing = False
         self.timer.stop()
         self.btn_play.setIcon(FluentIcon.PLAY.icon())
+        self._stop_mix()
 
     def _update_transport(self):
         dur = V.project_duration(self.proj)
         self.time_lbl.setText("%s / %s" % (fmt_time(self._t), fmt_time(dur)))
         self.sld_pos.setValue(int(round(self._t / dur * 1000)) if dur > 0 else 0)
         self.dur_lbl.setText("总时长：%s" % fmt_time(dur))
+
+    # ================= 预览声音 =================
+    def _mix_cache_dir(self):
+        d = os.path.join(os.environ.get("TEMP") or "/tmp", "muppet_preview_mix")
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            return (os.environ.get("TEMP") or "/tmp")
+        return d
+
+    def _mix_fingerprint(self):
+        """工程音频指纹：内容不变就不重混（省的每次播放都等）。"""
+        try:
+            import hashlib
+            import json as _json
+            parts = []
+            for tr in self.proj.get("tracks", []):
+                for c in (tr.get("clips") or []):
+                    k = (c.get("source") or {}).get("kind")
+                    if k in ("puppet", "image"):
+                        continue
+                    parts.append((k, (c.get("source") or {}).get("path"),
+                                  round(float(c.get("start") or 0), 3),
+                                  round(float(c.get("src_in") or 0), 3),
+                                  round(float(c.get("dur") or 0), 3)))
+            blob = _json.dumps(parts, sort_keys=True, ensure_ascii=False)
+            return hashlib.md5(blob.encode("utf-8")).hexdigest()
+        except Exception:
+            return None
+
+    def _ensure_mix_async(self, then_play=False):
+        """准备预览音轨（有缓存直接用，否则后台混音）。
+
+        跨线程回调踩过两个坑（都不稳，别再回头）：
+          ① work() 里 QTimer.singleShot(0, done) —— 非主线程创建的 timer
+             不保证被主线程事件循环派发，_mix_busy 永远 True
+          ② 局部 QObject + Signal —— 对象可能被 GC，且依赖事件循环
+        改用**主线程轮询共享变量**，最简单最可靠。
+        """
+        from PySide6.QtCore import QTimer
+        fp = self._mix_fingerprint()
+        if fp is None:
+            return
+        if (self._mix_file and os.path.isfile(self._mix_file)
+                and self._mix_key == fp):
+            if then_play:
+                self._start_mix_playback()
+            return
+        if self._mix_busy:
+            self._mix_pending = self._mix_pending or then_play
+            return
+        self._mix_busy = True
+        self._mix_pending = self._mix_pending or then_play
+        self._mix_result = None            # 后台线程写这里：(path, fp)
+
+        def work():
+            try:
+                import video_export as _VE
+                buf = _VE.mix_audio(self.proj, 44100)
+                if buf is not None and len(buf) > 0:
+                    p = os.path.join(self._mix_cache_dir(), "mix_%s.wav" % fp)
+                    _VE.write_wav(p, buf, 44100)
+                    if os.path.isfile(p) and os.path.getsize(p) > 44:
+                        self._mix_result = (p, fp)
+                        return
+            except Exception:
+                pass
+            self._mix_result = ("", fp)
+
+        import threading
+        threading.Thread(target=work, daemon=True).start()
+
+        # 主线程轮询：每 100ms 看后台是否写完（最多等 120 秒）
+        ticks = {"n": 0}
+
+        def check():
+            ticks["n"] += 1
+            res = getattr(self, "_mix_result", None)
+            if res is None and ticks["n"] < 1200:
+                QTimer.singleShot(100, check)
+                return
+            self._mix_busy = False
+            path, fpr = res if res else ("", fp)
+            if path:
+                self._mix_file = path
+                self._mix_key = fpr
+            want = self._mix_pending
+            self._mix_pending = False
+            if want:
+                self._start_mix_playback()
+
+        QTimer.singleShot(100, check)
+
+    def _ensure_mix_player(self):
+        if self._mix_player is not None:
+            return self._mix_player
+        try:
+            from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
+            p = QMediaPlayer(self)
+            out = QAudioOutput(self)
+            out.setVolume(0.9)
+            p.setAudioOutput(out)
+            self._mix_player = p
+            self._mix_out = out
+            return p
+        except Exception:
+            return None
+
+    def _start_mix_playback(self):
+        """从当前播放头开始放音轨。"""
+        if not self._mix_file or not os.path.isfile(self._mix_file):
+            return
+        pl = self._ensure_mix_player()
+        if pl is None:
+            return
+        try:
+            from PySide6.QtCore import QUrl
+            pl.setSource(QUrl.fromLocalFile(self._mix_file))
+            pl.setPosition(int(round(self._t * 1000)))
+            pl.play()
+        except Exception:
+            pass
+
+    def _sync_mix(self):
+        """画面与音频对齐（seek 后调用）。"""
+        if self._mix_player is None or not self._playing:
+            return
+        try:
+            want = int(round(self._t * 1000))
+            cur = self._mix_player.position()
+            if abs(cur - want) > 180:      # 偏差超过 180ms 才纠偏，避免抖动
+                self._mix_player.setPosition(want)
+        except Exception:
+            pass
+
+    def _stop_mix(self):
+        if self._mix_player is not None:
+            try:
+                self._mix_player.stop()
+            except Exception:
+                pass
 
     # ================= 时间轴联动 =================
     def _on_selection(self, clip_id):
