@@ -1147,6 +1147,14 @@ def is_game_dir(d):
         # 形态 B：用户选的就是 game/ 本身
         if os.path.isdir(os.path.join(d, "scene")):
             return True
+        # 形态 C：用户选的就是**素材库 asset_library 本身**
+        # （asset_index.json + figure/background 资源目录）。
+        # 用户要求「asset_library 的目录直接让 v3 记住」——若只认 scene/，
+        # 记住的素材库会被判成失效，于是每次都重新弹第二次选择框。
+        if os.path.isfile(os.path.join(d, "asset_index.json")) and (
+                os.path.isdir(os.path.join(d, "figure"))
+                or os.path.isdir(os.path.join(d, "background"))):
+            return True
         return False
     except Exception:
         return False
@@ -5048,6 +5056,33 @@ def _video_open_recent(win, wb, d, set_proj):
         set_proj(os.path.basename(d))
 
 
+def _auto_import_game_dir(script):
+    """不打扰用户的前提下，尽量自动确定整合包/素材库目录。
+
+    顺序：
+      ① 脚本自己就在合法 game/ 目录里；
+      ② 上次导入时记住的目录仍有效；
+      ③ asset_paths 记住/扫到的 asset_library（本需求的核心）。
+    返回目录或 None（None 才需要弹框手选）。
+    """
+    d = os.path.dirname(os.path.abspath(script))
+    if os.path.basename(d) == "game" and is_game_dir(d):
+        return d
+    memo = load_import_game_dir()
+    if memo is not None:
+        return memo
+    try:
+        import asset_paths as AP
+        lib = AP.ensure_library(scan=True)
+        if lib and AP.available():
+            # asset_library 本身就是资源根（background/figure/bgm 都在其下），
+            # 可直接作为 import_script 的 game_dir 使用。
+            return lib
+    except Exception:
+        pass
+    return None
+
+
 def _video_import_script(win, wb):
     """文件 → 导入脚本…：选 WebGAL 场景脚本 -> 解析 -> 载入工程。
 
@@ -5063,39 +5098,30 @@ def _video_import_script(win, wb):
         win, "选择 WebGAL 场景脚本", "", "WebGAL 场景脚本 (*.txt)")
     if not script:
         return
-    # 资源根目录推断：
-    #   ① 脚本所在目录名 == "game" -> 直接用它（最省事，不用问）
-    #   ② 否则用**上次记住的**整合包目录（用户要求：第二次选择完就默认
-    #      用这个地址，不重复选，直到某次导入发现它已失效）
-    #   ③ 都没有/已失效 -> 才弹框让用户选，选完记住
-    game_dir = None
-    d = os.path.dirname(os.path.abspath(script))
-    if os.path.basename(d) == "game" and is_game_dir(d):
-        game_dir = d
+    # 资源根目录：优先自动确定（含**已记住的 asset_library**），
+    # 只有自动确定不了时才弹第二次选择框。
+    game_dir = _auto_import_game_dir(script)
+    if game_dir is not None:
+        pg0 = getattr(wb, "prog", None)
+        if pg0 is not None:
+            pg0.setText("导入脚本：使用已记住的素材库目录")
     else:
-        game_dir = load_import_game_dir()
-        if game_dir is not None:
-            # 记住的目录仍然可用 -> 直接用，不再弹框
-            pg0 = getattr(wb, "prog", None)
-            if pg0 is not None:
-                pg0.setText("导入脚本：使用已记住的整合包目录")
-        else:
-            # 失效/首次：弹框。起始目录给点线索（失效的旧路径的父级），
-            # 让用户少点几层——不给也行，但给了明显省事。
+        # 失效/首次：弹框。起始目录给点线索（失效的旧路径的父级），
+        # 让用户少点几层——不给也行，但给了明显省事。
+        _start = ""
+        try:
+            _old = load_import_game_dir()
+            if not _old:
+                _r = json.load(open(IMPORT_GDIR_FILE, encoding="utf8"))
+                _old = str(_r.get("dir") or "")
+            if _old:
+                _p = _old if os.path.isdir(_old) else os.path.dirname(_old)
+                if os.path.isdir(_p):
+                    _start = _p
+        except Exception:
             _start = ""
-            try:
-                _old = load_import_game_dir()
-                if not _old:
-                    _r = json.load(open(IMPORT_GDIR_FILE, encoding="utf8"))
-                    _old = str(_r.get("dir") or "")
-                if _old:
-                    _p = _old if os.path.isdir(_old) else os.path.dirname(_old)
-                    if os.path.isdir(_p):
-                        _start = _p
-            except Exception:
-                _start = ""
-            game_dir = QFileDialog.getExistingDirectory(
-                win, "选择 WebGAL 游戏目录（含 game/ 资源）", _start)
+        game_dir = QFileDialog.getExistingDirectory(
+            win, "选择 WebGAL 游戏目录（含 game/ 资源）", _start)
     if not game_dir:
         return
     # 用户新选的（或推断出的）有效目录 -> 记住，下次不再问
