@@ -41,6 +41,7 @@ import video_model as V
 import video_export as VE
 import ui_theme as TH
 import audio_library as AL
+import character_library as CL
 from stage_view import StageView
 from script_editor import ScriptEditor
 
@@ -234,6 +235,85 @@ class _AudioCard(CardWidget):
         """试听状态换个图标，用户能看出哪条在响。"""
         self.btn_play.setIcon(
             (FluentIcon.PAUSE if playing else FluentIcon.PLAY).icon())
+
+    def mouseDoubleClickEvent(self, ev):
+        if self.on_add:
+            self.on_add(self)
+        super().mouseDoubleClickEvent(ev)
+
+
+class _RoleHeaderCard(CardWidget):
+    """角色页的角色标题卡：中文名 + 模型数，点击展开/收起该角色的模型。"""
+
+    def __init__(self, role, expanded=False, on_toggle=None, parent=None):
+        super().__init__(parent)
+        self.role = role
+        self.on_toggle = on_toggle
+        self.setFixedSize(300, 52)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(6)
+        arrow = "▾" if expanded else "▸"
+        self.lbl = StrongBodyLabel("%s %s" % (arrow, role["cn"]), self)
+        self.lbl.setStyleSheet("color:%s;" % TH.t("text_hi"))
+        lay.addWidget(self.lbl, 1)
+        cap = CaptionLabel("%d 套" % role["count"], self)
+        cap.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        lay.addWidget(cap)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_toggle:
+            self.on_toggle(self.role["slug"])
+        super().mousePressEvent(e)
+
+
+class _ModelCard(CardWidget):
+    """角色页的单个模型卡：缩略图 + 服装名（作者）+ 上轨。
+
+    名字用「服装名（作者）」；没有作者的模型不带括号。
+    """
+
+    def __init__(self, model, thumb_qpixmap=None, on_add=None, parent=None):
+        super().__init__(parent)
+        self.model = model
+        self.on_add = on_add
+        self.setFixedSize(124, 150)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(5, 5, 5, 5)
+        lay.setSpacing(3)
+        self.img = QLabel(self)
+        self.img.setFixedSize(112, 96)
+        self.img.setAlignment(Qt.AlignCenter)
+        self.img.setStyleSheet("background:%s;border-radius:4px;"
+                               % TH.t("thumb_bg"))
+        if thumb_qpixmap is not None and not thumb_qpixmap.isNull():
+            self.img.setPixmap(thumb_qpixmap.scaled(
+                self.img.size(), Qt.KeepAspectRatio,
+                Qt.SmoothTransformation))
+        else:
+            self.img.setText(model["slug"][:4])
+        lay.addWidget(self.img)
+        txt = CL.display_name(model)
+        t = BodyLabel(txt, self)
+        t.setWordWrap(False)
+        t.setStyleSheet("color:%s;" % TH.t("text"))
+        f = t.font()
+        f.setPixelSize(10)
+        t.setFont(f)
+        t.setToolTip(txt)
+        lay.addWidget(t)
+        self.btn_add = ToolButton(self)
+        self.btn_add.setIcon(FluentIcon.ADD.icon())
+        self.btn_add.setFixedSize(22, 18)
+        self.btn_add.setToolTip("加入时间轴")
+        self.btn_add.clicked.connect(self._add)
+        lay.addWidget(self.btn_add, 0, Qt.AlignRight)
+
+    def _add(self):
+        if self.on_add:
+            self.on_add(self)
 
     def mouseDoubleClickEvent(self, ev):
         if self.on_add:
@@ -516,6 +596,7 @@ class VideoWorkbench(QWidget):
         self._playing = False
         self._tick_busy = False
         self._loading = False       # spin 回填防回环
+        self._role_open = None      # 角色页：当前展开的角色 slug（None=全部收起）
         self._audio_player = None   # 素材库试听播放器（QMediaPlayer，懒创建）
         self._audio_out = None      # QAudioOutput
         self._previewing = None     # 正在试听的 _AudioCard（停止时复位图标）
@@ -541,7 +622,7 @@ class VideoWorkbench(QWidget):
             "QWidget#videoWorkbenchRoot{background:%s;}" % TH.t("window_bg"))
         self.pivot = Pivot(self)
         # Pivot 页签：去掉「贴纸」（用户要求），「特效」改为「滤镜」。
-        for key, text in [("media", "媒体"), ("audio", "音频"),
+        for key, text in [("media", "角色"), ("audio", "音频"),
                           ("text", "文本"),
                           ("filter", "滤镜"), ("transition", "转场"),
                           ("template", "模板")]:
@@ -1206,6 +1287,10 @@ class VideoWorkbench(QWidget):
             self.asset_flow.addWidget(self._runtime_card)
             self.asset_empty.setVisible(False)
             return
+        if filt == "media":
+            # v3.5.16：媒体页改为「角色」页 —— 按角色分组，展开选模型
+            self._rebuild_role_cards()
+            return
         if filt == "audio":
             # 音频页 = 素材库音频（用户要求「直接引用包中的，供试听和拖入」）
             self._rebuild_audio_cards()
@@ -1228,6 +1313,89 @@ class VideoWorkbench(QWidget):
         self.asset_empty.setVisible(
             not any((self.pivot.currentItem() == "media") == (s["kind"] != "audio")
                     for s in self.assets))
+
+    # ---------- 角色页：按角色分组，展开选模型 ----------
+    def _rebuild_role_cards(self):
+        """角色页：先列角色，点角色展开它的全部模型（缩略图）。
+
+        用户要求「内部列出基本角色，角色展开可选择本角色的不同模型」——
+        一次只展开一个角色（列表短、找得快），标题卡显示 ▾/▸。
+        """
+        roles = CL.roles()
+        if not roles:
+            self.asset_empty.setText(
+                "素材库里没有模型\n（确认素材库位置：资产管理里可见）")
+            self.asset_empty.setVisible(True)
+            return
+        opened = self._role_open
+        if opened is not None and not any(r["slug"] == opened for r in roles):
+            opened = self._role_open = None
+        for r in roles:
+            exp = (r["slug"] == opened)
+            hdr = _RoleHeaderCard(
+                r, expanded=exp,
+                on_toggle=lambda slug, _r=r: self._toggle_role(slug),
+                parent=self.asset_host)
+            self.asset_flow.addWidget(hdr)
+            if not exp:
+                continue
+            for m in CL.models_of(r["slug"]):
+                pm = self._model_thumb_pixmap(m)
+                card = _ModelCard(m, pm, on_add=self._model_to_timeline,
+                                  parent=self.asset_host)
+                self.asset_flow.addWidget(card)
+        self.asset_empty.setVisible(False)
+
+    def _toggle_role(self, slug):
+        """展开/收起某角色（同一时刻只展开一个）。"""
+        self._role_open = None if self._role_open == slug else slug
+        self._rebuild_asset_cards()
+
+    def _model_thumb_pixmap(self, m):
+        """模型缩略图 QPixmap（带缓存）。读不到返回 None。"""
+        cache = getattr(self, "_thumb_cache", None)
+        if cache is None:
+            cache = self._thumb_cache = {}
+        key = m.get("file") or m.get("id")
+        if key in cache:
+            return cache[key]
+        pm = None
+        try:
+            p = CL.thumb_path(m)
+            if p and os.path.isfile(p):
+                pm = QPixmap(p)
+                if pm.isNull():
+                    pm = None
+        except Exception:
+            pm = None
+        cache[key] = pm
+        return pm
+
+    def _model_to_timeline(self, card):
+        """把选中的模型作为 puppet 素材加到时间轴（引用素材库目录）。"""
+        m = card.model
+        d = CL.model_path(m)
+        if not d or not os.path.isdir(d):
+            InfoBar.warning("加入失败", "模型目录不存在，请检查素材库。",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        try:
+            src = V.new_source("puppet", d, src_dur=0.0)
+        except Exception as e:
+            InfoBar.warning("加入失败", str(e), parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            return
+        try:
+            src["lib_file"] = m.get("file")
+            src["lib_name"] = m.get("name")
+            src["lib_author"] = m.get("author") or ""
+            src["lib_role"] = m.get("slug")
+        except Exception:
+            pass
+        self._add_asset_to_timeline(src)
+        InfoBar.success("已加入", CL.display_name(m), parent=self,
+                        position=InfoBarPosition.TOP, duration=1800)
 
     # ---------- 音频页：素材库音频试听 + 上轨 ----------
     def _rebuild_audio_cards(self):
