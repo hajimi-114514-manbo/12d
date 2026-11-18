@@ -5,6 +5,85 @@
 
 ---
 
+## v3.5.15（2026-11-18）界面主题：白色半透明磨砂 / 黑色可选
+
+> 用户需求：「把 ui 改成半透明磨砂质感白色，把字体颜色变成黑色可以做吗」，
+> 随后明确「这个就是给用户一个主题选择，用户可以选白的，也可以选黑的」。
+
+### 一、主题系统（ui_theme.py）
+
+新增 `ui_theme.py`，深/浅两套色板 + 运行时切换：
+
+- **令牌化配色**：window / panel / text / text_dim / text_hi / accent /
+  tl_*（时间轴）/ ed_*（剧本编辑器）/ wel_*（欢迎页）/ clip_*（片段色）
+  共 60 余个令牌，每个都有深浅两套值。
+- **持久化**：选择存 `%APPDATA%\MuppetStudio\ui_theme.json`，下次启动沿用。
+- **注册机制**：各模块 `TH.register(fn)` 注册自己的重刷回调，切主题时
+  ui_theme 依次调用 + 全量 repaint。自绘控件（时间轴、画布）在 paintEvent
+  里读模块级全局色，切主题时整体重新赋值即生效。
+- **入口**：`run_app()` 里 `TH.apply(app)`；主菜单「文件 → 界面主题 →
+  白色（半透明磨砂）/ 黑色」。
+
+### 二、磨砂是画出来的（不依赖系统 API）
+
+实测三条系统路线都不可用，最终改为纯 Qt 绘制：
+
+- FluentWindow 自己画不透明底，`setMicaEffectEnabled` 采到的是**壁纸**色调，
+  透不出窗口背后的内容；
+- `setAcrylicEffect` / `SetWindowCompositionAttribute(ACRYLICBLURBEHIND)`
+  在纯 QWidget 上有效（实测能透出背后彩色并模糊），但套到 FluentWindow 上
+  全被它自己的底色盖住；
+- 原生真模糊还得逐帧合成，**工程一大就掉帧**——与用户「可以不透，如果工程
+  太大的话」的要求相悖。
+
+最终实现：`VideoWorkbench` / `Workbench` 自绘 `paintEvent` —— 柔和斜向渐变
+打底 + 64x64 细微噪点纹理平铺（固定种子，缓存复用），三栏面板用半透明白
+叠在上面，底纹从面板底下透出来就是磨砂质感。零额外开销，任何机器效果一致。
+
+### 三、改造范围（10 个文件）
+
+l2d_rig_qt / video_workbench / timeline_panel / clip_timeline / script_editor /
+stage_view / welcome_window / close_guard / asset_downloader / ui_theme（新增）。
+
+- 所有硬编码深色换成主题令牌，各模块加 `_apply_theme()` 重刷钩子；
+- 浅色主题下文字自动转深色（正文 `#2b3240`、主文字 `#11151c`）；
+- **画布/台词皮肤等「画面语义色」不改**：StageView 的台词对话框皮肤、
+  MP4 导出用的白字黑描边、图片编辑画布的深色棋盘格——这些是合成到画面上
+  的像素，与界面主题无关。
+- 深色主题下内层容器保持 `panel_bg`（透明会露出 Qt 默认白底）；
+  浅色主题才用 transparent，避免三层半透明白叠成死白。
+
+### 四、修主题偏好读不出来的 bug
+
+`load_mode()` 用 `encoding="utf8"` 读偏好文件，文件带 BOM 时（记事本 /
+PowerShell 写出）`json.load` 抛异常 → 静默回退 dark，用户选了白主题下次启动
+还是黑的。改成先试 `utf-8-sig`；`save_mode` 写盘也不再带 BOM。
+
+### 五、导入脚本不再需要选第二次
+
+（`cc7fb35`，上一版发布后的改动，一并在本版发出）
+
+用户实报「我现在使用导入脚本功能还是要选两次」。两处原因：
+
+1. `is_game_dir()` 只接受「整合包」形态（含 `game/scene`），用户记住的
+   `asset_library` 路径每次都被判无效；
+2. `import_game_dir.json` 里存着旧的测试路径（临时目录，早已不存在）。
+
+修法：`is_game_dir` 增加第三种形态（asset_library 本身，靠
+`asset_index.json` + `figure/` 判定）；新增 `_auto_import_game_dir()` 按
+① 脚本所在 `game/` ② 记住的路径 ③ 全盘扫 asset_library 依次尝试，全部
+失败才弹目录选择。同时清理了记忆文件里的失效路径。
+
+### 测试
+
+- 主题专项：theme_se_stage 25 项、theme76 15 项全 PASS
+- 全量回归 10 套 rc=0：v3_ui 43、video_model 56、clip_marquee 59、
+  webgal_export、stage_view、script_editor、close_wiring、wb_splitters 等
+- 深色主题对照原始代码验证未回归（源版与新版同位置像素一致）
+- 真实窗口验证：欢迎页白主题 sidebar `#f9fafb` / content `#eaedf2`
+
+---
+
 ## v3.5.14（2026-11-18）场景切换不再丢人物 + 淡入淡出过渡 + 开场黑屏
 
 > 用户实报三件事：「第四话这里总是有残留」（截图右侧睦有重影）、
