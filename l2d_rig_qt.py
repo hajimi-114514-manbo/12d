@@ -5167,6 +5167,34 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
                 pass
         self.navigationInterface.setVisible(False)
 
+    def _apply_theme(self):
+        """切主题时重刷视频窗的标题栏/内容区。
+
+        视频窗壳是独立的 FluentWindow，不继承 MainWindow 的刷新逻辑。
+        缺了这个钩子的话：白主题下标题栏仍是暗色底，而标题文字已经跟着
+        主题变深 —— 用户看到的就是「顶部整条黑、字看不见」。
+        """
+        try:
+            bg = TH.t("window_flat") if TH.is_light() else TH.t("window_bg")
+            self.setStyleSheet(
+                "QWidget{color:%s;}"
+                "TitleBar, TitleBarBase{background:%s;}"
+                % (TH.t("text"), bg))
+        except Exception:
+            pass
+        try:
+            wb = getattr(self, "_wb", None)
+            if wb is not None:
+                wb._apply_theme()
+        except Exception:
+            pass
+        try:
+            self.titleBar.update()
+            self.titleBar.repaint()
+            self.update()
+        except Exception:
+            pass
+
     def closeEvent(self, ev):
         """v3.4.0（task-30/B2）：视频窗未保存退出守卫（wb.project_dirty 直读）。"""
         wb = getattr(self, "_wb", None)
@@ -5191,6 +5219,10 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
         item = self.navigationInterface.widget("centralIface")
         if item is not None:
             item.setVisible(False)
+        # 登记到主题刷新表，并把当前主题套上（视频窗可能在切主题后才创建，
+        # 也可能一直活着——两种都要跟主题）
+        _STYLED_WIDGETS.append(self)
+        self._apply_theme()
 
 
 def _video_new_project(wb, set_proj):

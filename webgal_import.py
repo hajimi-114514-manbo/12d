@@ -608,9 +608,23 @@ def _parse_change_figure(arg):
 
 
 def _parse_file(arg):
-    """命令参数首 token 即资源路径（其余为选项，这里忽略）。"""
-    toks = str(arg or "").split()
-    return toks[0] if toks else ""
+    """命令参数首 token 即资源路径（其余为选项，这里忽略）。
+
+    **不能按空白切**：素材目录名里可能带空格（真实案例
+    `background/角色生活地点/ave mujica/祥子大宅外（黄昏）.jpg`，
+    `ave mujica` 中间有空格）。按空白切会得到 `ave`，该背景因此被判
+    「素材库找不到」、导出时也没图。
+    WebGAL 的选项一律以 " -" 开头，所以只按 " -" 切；路径里若真是
+    带引号的也用引号剥离。
+    """
+    s = str(arg or "").strip()
+    m = re.search(r"\s+-", s)
+    if m:
+        s = s[:m.start()]
+    s = s.strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        s = s[1:-1]
+    return s
 
 
 def _num_ok(v):
