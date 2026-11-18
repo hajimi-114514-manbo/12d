@@ -18,6 +18,7 @@
 import io
 import json
 import os
+import re
 import threading
 
 import asset_paths as AP
@@ -170,3 +171,68 @@ def stats():
     bgm = sum(1 for e in all_ if e["kind"] == "bgm")
     return {"total": len(all_), "bgm": bgm, "sfx": len(all_) - bgm,
             "library": AP.ensure_library(scan=False) or ""}
+
+
+# ---------------------------------------------------------------- 分组
+# 音频页默认按组折叠展示（一次画 321 张会卡近 1 秒）。
+# 分组依据：素材库 tags 里的情绪/场景词 + 用途兜底。
+_GROUP_DEFS = [
+    # (组 id, 中文名, 命中函数)
+    ("calm", "平静", lambda e: _has(e, ("calm", "平静", "放松", "轻松"))),
+    ("daily", "日常", lambda e: _has(e, ("daily", "日常", "bright", "明快"))),
+    ("sad", "悲伤", lambda e: _has(e, ("sad", "悲伤", "emotional", "感动",
+                                      "流泪"))),
+    ("tense", "紧张", lambda e: _has(e, ("tense", "紧张", "不安", "serious",
+                                        "严肃", "战斗"))),
+    ("rain", "雨天", lambda e: _has(e, ("rain", "雨天", "雨"))),
+    ("band", "乐队排练", lambda e: _has(e, ("band", "排练", "live", "演出"))),
+    ("mujica_ost", "Mujica OST",
+     lambda e: "mujica_ost" in str(e.get("file") or "")),
+    ("mygo_ost", "MyGO OST",
+     lambda e: "mygo" in str(e.get("file") or "").lower()),
+    ("sfx", "音效", lambda e: e.get("kind") == "sfx"),
+    # 兜底组按名字首字符细分（184 条一次展开也会卡，切两刀到几十条）
+    ("other_0", "其他 BGM · 数字/符号",
+     lambda e: bool(re.match(r"^[0-9\W_]", str(e.get("name") or "")))),
+    ("other_a", "其他 BGM · A-M",
+     lambda e: bool(re.match(r"^[A-Ma-m]", str(e.get("name") or "")))),
+    ("other_n", "其他 BGM · N-Z",
+     lambda e: bool(re.match(r"^[N-Zn-z]", str(e.get("name") or "")))),
+    ("other", "其他 BGM · 其余", lambda e: True),      # 兜底，必须最后
+]
+
+
+def _has(e, words):
+    hay = " ".join([str(e.get("name") or ""), str(e.get("file") or ""),
+                    " ".join(str(t) for t in (e.get("tags") or []))]).lower()
+    return any(str(w).lower() in hay for w in words)
+
+
+def groups():
+    """按组切分音频：返回 [{"id","name","items"}]，空组剔除。
+
+    每首只归**第一个命中的组**（顺序即优先级），保证不重复。
+    """
+    all_ = items()
+    buckets = {gid: [] for gid, _, _ in _GROUP_DEFS}
+    for e in all_:
+        for gid, _cn, pred in _GROUP_DEFS:
+            try:
+                if pred(e):
+                    buckets[gid].append(e)
+                    break
+            except Exception:
+                continue
+    out = []
+    for gid, cn, _pred in _GROUP_DEFS:
+        arr = buckets.get(gid) or []
+        if arr:
+            out.append({"id": gid, "name": cn, "items": arr})
+    return out
+
+
+def group_of(gid):
+    for g in groups():
+        if g["id"] == gid:
+            return g
+    return None
