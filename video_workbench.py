@@ -965,6 +965,12 @@ class VideoWorkbench(QWidget):
         v.addWidget(vsplit)
         _WORKBENCHES.append(self)
         self._apply_theme()
+        # 首次渲染左栏：构造时没调过 _rebuild_asset_cards，
+        # 否则「角色」页一片空白 + 显示"还没有素材"（用户实报）。
+        try:
+            self._rebuild_asset_cards()
+        except Exception:
+            pass
 
         # 快捷键：Ctrl+S 保存 / Ctrl+Z Y 撤销重做 / 空格播放
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_project)
