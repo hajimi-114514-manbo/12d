@@ -5523,6 +5523,12 @@ def _build_video_menus(win, wb, set_proj):
                         triggered=lambda: _video_save(wb, set_proj)))
     mf.addAction(Action(FluentIcon.SAVE_AS, "另存为",
                         triggered=lambda: _video_save_as(win, wb, set_proj)))
+    # v3.6.1：左栏那两个按钮（添加素材文件 / 导入木偶工程）去掉，
+    # 功能挪到「文件」菜单 —— 用户说左栏按钮不需要了，但功能要保留。
+    mf.addAction(Action(FluentIcon.ADD, "添加素材（图片/视频/音频）…",
+                        triggered=wb._add_files))
+    mf.addAction(Action(FluentIcon.FOLDER_ADD, "导入木偶工程…",
+                        triggered=wb._add_puppet))
     mf.addAction(Action(FluentIcon.FOLDER_ADD, "导入脚本…",
                         triggered=lambda: _video_import_script(win, wb)))
     mf.addAction(Action(FluentIcon.PLAY, "导出视频",

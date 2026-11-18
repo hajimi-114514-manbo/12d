@@ -816,14 +816,12 @@ class VideoWorkbench(QWidget):
         lh.addWidget(self.asset_header)
         lh.addStretch(1)
         ll.addLayout(lh)
-        ab = QHBoxLayout()
-        self.btn_add_file = PushButton("添加素材文件", left)
-        self.btn_add_file.clicked.connect(self._add_files)
-        self.btn_add_puppet = PushButton("导入木偶工程", left)
-        self.btn_add_puppet.clicked.connect(self._add_puppet)
-        ab.addWidget(self.btn_add_file)
-        ab.addWidget(self.btn_add_puppet)
-        ll.addLayout(ab)
+        # v3.6.1：左栏不再放「添加素材文件 / 导入木偶工程」按钮
+        # （用户要求去掉）。功能入口移到「文件」菜单，见
+        # l2d_rig_qt._build_video_menus。这里保留占位属性，避免
+        # _show_script_editor 等旧调用点报 AttributeError。
+        self.btn_add_file = None
+        self.btn_add_puppet = None
         self.asset_scroll = ScrollArea(left)
         self.asset_scroll.setWidgetResizable(True)
         self.asset_host = QWidget()
@@ -2128,8 +2126,10 @@ class VideoWorkbench(QWidget):
         try:
             self.asset_scroll.setVisible(not show)
             self.asset_empty.setVisible(not show)
-            self.btn_add_file.setVisible(not show)
-            self.btn_add_puppet.setVisible(not show)
+            if self.btn_add_file is not None:
+                self.btn_add_file.setVisible(not show)
+            if self.btn_add_puppet is not None:
+                self.btn_add_puppet.setVisible(not show)
             self.asset_header.setText("剧情" if show else "素材库")
         except Exception:
             pass

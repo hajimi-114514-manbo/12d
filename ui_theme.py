@@ -362,11 +362,13 @@ def _apply_global_qss(app=None):
     app = app or QApplication.instance()
     if app is None:
         return
-    # qfluentwidgets 的 setTheme 不管 QToolTip，得自己给一套
+    # tooltip 固定白底黑字（用户确认「默认白底黑字也可以」）。
+    # 为什么不用主题令牌：Qt 原生 QToolTip 不吃 qfluentwidgets 的主题，
+    # 深色主题下会出现浅底浅字 / 刺眼白板两种情况，反而更难读。
+    # 固定白底黑字在两套主题下都清楚，也不会因切主题而变化。
     app.setStyleSheet(
-        "QToolTip { color:%s; background-color:%s; border:1px solid %s;"
-        " padding:4px 6px; }" % (t("tooltip_fg"), t("tooltip_bg"),
-                                 t("tooltip_border")))
+        "QToolTip { color:#1b1f26; background-color:#ffffff;"
+        " border:1px solid #c8cdd6; padding:4px 6px; }")
 
 
 def _repaint_all():
