@@ -269,6 +269,39 @@ class _RoleHeaderCard(CardWidget):
         super().mousePressEvent(e)
 
 
+class _AuthorHeaderCard(CardWidget):
+    """角色页的第二级标题卡：改模作者 + 该作者在本角色下的模型数。
+
+    用户要求「父分类用角色名，子分类用改模作者」——角色展开后先看到作者
+    分组，再点作者展开它的模型。比角色标题卡窄一档、缩进一级，层级一眼看得出来。
+    """
+
+    INDENT = 18
+
+    def __init__(self, author, count, expanded=False, on_toggle=None,
+                 parent=None):
+        super().__init__(parent)
+        self.author = author
+        self.on_toggle = on_toggle
+        self.setFixedSize(300 - self.INDENT, 40)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 4, 10, 4)
+        lay.setSpacing(6)
+        arrow = "▾" if expanded else "▸"
+        self.lbl = BodyLabel("%s %s" % (arrow, CL.author_label(author)), self)
+        self.lbl.setStyleSheet("color:%s; font-size:12px;" % TH.t("text_hi"))
+        lay.addWidget(self.lbl, 1)
+        cap = CaptionLabel("%d 套" % count, self)
+        cap.setStyleSheet("color:%s; font-size:11px;" % TH.t("text_dim"))
+        lay.addWidget(cap)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_toggle:
+            self.on_toggle(self.author)
+        super().mousePressEvent(e)
+
+
 class _AudioGroupCard(CardWidget):
     """音频页的分组标题卡：组名 + 条数，点击展开/收起该组。"""
 
@@ -404,12 +437,14 @@ class _MarqueeLabel(QWidget):
 
 
 class _ModelCard(CardWidget):
-    """角色页的单个模型卡：缩略图 + 服装名（作者）+ 上轨。
+    """角色页的单个模型卡：缩略图 + 服装名 + 上轨。
 
-    名字用「服装名（作者）」；没有作者的模型不带括号。
+    作者已经作为上一级分组标题显示，这里名字只留服装名，避免
+    「长崎素世·Mujica演出服（北极暖水港）」在作者组里重复一遍。
     """
 
-    def __init__(self, model, thumb_qpixmap=None, on_add=None, parent=None):
+    def __init__(self, model, thumb_qpixmap=None, on_add=None, parent=None,
+                 show_author=False):
         super().__init__(parent)
         self.model = model
         self.on_add = on_add
@@ -430,7 +465,11 @@ class _ModelCard(CardWidget):
         else:
             self.img.setText(model["slug"][:4])
         lay.addWidget(self.img)
-        txt = CL.display_name(model)
+        # 作者已在上一级分组标题里显示，默认只留服装名
+        if show_author:
+            txt = CL.display_name(model)
+        else:
+            txt = str(model.get("costume") or model.get("name") or "")
         # 需求池第3条：名字太长显示不全 -> 悬停时横向滚动
         t = _MarqueeLabel(txt, self)
         t.setStyleSheet("color:%s;background:transparent;" % TH.t("text"))
@@ -729,6 +768,8 @@ class VideoWorkbench(QWidget):
         self._tick_busy = False
         self._loading = False       # spin 回填防回环
         self._role_open = None      # 角色页：当前展开的角色 slug（None=全部收起）
+        self._author_open = set()   # 角色页：当前展开的作者名集合
+        self._author_open_role = None   # 上面这组作者属于哪个角色
         self._audio_open = None     # 音频页：当前展开的分组 id（None=全部收起）
         self._audio_player = None   # 素材库试听播放器（QMediaPlayer，懒创建）
         self._audio_out = None      # QAudioOutput
@@ -1559,12 +1600,16 @@ class VideoWorkbench(QWidget):
             not any((self.pivot.currentItem() == "media") == (s["kind"] != "audio")
                     for s in self.assets))
 
-    # ---------- 角色页：按角色分组，展开选模型 ----------
+    # ---------- 角色页：角色 → 改模作者 → 模型 ----------
     def _rebuild_role_cards(self):
-        """角色页：先列角色，点角色展开它的全部模型（缩略图）。
+        """角色页：三级结构 —— 角色（父）→ 改模作者（子）→ 模型卡。
 
-        用户要求「内部列出基本角色，角色展开可选择本角色的不同模型」——
-        一次只展开一个角色（列表短、找得快），标题卡显示 ▾/▸。
+        用户要求「父分类用角色名，子分类用改模作者」：
+          ① 先列角色，点开一个角色；
+          ② 角色展开后按作者分组（作者标题卡，缩进一级）；
+          ③ 点作者展开它名下的模型卡（缩略图）。
+        角色同一时刻只展开一个（列表短、找得快）；作者可同时展开多个，
+        方便同一角色跨作者对比，展开状态按 (角色, 作者) 记住。
         """
         roles = CL.roles()
         if not roles:
@@ -1575,6 +1620,14 @@ class VideoWorkbench(QWidget):
         opened = self._role_open
         if opened is not None and not any(r["slug"] == opened for r in roles):
             opened = self._role_open = None
+        # 角色变了就清掉上一角色的作者展开记录
+        if opened != getattr(self, "_author_open_role", None):
+            self._author_open = set()
+            self._author_open_role = opened
+        open_auth = getattr(self, "_author_open", None)
+        if open_auth is None:
+            open_auth = self._author_open = set()
+
         for r in roles:
             exp = (r["slug"] == opened)
             hdr = _RoleHeaderCard(
@@ -1584,11 +1637,20 @@ class VideoWorkbench(QWidget):
             self.asset_flow.addWidget(hdr)
             if not exp:
                 continue
-            for m in CL.models_of(r["slug"]):
-                pm = self._model_thumb_pixmap(m)
-                card = _ModelCard(m, pm, on_add=self._model_to_timeline,
-                                  parent=self.asset_host)
-                self.asset_flow.addWidget(card)
+            for g in CL.authors_of(r["slug"]):
+                a = g["author"]
+                aexp = (a in open_auth)
+                self.asset_flow.addWidget(_AuthorHeaderCard(
+                    a, len(g["items"]), expanded=aexp,
+                    on_toggle=lambda au, _s=r["slug"]: self._toggle_author(au),
+                    parent=self.asset_host))
+                if not aexp:
+                    continue
+                for m in g["items"]:
+                    pm = self._model_thumb_pixmap(m)
+                    card = _ModelCard(m, pm, on_add=self._model_to_timeline,
+                                      parent=self.asset_host)
+                    self.asset_flow.addWidget(card)
         self.asset_empty.setVisible(False)
 
     def _toggle_role(self, slug):
@@ -1598,9 +1660,25 @@ class VideoWorkbench(QWidget):
         否则列表会跳回顶部、用户找不到刚才点的那个角色。
         """
         self._role_open = None if self._role_open == slug else slug
+        # 换角色 => 作者展开状态归零（新角色的作者组合不同）
+        self._author_open = set()
+        self._author_open_role = self._role_open
         self._rebuild_keeping(
             lambda w: (type(w).__name__ == "_RoleHeaderCard"
                        and getattr(w, "role", {}).get("slug") == slug))
+
+    def _toggle_author(self, author):
+        """展开/收起某个作者分组（可同时展开多个）。"""
+        s = getattr(self, "_author_open", None)
+        if s is None:
+            s = self._author_open = set()
+        if author in s:
+            s.discard(author)
+        else:
+            s.add(author)
+        self._rebuild_keeping(
+            lambda w: (type(w).__name__ == "_AuthorHeaderCard"
+                       and getattr(w, "author", None) == author))
 
     def _model_thumb_pixmap(self, m):
         """模型缩略图 QPixmap（带缓存）。读不到返回 None。"""

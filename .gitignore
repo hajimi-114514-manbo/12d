@@ -32,6 +32,8 @@ dist/MuppetStudio-Setup-v*.exe
 # 不进 git。注意：templates/webgal/ 是我们的产品模板，**必须**入库，
 # 所以这里精确锚定 webgal_runtime 目录，不能写成 templates/runtime）
 templates/webgal_runtime/
+# 缩略图离线渲染生成宿主页（build_host_html() 按需重建，不入库）
+templates/webgal/preview/_thumb_host.html
 
 # Live2D core（专有许可，绝不入库；用户本地拷贝进导出包）
 templates/**/live2d.min.js

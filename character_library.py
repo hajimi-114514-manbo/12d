@@ -112,6 +112,13 @@ def _author_from_dir(d):
     """从模型目录里读作者：文件名形如「改模作者：bilibili北极暖水港.txt」。
 
     返回清洗后的作者名（去掉 bilibili/B站 前缀），读不到返回 ""。
+
+    两个坑（都踩过）：
+      · 有的包只留了「改模作者.txt」，文件名里没有作者名 —— 剥掉标签后
+        只剩空串，不能再把标签本身（"改模作者"）当作者名返回。
+      · 同名标签文件可能和真作者文件并存（「改模作者.txt」+「改模作者：
+        bilibili北极暖水港.txt」），os.listdir 顺序不可靠 —— 必须优先取
+        能解析出真名的那一个。
     """
     if not d or not os.path.isdir(d):
         return ""
@@ -119,6 +126,7 @@ def _author_from_dir(d):
         names = os.listdir(d)
     except Exception:
         return ""
+    best = ""
     for n in names:
         if not any(h in n for h in _AUTHOR_FILE_HINTS):
             continue
@@ -133,9 +141,12 @@ def _author_from_dir(d):
             if a.startswith(pre):
                 a = a[len(pre):]
         a = a.strip(" _-—·.")
-        if a:
-            return a
-    return ""
+        # 剥完只剩标签本身 => 这个文件没写作者名，跳过
+        if not a or a in _AUTHOR_FILE_HINTS:
+            continue
+        # 只有一个作者名，取第一个有效即可；无效的已被跳过
+        return a
+    return best
 
 
 # 缩略图候选文件名（模型目录自带预览图时优先用）
@@ -276,6 +287,106 @@ def roles():
 
 def models_of(slug):
     return [m for m in items() if m["slug"] == slug]
+
+
+# 官方模型白名单：来自「5306 教学整合版 3.1.1」的 MyGO 模板 figure 清单。
+# 用户明确规则：整合包里有的 = 官方原版，没有的 = 改模。
+# 白名单落盘在 data/official_models.json（随仓库分发，不依赖本机整合包路径）。
+_OFFICIAL_CACHE = None
+
+
+def _official_whitelist():
+    """懒加载白名单 {slug: set(目录名)}；文件缺失返回 {}。"""
+    global _OFFICIAL_CACHE
+    if _OFFICIAL_CACHE is not None:
+        return _OFFICIAL_CACHE
+    out = {}
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                     "data", "official_models.json")
+    try:
+        with io.open(p, encoding="utf-8") as f:
+            raw = json.load(f)
+        for slug, names in (raw or {}).items():
+            out[str(slug)] = set(str(n) for n in (names or []))
+    except Exception:
+        out = {}
+    _OFFICIAL_CACHE = out
+    return out
+
+
+def is_official(m):
+    """是不是「官方原版」模型。
+
+    规则（用户 2026-11-19 明确）：以「5306 教学整合版 3.1.1」的
+    MyGO 模板 figure 清单为准 —— 在清单里的（按 角色 slug + 目录名
+    匹配）是官方原版，不在清单里的是改模。
+
+    白名单缺失时回退到结构特征判定（.chara 布局 + 无作者署名），
+    保证老装机/独立分发也能大致正确。
+    """
+    m = m or {}
+    wl = _official_whitelist()
+    slug = str(m.get("slug") or "")
+    d = m.get("_dir_abs") or model_path(m)
+    name = os.path.basename(d.rstrip("\\/")) if d else ""
+    if wl:
+        return name in wl.get(slug, set())
+    # ---- 回退：白名单文件缺失时用结构特征 ----
+    if str(m.get("author") or "").strip():
+        return False
+    if not d or not os.path.isdir(d):
+        return False
+    if os.path.isdir(os.path.join(d, "live2d")):
+        return False
+    p = os.path.join(d, "model.json")
+    if not os.path.isfile(p):
+        return False
+    try:
+        with io.open(p, encoding="utf-8") as f:
+            dd = json.load(f)
+    except Exception:
+        return False
+    return str(dd.get("model") or "").startswith(".chara/")
+
+
+# 官方原版分组的显示名（作者分组里空作者不再叫「未署名」）
+OFFICIAL_LABEL = "官方原版"
+
+
+def authors_of(slug):
+    """该角色下的作者分组：[{"author": 作者名, "items": [模型...]}, ...]
+
+    用户要求「父分类用角色名，子分类用改模作者」——角色展开后先按作者
+    分组，再列模型。官方原版单独归到「官方原版」一组并排在最前（用户
+    反馈过：官方的不能混进作者组里当「未署名」）；真正没署名的改模归到
+    「未署名」排最后。作者组之间按模型数降序、名字升序，避免每次重建
+    顺序乱跳。
+    """
+    ms = models_of(slug)
+    groups = {}
+    for m in ms:
+        if is_official(m):
+            key = "__official__"
+        else:
+            key = str(m.get("author") or "").strip()
+        groups.setdefault(key, []).append(m)
+    out = []
+    for key, arr in groups.items():
+        out.append({"author": key, "items": arr})
+    # 官方最前；无署名最后；其余按数量降序、作者名升序
+    out.sort(key=lambda g: (0 if g["author"] == "__official__"
+                            else (2 if g["author"] == "" else 1),
+                            -len(g["items"]),
+                            g["author"]))
+    return out
+
+
+def author_label(a):
+    """作者分组显示名：官方组、未署名组、真作者名。"""
+    a = str(a or "").strip()
+    if a == "__official__":
+        return OFFICIAL_LABEL
+    return a if a else "未署名"
 
 
 def all_models():

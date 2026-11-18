@@ -182,10 +182,16 @@ def crop_png_bytes(raw, pad_ratio=0.03, dst_ratio=(3, 4)):
                 canvas = Image.new("RGBA", (nw, ch), (0, 0, 0, 0))
                 canvas.paste(im, ((nw - cw) // 2, 0))
             im = canvas
-        # 缩到合适尺寸（卡片 112x96 两倍屏够用）
+        # 缩放到合适尺寸（卡片 112x96 两倍屏够用）
+        # 向下缩大图；也向上放大异常小的渲染（如 layout.width=2 的
+        # part-split 模型只渲染出 51x68），否则卡片里会是一个糊点。
         maxw = 360
+        minw = 300
         if im.width > maxw:
             im = im.resize((maxw, int(round(im.height * maxw / im.width))),
+                           Image.LANCZOS)
+        elif im.width < minw:
+            im = im.resize((minw, int(round(im.height * minw / im.width))),
                            Image.LANCZOS)
         out = _io.BytesIO()
         im.save(out, "PNG", optimize=True)
