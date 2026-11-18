@@ -5,6 +5,94 @@
 
 ---
 
+## v3.6.1（2026-11-18）BGM 串音 + tooltip 白底黑字 + 左栏按钮精简
+
+> 本版是 v3.6.0 之后的用户实报修复。用户原话：
+> 「时间轴上 bgm 有串音」、「这个好像还不对」（tooltip 截图）、
+> 「这四个按钮不需要了」、「鼠标移上去的文字说明没有跟随主题」。
+
+### 一、修 BGM 串音（同时修好导出成片）
+
+**根因**：`video_export.mix_audio` 把整条素材采样全塞进缓冲，**从不按
+clip 的 `dur` 截断**：
+
+    samples, s2 = extract_audio(path)   # 整条素材（可能 4 分钟）
+    at = (start - src_in) * sr
+    _place(buf, samples, at)            # 整条写进去
+
+后果（实测复现）：
+  · 3 秒的音频片段用了 48 秒的歌 → 片段结束后 45 秒一直在响
+  · 相邻/重叠片段各自播全长 → 叠在一起串音
+  · 片段被 trim（`src_in > 0`）时起点对了但尾部仍超长
+
+**修法**：按 clip 语义精确切片 —— 从素材 `src_in` 开始取 `dur` 秒
+（乘 `speed` 换算素材时长，变速再重采样回目标长度），放到 `start` 处，
+越界安全截断；顺带隐藏轨不再参与混音（与画面一致）。
+
+**这个 bug 同时影响导出成片**：`export_video` 也调 `mix_audio`，
+所以 v3.6.0 及更早导出的 MP4，BGM 都是超长串音的 —— 重导即可。
+
+实测（48 秒素材、各场景）：
+| 场景 | 修前 | 修后 |
+|---|---|---|
+| 0~3s 片段，之后 | 一直响 | 峰值 0 |
+| 两片段中间空隙 | 串音 | 峰值 0 |
+| trim 片段后 | 超长 | 峰值 0 |
+| 隐藏轨 | 参与混音 | 不参与 |
+
+### 二、tooltip 改自绘窗口（前三次修法都无效）
+
+用户三次反馈 tooltip 是黑底灰字。逐条排除后找到真正原因：
+
+| 尝试 | 结果 |
+|---|---|
+| `app.setStyleSheet("QToolTip{...}")` | 无效 |
+| `app.setPalette(ToolTipBase/ToolTipText=白/黑)` | 无效 |
+| `QProxyStyle` 接管 `CE_ToolTipLabel` | 无效 |
+
+**根因**：
+  · 真 App 的 style 是 **windows11**（Windows 原生风格），该 style 用
+    **系统主题**绘制 QToolTip，**QSS 与 QPalette 两者都被忽略**
+  · 改用 QProxyStyle 也不行：`app.setStyleSheet()` 一旦设了 QSS，Qt 内部
+    把 style 换成 `QStyleSheetStyle` 并锁定，之后 `app.setStyle(proxy)`
+    静默不生效（实测 trace：install 后 isinstance 为 True，设完 QSS
+    立刻变 False）。而本项目必须保留 QSS（大量控件样式依赖它）
+
+**最终方案：事件过滤器 + 自绘窗口**
+  · `_FrostToolTip`：白底 + 淡灰圆角描边 + 深色字，`paintEvent` 全自绘
+  · `_ToolTipWatcher`：装到 QApplication 上，拦截 `QEvent.ToolTip`、
+    吞掉原生 tooltip、300ms 后显示自绘窗口；`Leave/Hide/MouseButtonPress`
+    收起；屏幕边缘自动翻转避免超出
+  · 只接管**有 toolTip 文本**的控件，其余放过
+  · 不依赖 style / QSS / palette，任何环境效果一致
+
+**验证**：真窗口 + 全屏抓图采样，tooltip 背景像素 `#ffffff`、文字深色。
+
+### 三、去掉左栏两个按钮（功能移到菜单）
+
+用户：「这四个按钮不需要了」（左栏两个按钮 × 两个页签 = 四处）。
+
+按钮删掉，功能保留 —— 移到视频窗口「文件」菜单：
+  · 文件 → 添加素材（图片/视频/音频）…
+  · 文件 → 导入木偶工程…
+绑的仍是 `wb._add_files` / `wb._add_puppet`，行为不变。
+`btn_add_file` / `btn_add_puppet` 置 None（保留属性名，避免旧调用点
+AttributeError），调用处加 null 守卫。
+
+### 测试
+
+新增 bgm_bleed_test.py（12 项：片段后静音 / 空隙静音 / trim 边界 /
+隐藏轨）、tooltip_white_test.py（8 项：深浅两主题 + 建窗后仍生效）、
+remove_btn_test.py（16 项：按钮不存在 / 菜单有替代入口 / 功能方法在 /
+切剧情页签不报错 / tooltip 两主题白底）全 PASS。
+
+script_editor_test 1c 断言随需求更新（原断 `btn_add_file.isVisible()`，
+按钮移除后会抛 None，改为「不存在或不可见」）。
+
+回归 14 套全绿。
+
+---
+
 ## v3.6.0（2026-11-18）角色页 + 素材库音频/滤镜 + 预览声音
 
 > 本版来自用户需求池（桌面 需求池.xlsx）与连续几轮 UI 改造。
