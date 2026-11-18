@@ -154,22 +154,24 @@
 - `731135920-1-30280`、`78896502-1-30216`、`A1`、`AAAA834900-1-30280`
 - `到第二1`、`夜晚书`、`大雨还在下`
 
-### 立绘 model（138 套 / 11 角色，Live2D 整合包）
+### 立绘 model（313 套 / 12 角色，Live2D 整合包）
 
-- **tomori**（高松灯） — 24 套服装（2024_furisode、birthday_2024_ssr、casual-2023、collabo_a_ur、collabo_d_3_ur、dream_festival_3_ur 等）
-- **sakiko**（丰川祥子） — 21 套服装（casual-2023、event_297_story_01、jh_school_winter-2023、school_summer-2023、school_winter-2023、丰川祥子-2023常服-被绑架 等）
-- **anon**（千早爱音） — 19 套服装（birthday_2024_ssr、casual-2023、collabo_a_ur、dream_festival_3_ur、live_default、live_event_235_ur 等）
-- **soyo**（长崎素世） — 19 套服装（birthday_2024_ssr、casual-2023、collabo_a_ur、dream_festival_3_ur、live_default、live_event_235_ur 等）
-- **taki**（椎名立希） — 19 套服装（arbeit、birthday_2024_ssr、casual-2023、collabo_a_ur、dream_festival_3_ur、event_277_story_01 等）
-- **rana**（要乐奈） — 14 套服装（birthday_2024_ssr、casual-2023、collabo_a_ur、dream_festival_3_ur、live_default、live_event_235_sr 等）
-- **uika**（三角初华） — 7 套服装（casual-2023、casual-2023_nocap、event_297_story_01、school_summer-2023、school_winter-2023、sumimi 等）
-- **mutsumi**（若叶睦） — 6 套服装（casual-2023、event_297_story_01、school_summer-2023、school_winter-2023、祥化睦头人_mutsumi_saki_338_school_winter-2023_rip_v1、若叶睦_月之森jh冬装_v1）
-- **umiri**（八幡海铃） — 6 套服装（casual-2023、event_297_story_01、school_summer-2023、school_winter-2023、八幡海铃_米色水手服_v1.0、八幡海铃_羽丘高一_v1.0）
-- **nyamu**（祐天寺若麦） — 2 套服装（casual-2023、event_297_story_01）
+- **sakiko**（丰川祥子） — 84 套服装（casual-2023、【丰川祥子】-HEV防护服、【丰川祥子】-HEV防护服(1)、【丰川祥子】-HEV防护服_20241224_124347 等）
+- **tomori**（高松灯） — 76 套服装（2024_furisode、live2d立绘改模-病号服、【高松灯】-HEV防护服、【高松灯】-品牌联动服装 等）
+- **anon**（千早爱音） — 70 套服装（Harmony_Parade_爱音、birthday_2024_ssr、jo7神父_爱音、【千早爱音】-HEV防护服 等）
+- **taki**（椎名立希） — 20 套服装（arbeit、【椎名立希】-品牌联动服装、【椎名立希】-品牌联动服装(1)、【椎名立希】040_school_summer-羽丘夏季_rip 等）
+- **soyo**（长崎素世） — 18 套服装（birthday_2024_ssr、【长崎素世】039_school_winter-睡衣、【长崎素世】039_school_winter-睡衣(1)、【长崎素世】Mujica演出服 等）
+- **uika**（三角初华） — 12 套服装（[live2d]末日保护者、casual-2023、wego初华、【三角初华】337_school_胜利队-2023_rip 等）
+- **umiri**（八幡海铃） — 11 套服装（casual-2023、【八幡海铃】umiri_339_睡衣、【八幡海铃】umiri_339_睡衣(1)、【八幡海铃】umiri_339_胜利队_rip 等）
+- **mutsumi**（若叶睦） — 8 套服装（casual-2023、【若叶睦】-森美奈美服装、【若叶睦】338_school_winter-睡衣、【若叶睦】明日方舟联动 等）
+- **lib**（其他） — 6 套服装（[live2d]末日保护者、live2d立绘改模-病号服、凤川祥、废弃卡面_摩卡 等）
+- **rana**（要乐奈） — 5 套服装（birthday_2024_ssr、【要乐奈】-品牌联动服装、【要乐奈】-品牌联动服装(1)、【要乐奈】宵崎奏同款服装 等）
+- **nyamu**（祐天寺若麦） — 2 套服装（casual-2023、喵梦亲背心牛仔裤-明逸制作）
 - **mana**（纯田真奈） — 1 套服装（sumimi）
 
-> 路径写法：`figure/<角色>/<服装目录>/model.json`，如 `figure/sakiko/赛博牢祥_v2/model.json`。
-> 上面每套都是**独立服装目录**，可直接写进 `changeFigure:` 引用。
+> **动作/表情键名跨角色通用**：下面这 2224 个键名可给**任何**角色播（`taki/angry01` 也能给 anon 用）；键名前缀只是来源分组，不代表只能该角色用。完整 664+232 条见附件 `motion_keys.json`，日常写脚本用推荐 21 条即可。
+
+- 共享键名示例：`mashiro/angry01`、`mashiro/bye01`、`mashiro/cry01`、`mashiro/idle01`、`mashiro/kandou01`、`mashiro/kime01`、`mashiro/nf01`、`mashiro/nf02`、`mashiro/nf03`、`mashiro/nf04`、`mashiro/nf05`、`mashiro/nf_left01`
 
 ---
 
