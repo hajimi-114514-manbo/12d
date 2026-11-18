@@ -74,6 +74,38 @@ PowerShell 写出）`json.load` 抛异常 → 静默回退 dark，用户选了�
 ① 脚本所在 `game/` ② 记住的路径 ③ 全盘扫 asset_library 依次尝试，全部
 失败才弹目录选择。同时清理了记忆文件里的失效路径。
 
+### 六、修素材路径含空格被切断（用户实报「祥子的家没有背景图片」）
+
+**根因**：`webgal_import._parse_file()` 用 `.split()` 按空白切参数。
+`background/角色生活地点/ave mujica/祥子大宅外（黄昏）.jpg` 里
+`ave mujica` 中间有空格，于是只取到 `ave`。
+
+后果链：素材体检误报「背景缺 1（ave）」→ 背景图定位不到 → 导出时那张图
+不进包 → 游戏里祥子大宅外黑屏。第13话两处引用（L10/L62）都中招。
+
+**修法**：WebGAL 的选项一律以「空格+短横」开头，所以只按那个切，路径内
+空格原样保留；兼容引号包裹。
+
+实测（经 DSH 联动重新导入第13话）：
+- 素材体检：`背景缺 1（ave）` → `素材体检：无缺失`
+- 素材库回退命中：11 → 13
+- 导出包 `game/background` 出现 `祥子大宅外黄昏.jpg`（387 KB ×2）
+
+新增 `parse_file_test.py` 12 项覆盖：带空格路径（含真实 ave mujica 路径）、
+多选项、引号包裹、black/none 关键字、立绘目录等边界。
+
+### 七、修视频窗标题栏在白主题下整条黑、字看不见
+
+**根因**：`FluentShellWindow`（v3 视频窗口壳）没有 `_apply_theme()`，也没
+登记进 `_STYLED_WIDGETS`。切主题时只有 `MainWindow` 被重刷，视频窗标题栏
+停在暗色底，而标题文字已按主题变深，于是黑底深字、什么都看不见。
+
+**修法**：给 `FluentShellWindow` 补 `_apply_theme()`（按主题设标题栏背景
+与文字色，并转调 `wb._apply_theme()`）；`setCentralInterface` 里登记到
+`_STYLED_WIDGETS` 并立即套一次当前主题。
+
+---
+
 ### 测试
 
 - 主题专项：theme_se_stage 25 项、theme76 15 项全 PASS
