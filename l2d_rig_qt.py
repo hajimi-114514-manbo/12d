@@ -2151,8 +2151,65 @@ class Workbench(AssetMenuMixin, QWidget):
     # 与 WebEngine 预览包（那是视频编辑页才用得到的）。
     ASSET_PAGE = "skeleton"
 
+    def _frost_tile(self):
+        """磨砂噪点纹理（64x64，固定种子），缓存复用。"""
+        tile = getattr(self, "_frost_pm", None)
+        if (tile is not None
+                and getattr(self, "_frost_pm_light", None) == TH.is_light()):
+            return tile
+        import random
+        from PySide6.QtGui import QPixmap, QImage, QColor
+        n = 64
+        img = QImage(n, n, QImage.Format_ARGB32)
+        rnd = random.Random(20261118)
+        base = 205 if TH.is_light() else 30
+        for y in range(n):
+            for x in range(n):
+                d = rnd.randint(-5, 5)
+                v = max(0, min(255, base + d))
+                img.setPixelColor(x, y, QColor(v, v, v,
+                                               15 if TH.is_light() else 12))
+        tile = QPixmap.fromImage(img)
+        self._frost_pm = tile
+        self._frost_pm_light = TH.is_light()
+        return tile
+
+    def paintEvent(self, e):
+        """自绘磨砂底（跟视频工作台同款：渐变 + 噪点）。"""
+        from PySide6.QtGui import QPainter, QLinearGradient, QColor
+        pnt = QPainter(self)
+        g = QLinearGradient(0, 0, self.width(), self.height())
+        if TH.is_light():
+            g.setColorAt(0.0, QColor("#cfdcec"))
+            g.setColorAt(0.28, QColor("#eef3f9"))
+            g.setColorAt(0.55, QColor("#dee8f4"))
+            g.setColorAt(0.78, QColor("#f2f6fb"))
+            g.setColorAt(1.0, QColor("#d5e1ef"))
+        else:
+            c = TH.qcolor("window_bg")
+            g.setColorAt(0.0, c)
+            g.setColorAt(1.0, c)
+        pnt.fillRect(self.rect(), g)
+        pnt.drawTiledPixmap(self.rect(), self._frost_tile())
+
     def _apply_theme(self):
         """切主题时重刷工具栏/分隔条等跟随主题的样式。"""
+        self._frost_pm = None
+        try:
+            # 右侧两块（骨架节点 / 图层）容器底色 + 标题可读性：
+            # StrongBodyLabel 自己不设色，靠容器背景对比。白主题下容器
+            # 必须是浅色，否则白字打白底直接看不见。
+            panel_bg = TH.t("panel_bg")
+            self._node_panel.setStyleSheet(
+                "#nodePanel{background:%s;border-radius:8px;}"
+                % panel_bg)
+            self._layer_panel.setStyleSheet(
+                "#layerPanel{background:%s;border-radius:8px;}"
+                % panel_bg)
+            self._node_title.setStyleSheet("color:%s;" % TH.t("text_hi"))
+            self._layer_title.setStyleSheet("color:%s;" % TH.t("text_hi"))
+        except Exception:
+            pass
         try:
             self.tool_bar.setStyleSheet(
                 "background:%s; border-radius:8px;" % TH.t("card_bg"))
@@ -2546,21 +2603,28 @@ class Workbench(AssetMenuMixin, QWidget):
         vsplit.setStyleSheet(SPLIT_QSS)
 
         topLay = QVBoxLayout()
-        topLay.setContentsMargins(4, 0, 0, 4)
+        topLay.setContentsMargins(6, 4, 6, 6)
         topLay.setSpacing(6)
-        topLay.addWidget(StrongBodyLabel("骨架节点"))
+        self._node_title = StrongBodyLabel("骨架节点")
+        topLay.addWidget(self._node_title)
         self.tree = TreeWidget()
         self.tree.setHeaderLabels(["节点", "父", "支点", "层数"])
+        self.tree.setStyleSheet(
+            "QTreeWidget{background:%s;color:%s;border:none;}"
+            % (TH.t("panel_bg"), TH.t("text")))
         self.tree.itemDoubleClicked.connect(self._edit_pivot)
         topLay.addWidget(self.tree, 1)
         topWidget = QWidget()
+        topWidget.setObjectName("nodePanel")
         topWidget.setLayout(topLay)
+        self._node_panel = topWidget
         vsplit.addWidget(topWidget)
 
         botLay = QVBoxLayout()
-        botLay.setContentsMargins(4, 4, 0, 0)
+        botLay.setContentsMargins(6, 6, 6, 6)
         botLay.setSpacing(6)
-        botLay.addWidget(StrongBodyLabel("图层"))
+        self._layer_title = StrongBodyLabel("图层")
+        botLay.addWidget(self._layer_title)
         self.layer_list = ListWidget()
         self.layer_list.setDragDropMode(ListWidget.InternalMove)
         self.layer_list.setDefaultDropAction(Qt.MoveAction)
@@ -2577,7 +2641,9 @@ class Workbench(AssetMenuMixin, QWidget):
         ball.clicked.connect(self._toggle_all)
         botLay.addWidget(ball)
         botWidget = QWidget()
+        botWidget.setObjectName("layerPanel")
         botWidget.setLayout(botLay)
+        self._layer_panel = botWidget
         vsplit.addWidget(botWidget)
 
         split.addWidget(vsplit)

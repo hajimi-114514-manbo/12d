@@ -120,7 +120,7 @@ PALETTES = {
         "panel_border": "rgba(255,255,255,0.92)",
         "panel_solid": "#eef3f9",
         "card_bg": "rgba(255,255,255,0.55)",
-        "canvas_bg": "#b9c0cc",
+        "canvas_bg": "#dfe6f0",
         "thumb_bg": "#eef1f6",
         # 文字：白底必须够深
         "text": "#2b3240",
@@ -209,21 +209,28 @@ def _prefs_file():
 
 
 def load_mode():
-    """读上次选的主题；文件坏了/没有就回默认。"""
-    try:
-        with io.open(_prefs_file(), encoding="utf8") as f:
-            d = json.load(f)
-        m = d.get("mode")
-        if m in MODES:
-            return m
-    except Exception:
-        pass
+    """读上次选的主题；文件坏了/没有就回默认。
+
+    注意用 utf-8-sig：带 BOM 的文件（记事本/PowerShell 写的）直接
+    utf-8 解会抛 JSONDecodeError，主题就会静默回退默认值。
+    """
+    for enc in ("utf-8-sig", "utf-8"):
+        try:
+            with io.open(_prefs_file(), encoding=enc) as f:
+                d = json.load(f)
+            m = d.get("mode")
+            if m in MODES:
+                return m
+            break
+        except Exception:
+            continue
     return DEFAULT_MODE
 
 
 def save_mode(mode):
     try:
-        with io.open(_prefs_file(), "w", encoding="utf8") as f:
+        # newline="" + encoding 不带 BOM：文件给别的工具读也干净
+        with io.open(_prefs_file(), "w", encoding="utf-8", newline="") as f:
             json.dump({"mode": mode}, f)
     except Exception:
         pass
@@ -316,6 +323,37 @@ def set_mode(m, app=None, save=True):
 def _set_qt_theme():
     try:
         setTheme(Theme.LIGHT if _mode == "light" else Theme.DARK)
+    except Exception:
+        pass
+    # qfluentwidgets 的 setTheme 只推 qconfig，标题栏/导航栏这些库内
+    # 自绘控件要重新 apply 各自的样式表才会换色（实测切主题后标题栏
+    # 会残留上一个主题的底色）。
+    _reapply_library_sheets()
+
+
+def _reapply_library_sheets():
+    """让 qfluentwidgets 的整体样式表按当前主题重刷一遍。"""
+    try:
+        from qfluentwidgets.common.style_sheet import FluentStyleSheet
+        from qfluentwidgets import FluentWindow
+        app = QApplication.instance()
+        if app is None:
+            return
+        for w in app.allWidgets():
+            if not isinstance(w, FluentWindow):
+                continue
+            try:
+                FluentStyleSheet.FLUENT_WINDOW.apply(w)
+            except Exception:
+                pass
+            for attr in ("titleBar", "navigationInterface"):
+                o = getattr(w, attr, None)
+                if o is not None:
+                    try:
+                        o.update()
+                        o.repaint()
+                    except Exception:
+                        pass
     except Exception:
         pass
 
