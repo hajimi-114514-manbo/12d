@@ -1679,6 +1679,9 @@ def export_branch_game(proj, out_dir, proj_dir=None, game_name=None,
 
     ctx = {"stats": stats, "pool": pool, "aid_to_scene": aid_to_scene,
            "puppet_refs": _collect_puppet_motion_refs(proj)}
+    # v3.6.2：工程级转场透传给逐幕导出（幕视图里没有这个键）
+    if isinstance(proj.get("transition"), dict):
+        ctx["transition"] = proj["transition"]
 
     # 逐幕生成
     for a in acts:
@@ -1967,6 +1970,9 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                   style=style, live_badge=live_badge)
 
     ctx = _ctx if _ctx is not None else {}
+    # v3.6.2：单幕路径（_ctx=None）直接从工程取转场；多幕由编排器注入
+    if "transition" not in ctx and isinstance(proj.get("transition"), dict):
+        ctx["transition"] = proj["transition"]
     stats = ctx.get("stats") or {"files": 0, "lines": 0, "warnings": []}
     ctx["stats"] = stats
     warn = stats["warnings"]
@@ -2556,15 +2562,39 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     # stmt_lines 非空、跳过 _EMPTY_SCRIPT 分支（丢 intro/空白注释）。
     has_content = bool(events)
     stmt_lines = []
-    if TRANSITION_ON and has_content:
+    # v3.6.2：转场可选。工程级 proj["transition"]（转场页写入）决定
+    # setTransition 的 -enter/-exit 动画名；**未设置 = 默认 enter/exit**
+    # （逐字节与历史一致，transition_test 锚定）。显式「无转场」
+    # （enter/exit 皆空）= 不插 setTransition（硬切）。
+    _tr = ctx.get("transition")
+    if isinstance(_tr, dict):
+        _enter = str(_tr.get("enter") or "")
+        _exit = str(_tr.get("exit") or "")
+        # 双保险：脏动画名（没经 sanitize 的工程 dict 直接进导出）退回默认
+        try:
+            import transitions as _TR
+            if _enter and not _TR.valid_anim(_enter):
+                _enter = ""
+            if _exit and not _TR.valid_anim(_exit):
+                _exit = ""
+        except Exception:
+            pass
+        if _enter or _exit:
+            _enter = _enter or TRANSITION_ENTER
+            _exit = _exit or TRANSITION_EXIT
+    else:
+        _enter, _exit = TRANSITION_ENTER, TRANSITION_EXIT
+    if TRANSITION_ON and has_content and (_enter or _exit):
         _tdone = ctx.get("trans_done")
         if not _tdone:
             ctx["trans_done"] = True
             for _tg in TRANSITION_TARGETS:
                 stmt_lines.append(
                     "setTransition: -target=%s -enter=%s -exit=%s;"
-                    % (_tg, TRANSITION_ENTER, TRANSITION_EXIT))
-            stats["transition"] = "on"
+                    % (_tg, _enter, _exit))
+            stats["transition"] = "on" if _enter == TRANSITION_ENTER \
+                and _exit == TRANSITION_EXIT else \
+                ("%s/%s" % (_enter, _exit))
     for _, _, _, lines in events:
         stmt_lines.extend(lines)
 

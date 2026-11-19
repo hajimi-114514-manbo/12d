@@ -1773,7 +1773,52 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
             paste_layer(canvas, img, lay)
     if subtitle:
         _draw_dialogue(canvas, proj, t, aid)
+    # v3.6.2：转场的视频侧近似——在背景轨（最底可见视频轨）的片段进出
+    # 边界把整帧向黑场淡化（fade-through-black）。
+    #   · 未设置转场 / 显式「无转场」 -> 返回 1.0，整帧**逐像素零改动**
+    #     （今天视频导出本就不淡入淡出，这条只新增，不改老行为）
+    #   · slide/zoom/blur/engine_only 在视频里退化成淡化（精确动画以
+    #     WebGAL 可玩导出为准——compose_frame 无状态，拿不到上一画面，
+    #     做不了真交叉淡化，黑场淡化是合法且观感一致的近似）
+    f = _scene_fade(proj, t, aid)
+    if f < 1.0:
+        np.multiply(canvas, f, out=canvas, casting="unsafe")
     return canvas
+
+
+def _scene_fade(proj, t, aid):
+    """t 时刻整帧淡化系数 0..1（1=不淡）。见 compose_frame 调用点注释。"""
+    tr = proj.get("transition") if isinstance(proj, dict) else None
+    if not isinstance(tr, dict):
+        return 1.0
+    if not (tr.get("enter") or tr.get("exit")):
+        return 1.0
+    try:
+        dur = float(tr.get("duration_ms") or 300) / 1000.0
+    except (TypeError, ValueError):
+        dur = 0.3
+    dur = max(0.05, min(2.0, dur))
+    tracks = V._tracks_of(proj, aid)
+    bottom = None
+    for trk in tracks:
+        if isinstance(trk, dict) and trk.get("kind") == "video" \
+                and not trk.get("hidden"):
+            bottom = trk
+            break
+    if bottom is None:
+        return 1.0
+    f = 1.0
+    eps = 1e-6
+    for c in (bottom.get("clips") or []):
+        s = float(c.get("start") or 0.0)
+        e = s + float(c.get("dur") or 0.0)
+        if s - eps <= t < e - eps:
+            if t - s < dur:
+                f = min(f, (t - s) / dur)
+            if e - t < dur:
+                f = min(f, (e - t) / dur)
+            break
+    return max(0.0, min(1.0, f))
 
 
 class SourceManager:

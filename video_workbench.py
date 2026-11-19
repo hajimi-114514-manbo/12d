@@ -515,6 +515,7 @@ class _TemplateCard(CardWidget):
     def __init__(self, title, desc, on_click, parent=None):
         super().__init__(parent)
         self.on_click = on_click
+        self.title = str(title)
         self.setFixedSize(168, 148)
         self.setCursor(Qt.PointingHandCursor)
         lay = QVBoxLayout(self)
@@ -1602,6 +1603,10 @@ class VideoWorkbench(QWidget):
             # 滤镜页：列出可用的画面滤镜（此前「特效」页是空的）
             self._rebuild_filter_cards()
             return
+        if filt == "transition":
+            # 转场页：列出引擎真实支持的转场预设（此前整页是空的）
+            self._rebuild_transition_cards()
+            return
         for src in self.assets:
             is_audio = src["kind"] == "audio"
             if filt == "media" and is_audio:
@@ -2003,6 +2008,51 @@ class VideoWorkbench(QWidget):
             ("清除滤镜" if filt is None
              else "应用到 %d 个片段" % len(targets)),
             parent=self, position=InfoBarPosition.TOP, duration=2000)
+
+    # ---------- 转场页 ----------
+    def _rebuild_transition_cards(self):
+        """转场页：列出引擎真实支持的转场预设（点卡片=设为全片转场）。
+
+        转场是**工程级**选择（WebGAL 的 setTransition 一次设置全程生效），
+        所以这里不是逐 clip 应用，而是写 proj["transition"]；导出侧
+        （WebGAL + 视频）据此还原。当前已选中的预设卡片高亮。
+        """
+        import transitions as TR
+        cur = (self.proj or {}).get("transition") or {}
+        cur_name = str(cur.get("name") or "")
+        for p in TR.catalog():
+            # 已选中：标题加 ✓ 前缀（_TemplateCard 无选中态，文字前缀最稳）
+            title = p["name"]
+            if cur_name and cur_name == p["name"]:
+                title = "✓ " + p["name"]
+            card = _TemplateCard(
+                title, p["desc"],
+                (lambda pn=p["name"]: self._apply_transition(pn)),
+                self.asset_host)
+            self.asset_flow.addWidget(card)
+        self.asset_empty.setVisible(False)
+
+    def _apply_transition(self, name):
+        """把某预设写入工程转场（None/无效名 = 恢复默认淡入淡出）。"""
+        import transitions as TR
+        t = TR.to_proj_transition(name)
+        if t is None:
+            InfoBar.warning("转场不可用", "引擎不支持该转场动画。",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=2500)
+            return
+        self.proj["transition"] = t
+        self.push_history()
+        self._after_edit()
+        # 转场页需要重刷高亮
+        if self._asset_tab == "transition":
+            self._rebuild_asset_cards()
+        InfoBar.success(
+            "转场已设置",
+            ("已恢复默认淡入淡出" if not t["enter"] and not t["exit"]
+             else "%s（%dms，WebGAL 导出与视频导出都会带上）"
+             % (name, t["duration_ms"])),
+            parent=self, position=InfoBarPosition.TOP, duration=2500)
 
     # ---------- A4 模板页（三张卡片背后的动作） ----------
     @staticmethod

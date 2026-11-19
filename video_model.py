@@ -864,6 +864,43 @@ def _num(x, dft=0.0):
         return dft
 
 
+def _sanitize_transition(raw):
+    """转场载体（工程级，全片统一）。返回规范化 dict 或 None。
+
+    None = 未设置 -> 导出走默认淡入淡出（enter/exit），与历史逐字节一致。
+    dict 形态见 transitions.to_proj_transition。校验：
+      · enter/exit 必须是引擎动画表里的名字（脏名退回默认 enter/exit，
+        绝不让导出插一条引擎不认识的动画）
+      · duration_ms 夹到 [0, 5000]
+      · 「无转场」（enter/exit 皆空）合法，导出据此不插 setTransition
+    """
+    if not isinstance(raw, dict):
+        return None
+    enter = str(raw.get("enter") or "")
+    exit_ = str(raw.get("exit") or "")
+    try:
+        import transitions as TR
+    except Exception:
+        TR = None
+    # 引擎表校验：任一脏名 -> 整体退回默认（None），保守不写坏指令
+    if TR is not None:
+        if enter and not TR.valid_anim(enter):
+            enter = ""
+        if exit_ and not TR.valid_anim(exit_):
+            exit_ = ""
+    dur = _num(raw.get("duration_ms"), 300.0)
+    dur = int(max(0, min(5000, dur)))
+    name = str(raw.get("name") or "")
+    vkind = str(raw.get("video_kind") or "fade")
+    sdir = str(raw.get("slide_dir") or "")
+    # 硬切（无转场）：enter/exit 都空，保留这个明确意图（区别于 None 默认）
+    if not enter and not exit_:
+        return {"name": name or "无转场", "enter": "", "exit": "",
+                "duration_ms": 0, "video_kind": vkind, "slide_dir": ""}
+    return {"name": name, "enter": enter, "exit": exit_,
+            "duration_ms": dur, "video_kind": vkind, "slide_dir": sdir}
+
+
 def _sanitize_effects(raw):
     """画面特效载体 effects=[{t,cmd}]（v3.5）。
 
@@ -1147,6 +1184,9 @@ def sanitize_project(obj, warn=None):
             proj["acts"].append(act)
         if not proj["acts"]:
             return None
+        _tr = _sanitize_transition(obj.get("transition"))
+        if _tr is not None:
+            proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
         return proj
 
     # ---------- v1 单幕（原行为逐字节保留）----------
@@ -1163,6 +1203,9 @@ def sanitize_project(obj, warn=None):
     proj["comments"] = _sanitize_comments(obj.get("comments"))
     # v3.5：画面特效载体（导入保留 → 导出 emit 成真实 setTransform 指令）
     proj["effects"] = _sanitize_effects(obj.get("effects"))
+    _tr = _sanitize_transition(obj.get("transition"))
+    if _tr is not None:
+        proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
     return proj
 
 
