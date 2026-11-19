@@ -995,7 +995,7 @@ class VideoWorkbench(QWidget):
         rl.addLayout(r1)
         r2 = QHBoxLayout()
         r2.addWidget(CaptionLabel("帧率", right))
-        self.spin_fps = SpinBox(right)
+        self.spin_fps = TH.fix_spinbox(SpinBox(right))
         self.spin_fps.setRange(1, 120)
         self.spin_fps.setValue(30)
         self.spin_fps.valueChanged.connect(self._fps_changed)
@@ -1013,7 +1013,7 @@ class VideoWorkbench(QWidget):
             row = QHBoxLayout()
             row.addWidget(CaptionLabel({"start": "起点", "in": "素材入点",
                                         "dur": "时长"}[lab], right))
-            sp = DoubleSpinBox(right)
+            sp = TH.fix_spinbox(DoubleSpinBox(right))
             sp.setRange(0.0, 600.0)
             sp.setSingleStep(0.1)
             sp.setDecimals(2)
@@ -1032,7 +1032,7 @@ class VideoWorkbench(QWidget):
                               ("Rot", "rot", (-180.0, 180.0))):
             row = QHBoxLayout()
             row.addWidget(CaptionLabel(lab, right))
-            sp = DoubleSpinBox(right)
+            sp = TH.fix_spinbox(DoubleSpinBox(right))
             sp.setRange(rng[0], rng[1])
             sp.setSingleStep(1.0 if key == "rot" else 0.01)
             sp.setDecimals(1 if key == "rot" else 3)

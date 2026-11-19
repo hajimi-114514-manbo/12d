@@ -535,6 +535,135 @@ def _apply_global_qss(app=None):
     install_tooltip_watcher(app)
 
 
+def fix_spinbox(sb):
+    """修好 qfluentwidgets SpinBox/DoubleSpinBox 的**数字显示不出来**。
+
+    根因（实测）：qfluentwidgets 的 InlineSpinBoxBase 只把上下箭头按钮
+    放进 hBoxLayout，**内部 QLineEdit 从没被 addWidget**，于是它的
+    geometry 永远是 (0,1,**1**,31) —— 宽度 1 像素，数字被挤成一条抗锯齿
+    残影，看起来就是「框里有内容但读不出来」。
+    样式表里那句 `padding: 0px 80px 0px 10px` 只影响 SpinBox 自身的
+    绘制，不会给内部 QLineEdit 尺寸。
+
+    修法：显式给 lineEdit 宽度，并随控件宽度自适应（右侧留出箭头区）。
+    顺带把文字色钉成主题正文色（palette 本来就是黑的，但 QSS 的
+    `color: black` 作用不到内部 lineEdit，会退化成 138 灰）。
+    **切主题时文字色要跟着变**——注册一个重刷回调（否则深色主题下
+    数字还是浅色主题的深色，白底白字看不见）。
+
+    返回同一个 sb（可链式）。绝不抛。"""
+    try:
+        le = sb.lineEdit()
+    except Exception:
+        return sb
+    try:
+        # 宽度：左侧 10px 内边距，右侧留 44px 给上下箭头（按钮 26 + 间距）
+        w = max(60, int(sb.width()) - 10 - 44)
+        le.setMinimumWidth(60)
+        le.setFixedWidth(w)
+        le.move(10, 1)
+        le.resize(w, max(1, int(sb.height()) - 2))
+        _paint_spin_text(sb)
+        # 宽度跟随控件变化
+        _install_resize_hook(sb)
+        # 文字色跟随主题切换
+        _register_spin_repaint(sb)
+    except Exception:
+        pass
+    return sb
+
+
+def _paint_spin_text(sb):
+    """按当前主题给 spinbox 设文字色 + 背景（幂等）。
+
+    两处都要钉，缺一不可（实测）：
+      · 内部 QLineEdit：qfluentwidgets 从没把它 addWidget 进布局，
+        宽度恒 1px；且 QSpinBox 的 `color` 到不了它，文字退化成 138 灰。
+      · SpinBox 自身背景：SPIN_BOX 样式表把 alpha 写成小数
+        （`rgba(255,255,255,0.0605)`），Qt QSS 只认 0-1 浮点/百分比，
+        深色主题下整个控件被画成**纯白**（实测 7920px 全白），把
+        lineEdit 的正确深底浅字整个盖掉。必须换成实色。
+    用实色而非 rgba——本项目 panel_bg 令牌也是小数 alpha，同样会踩坑。"""
+    try:
+        le = sb.lineEdit()
+        col = t("text")
+        bg = "#ffffff" if _mode == "light" else "#2b2f38"
+        if col:
+            le.setStyleSheet(
+                "QLineEdit { color:%s; background:%s; border:none; }"
+                % (col, bg))
+        # SpinBox 自身：把所有 rgba(...,小数) 背景换成实色，避免盖住文字；
+        # 同时把 color 钉成主题正文色（原表里 `color: black` / disabled 的
+        # `rgba(0,0,0,92)` 都会让深色主题下的浅字变黑或变淡）。
+        sheet = sb.styleSheet()
+        if sheet:
+            import re as _re
+            fixed = _re.sub(
+                r"background-color:\s*rgba\([^)]*\)\s*;",
+                "background-color: %s;" % bg, sheet)
+            fixed = _re.sub(r"(?<![-\w])color:\s*[^;]+;",
+                            "color: %s;" % col, fixed)
+            if fixed != sheet:
+                sb.setStyleSheet(fixed)
+    except Exception:
+        pass
+
+
+# 已修复的 spinbox 弱引用集合：切主题时统一重刷文字色。
+# 用弱引用避免钉住已销毁的控件（面板重建后旧 spinbox 该被回收）。
+import weakref as _weakref
+_fixed_spins = []
+
+
+def _register_spin_repaint(sb):
+    """登记一个 spinbox，切主题时重刷它的文字色。"""
+    ref = _weakref.ref(sb)
+    if not any(r() is sb for r in _fixed_spins):
+        _fixed_spins.append(ref)
+
+
+def _repaint_fixed_spins():
+    """主题刷新回调：重刷所有已修复 spinbox 的文字色（清理死引用）。"""
+    alive = []
+    for ref in _fixed_spins:
+        sb = ref()
+        if sb is None:
+            continue
+        try:
+            _paint_spin_text(sb)
+            alive.append(ref)
+        except Exception:
+            pass
+    _fixed_spins[:] = alive
+
+
+register(_repaint_fixed_spins)
+
+
+def _install_resize_hook(sb):
+    """给 spinbox 装 resizeEvent 钩子：控件变宽时同步 lineEdit 宽度。"""
+    if getattr(sb, "_muppet_resize_hooked", False):
+        return
+    try:
+        orig = sb.resizeEvent
+
+        def _ev(e, _sb=sb, _orig=orig):
+            try:
+                _orig(e)
+                le = _sb.lineEdit()
+                w = max(60, int(_sb.width()) - 10 - 44)
+                if le.width() != w:
+                    le.setFixedWidth(w)
+                    le.move(10, 1)
+                    le.resize(w, max(1, int(_sb.height()) - 2))
+            except Exception:
+                pass
+        sb.resizeEvent = _ev
+        sb._muppet_resize_hooked = True
+    except Exception:
+        pass
+
+
 def _repaint_all():
     """自绘控件不会因 palette 变化自动重画，统一 update 一遍。"""
     app = QApplication.instance()
