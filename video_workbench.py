@@ -444,10 +444,11 @@ class _ModelCard(CardWidget):
     """
 
     def __init__(self, model, thumb_qpixmap=None, on_add=None, parent=None,
-                 show_author=False):
+                 show_author=False, on_add_persona=None):
         super().__init__(parent)
         self.model = model
         self.on_add = on_add
+        self.on_add_persona = on_add_persona
         self.setFixedSize(124, 150)
         self.setCursor(Qt.PointingHandCursor)
         lay = QVBoxLayout(self)
@@ -475,16 +476,32 @@ class _ModelCard(CardWidget):
         t.setStyleSheet("color:%s;background:transparent;" % TH.t("text"))
         lay.addWidget(t)
         self.name_lbl = t
+        # 两个上轨按钮：+ 加入默认轨（既有行为），人格 加入独立新轨
+        btn_row = QWidget(self)
+        br = QHBoxLayout(btn_row)
+        br.setContentsMargins(0, 0, 0, 0)
+        br.setSpacing(2)
         self.btn_add = ToolButton(self)
         self.btn_add.setIcon(FluentIcon.ADD.icon())
         self.btn_add.setFixedSize(22, 18)
-        self.btn_add.setToolTip("加入时间轴")
+        self.btn_add.setToolTip("加入时间轴（默认轨）")
         self.btn_add.clicked.connect(self._add)
-        lay.addWidget(self.btn_add, 0, Qt.AlignRight)
+        br.addWidget(self.btn_add)
+        self.btn_persona = ToolButton(self)
+        self.btn_persona.setIcon(FluentIcon.COPY.icon())
+        self.btn_persona.setFixedSize(22, 18)
+        self.btn_persona.setToolTip("作为新人格加入（新建独立时间轴）")
+        self.btn_persona.clicked.connect(self._add_persona)
+        br.addWidget(self.btn_persona)
+        lay.addWidget(btn_row, 0, Qt.AlignRight)
 
     def _add(self):
         if self.on_add:
             self.on_add(self)
+
+    def _add_persona(self):
+        if getattr(self, "on_add_persona", None):
+            self.on_add_persona(self)
 
     def mouseDoubleClickEvent(self, ev):
         if self.on_add:
@@ -1649,6 +1666,7 @@ class VideoWorkbench(QWidget):
                 for m in g["items"]:
                     pm = self._model_thumb_pixmap(m)
                     card = _ModelCard(m, pm, on_add=self._model_to_timeline,
+                                      on_add_persona=self._model_to_timeline_persona,
                                       parent=self.asset_host)
                     self.asset_flow.addWidget(card)
         self.asset_empty.setVisible(False)
@@ -1725,6 +1743,55 @@ class VideoWorkbench(QWidget):
         self._add_asset_to_timeline(src)
         InfoBar.success("已加入", CL.display_name(m), parent=self,
                         position=InfoBarPosition.TOP, duration=1800)
+
+    def _model_to_timeline_persona(self, card):
+        """把模型作为「新人格」加入：建一条独立视频轨（新时间轴）再放片段。
+
+        需求「同一角色有不同人格，需要多时间轴，同场景两个相同角色同屏」：
+        同轨不允许重叠，所以两份同角色必须分轨。这里为该角色新建一条
+        以角色名命名的视频轨，把片段放进去 —— 多条视频轨在合成时从底
+        到顶叠加，自然形成同屏多份相同角色，各自可独立调位置/动作/时长。
+        """
+        m = card.model
+        d = CL.model_path(m)
+        if not d or not os.path.isdir(d):
+            InfoBar.warning("加入失败", "模型目录不存在，请检查素材库。",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        try:
+            src = V.new_source("puppet", d, src_dur=0.0)
+        except Exception as e:
+            InfoBar.warning("加入失败", str(e), parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            return
+        try:
+            src["lib_file"] = m.get("file")
+            src["lib_name"] = m.get("name")
+            src["lib_author"] = m.get("author") or ""
+            src["lib_role"] = m.get("slug")
+        except Exception:
+            pass
+        # 为该角色建一条独立视频轨，命名体现「人格/副本」
+        role_cn = m.get("role_cn") or m.get("slug") or "角色"
+        ok, _m, tid = V.add_track(self.proj, "video", name=None,
+                                  aid=getattr(self, "_cur_aid", None))
+        if not ok:
+            InfoBar.warning("建轨失败", _m, parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            return
+        tr = V.find_track(self.proj, tid,
+                          aid=getattr(self, "_cur_aid", None))
+        if tr is not None:
+            n = len([t for t in V._tracks_of(self.proj,
+                         getattr(self, "_cur_aid", None))
+                     if t["kind"] == "video"
+                     and str(t.get("name") or "").startswith(role_cn)]) + 1
+            tr["name"] = "%s·人格%d" % (role_cn, n)
+        self._add_asset_to_timeline(src, track_id=tid)
+        InfoBar.success("已作为新人格加入", "%s（独立时间轴）" % role_cn,
+                        parent=self, position=InfoBarPosition.TOP,
+                        duration=1800)
 
     # ---------- 音频页：素材库音频试听 + 上轨 ----------
     def _rebuild_audio_cards(self):
@@ -2218,24 +2285,30 @@ class VideoWorkbench(QWidget):
         self._asset_tab = str(key) if key else "media"
         self._rebuild_asset_cards()
 
-    def _add_asset_to_timeline(self, src):
-        """双击卡片：追加到对应轨末尾。"""
+    def _add_asset_to_timeline(self, src, track_id=None):
+        """双击卡片：追加到对应轨末尾。track_id 指定时直接用该轨。"""
         kind = src["kind"]
-        tid = "a1" if kind == "audio" else "v1"
-        tr = V.find_track(self.proj, tid)
+        if track_id is None:
+            tid = "a1" if kind == "audio" else "v1"
+        else:
+            tid = track_id
+        tr = V.find_track(self.proj, tid,
+                          aid=getattr(self, "_cur_aid", None))
         if tr is None:
             ok, _m, tid = V.add_track(self.proj,
                                       "audio" if kind == "audio" else "video")
             if not ok:
                 return
-            tr = V.find_track(self.proj, tid)
+            tr = V.find_track(self.proj, tid,
+                              aid=getattr(self, "_cur_aid", None))
         end = max([V.clip_end(c) for c in tr["clips"]] or [0.0])
         dur = DEFAULT_DUR.get(kind) or src.get("src_dur") or 3.0
         dur = max(V.MIN_DUR, min(dur, src["src_dur"]) if src.get("src_dur")
                   and kind != "image" else dur)
         clip = V.new_clip(src, end, dur)
         # K1（task-69）：同屏人数上限撤销——立绘上轨不再事前拦截。
-        ok, cid = V.add_clip(self.proj, tid, clip)
+        ok, cid = V.add_clip(self.proj, tid, clip,
+                             aid=getattr(self, "_cur_aid", None))
         if not ok:
             InfoBar.warning("上轨失败", cid, parent=self,
                             position=InfoBarPosition.TOP, duration=2500)

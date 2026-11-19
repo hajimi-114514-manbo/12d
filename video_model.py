@@ -502,8 +502,10 @@ def find_clip(proj, clip_id):
     return None, None
 
 
-def find_track(proj, track_id):
-    for t in _tracks_of(proj):
+def find_track(proj, track_id, aid=None):
+    """按 id 找轨道。多幕工程必须带 aid 才能定位当前幕的轨（aid=None
+    只搜第一幕，当前幕非第一幕时找不到新轨）。"""
+    for t in _tracks_of(proj, aid):
         if t["id"] == track_id:
             return t
     return None
@@ -634,13 +636,10 @@ def _src_limit_ok(clip, src_in, dur):
 # ---------------- 编辑（原地改，返回 (ok, msg)） ----------------
 def add_clip(proj, track_id, clip, aid=None):
     """加 clip 到指定轨。aid（F2-L1 可选）=目标幕，缺省当前幕/第一幕。"""
-    tr = find_track(proj, track_id)
+    tr = find_track(proj, track_id, aid)
     if tr is None and aid is not None:
-        tr = None
-        for t in _tracks_of(proj, aid):
-            if t.get("id") == track_id:
-                tr = t
-                break
+        # aid 指定幕里没有 -> 不再回退第一幕（旧行为会把片段塞错幕）
+        return False, "轨道不存在: %s" % track_id
     if tr is None:
         return False, "轨道不存在: %s" % track_id
     if tr.get("locked"):
