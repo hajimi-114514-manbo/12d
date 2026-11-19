@@ -191,6 +191,123 @@ def _retire_overlapping(wb, tr, start, dur):
             V.remove_clip(wb.proj, str(oc.get("id") or ""))
 
 
+# ---- 立绘自动排布（figure.add 不指定坐标时按同屏人数分位）----
+# 保留 AI 显式坐标接口：args 里给了 x/y/scale 就完全按给定值，绝不动。
+_AUTO_SLOT_X = {
+    1: (0.5,),
+    2: (0.28, 0.72),
+    3: (0.2, 0.5, 0.8),
+}
+
+
+def _auto_slot_x(n, index):
+    """同屏 n 人、当前第 index 个入场 -> x 坐标。
+
+    1 人居中；2/3 人用预设（与剧本 left/center/right 观感一致）；
+    >=4 人沿 [0.15, 0.85] 等分，避免叠在正中。index 从 0 起。
+    """
+    if n <= 0:
+        return 0.5
+    if n in _AUTO_SLOT_X:
+        arr = _AUTO_SLOT_X[n]
+    else:
+        arr = tuple(0.15 + 0.70 * i / float(n - 1) for i in range(n))
+    idx = max(0, min(n - 1, int(index)))
+    return round(arr[idx], 3)
+
+
+def _on_screen_count(wb, V, start, exclude_track_id=None):
+    """start 时刻在场立绘 clip 数（各 FIG 轨在该时刻生效的 clip）。
+
+    只数 puppet 源、非隐藏视频轨；排除正在加入的轨（同角色换装不算
+    新增人数）。用于给 figure.add 决定第几个入场。
+    """
+    n = 0
+    eps = 1e-6
+    try:
+        tracks = V._tracks_of(wb.proj)
+    except Exception:
+        return 0
+    for tr in tracks:
+        if not isinstance(tr, dict) or tr.get("hidden"):
+            continue
+        if tr.get("kind") != "video":
+            continue
+        if exclude_track_id and tr.get("id") == exclude_track_id:
+            continue
+        if not str(tr.get("name") or "").upper().startswith("FIG"):
+            continue
+        for c in (tr.get("clips") or []):
+            s = float(c.get("start") or 0.0)
+            e = s + float(c.get("dur") or 0.0)
+            if s - eps <= start < e - eps:
+                n += 1
+                break
+    return n
+
+
+def _on_screen_fig_clips(wb, V, start):
+    """start 时刻在场立绘 clip 列表 [(track_id, clip), ...]（FIG 轨、可见）。
+
+    同屏判定：clip 区间覆盖 start。用于自动分位与重排。"""
+    out = []
+    eps = 1e-6
+    try:
+        tracks = V._tracks_of(wb.proj)
+    except Exception:
+        return out
+    for tr in tracks:
+        if not isinstance(tr, dict) or tr.get("hidden"):
+            continue
+        if tr.get("kind") != "video":
+            continue
+        if not str(tr.get("name") or "").upper().startswith("FIG"):
+            continue
+        for c in (tr.get("clips") or []):
+            s = float(c.get("start") or 0.0)
+            e = s + float(c.get("dur") or 0.0)
+            if s - eps <= start < e - eps:
+                out.append((tr.get("id"), c))
+                break
+    return out
+
+
+def _auto_group_count(wb, V, start, exclude_track_id=None):
+    """start 时刻同屏**自动分位组**人数（layout.auto_x=True 的在场 clip）。
+
+    显式坐标 / move 过的角色不算——它们不占自动槽。"""
+    n = 0
+    for tid, c in _on_screen_fig_clips(wb, V, start):
+        if exclude_track_id and tid == exclude_track_id:
+            continue
+        if bool((c.get("layout") or {}).get("auto_x")):
+            n += 1
+    return n
+
+
+def _reflow_auto_figures(wb, V, start):
+    """把 start 时刻同屏的**自动分位**角色重新均匀排布。
+
+    只动 layout["auto_x"]=True 的 clip（figure.add 未指定 x 时打的标）；
+    AI 显式给过坐标 / figure.move 手动调过的（auto_x=False）保持原位，
+    且不占自动分位的槽——自动组在剩余空间里均分。
+    逐个入场时每次都重排，最终一定均匀（2人 0.28/0.72、3人 0.2/0.5/0.8）。"""
+    pairs = _on_screen_fig_clips(wb, V, start)
+    autos = [(tid, c) for tid, c in pairs
+             if bool((c.get("layout") or {}).get("auto_x"))]
+    if not autos:
+        return
+    # 按入场顺序稳定排序（start 相同按 clip id），保证先来的在左
+    autos.sort(key=lambda p: (float(p[1].get("start") or 0.0),
+                              str(p[1].get("id") or "")))
+    n = len(autos)
+    for i, (_tid, c) in enumerate(autos):
+        lay = dict(V.layout_at(c))
+        lay["x"] = _auto_slot_x(n, i)
+        lay["auto_x"] = True
+        c["layout"] = lay
+
+
 def _cmd_figure_add(wb, args):
     V = _vm()
     path = str(args.get("path") or "")
@@ -204,11 +321,13 @@ def _cmd_figure_add(wb, args):
             os.path.isfile(os.path.join(path, "rig_character.psd"))
             or os.path.isfile(os.path.join(path, "model.json")))) \
             else "image"
-    x = float(args.get("x", 0.5))
-    y = float(args.get("y", 0.7))
-    scale = float(args.get("scale", 0.6))
-    # K1（task-69）：缺省时长=实际到时间轴末尾（驻场规约：不写时长不得
-    # 让角色到期悄悄消失；退场只认显式 figure.remove/脚本 none 声明）。
+    # 自动排布：AI 没指定坐标时按同屏人数分位；**显式给了就完全尊重**
+    # （保留让 AI 安排具体位置的接口）。判断依据：args 里是否真的存在
+    # 这个键（None 也算没给），而不是看值是不是默认值——这样 AI 想放在
+    # 正中也能显式写 x=0.5 明确表达。
+    has_x = args.get("x") is not None
+    has_y = args.get("y") is not None
+    has_scale = args.get("scale") is not None
     dur = float(args.get("dur") or 3600.0)
     try:
         start = float(args.get("start", 0.0))
@@ -218,11 +337,26 @@ def _cmd_figure_add(wb, args):
     tr = _fig_track_for(wb, path)
     if tr is None:
         return False, "建立绘轨失败", None
+    if not has_x or not has_y:
+        # 新 clip 初值按「同屏自动组人数+1」；加入后统一重排到均匀位
+        n = _auto_group_count(wb, V, start, exclude_track_id=tr["id"]) + 1
+        idx = n - 1
+        if not has_x:
+            args = dict(args)
+            args["x"] = _auto_slot_x(n, idx)
+        if not has_y:
+            args = dict(args)
+            args["y"] = 0.7
+    x = float(args.get("x"))
+    y = float(args.get("y"))
+    scale = float(args.get("scale") if has_scale else 0.6)
     _retire_overlapping(wb, tr, start, dur)
     src = _make_source(kind, path)
     clip = V.new_clip(src, start, dur)
     lay = clip["layout"]
     lay["x"], lay["y"], lay["scale"] = x, y, scale
+    # 自动分位标记：AI 未指定 x -> True（参与后续重排）；显式给了 -> False
+    lay["auto_x"] = not has_x
     # C2 + G5：motion/expression 接受表内 id 或 Cubism 键名形态（统一走
     # video_model._motion_value_ok 口径，与 sanitize 一致，不再只认表内 id）
     MT = _mt()
@@ -239,9 +373,18 @@ def _cmd_figure_add(wb, args):
     ok, cid = V.add_clip(wb.proj, tr["id"], clip)
     if not ok:
         return False, cid, None
+    # 加入后重排同屏自动组：逐个入场也能最终均匀（用户选定语义）
+    if not has_x:
+        _reflow_auto_figures(wb, V, start)
+        x = float(V.layout_at(clip)["x"])
     _refresh(wb)
-    return True, "已添加立绘 %s(%s) -> %s" % (os.path.basename(path), kind, cid), \
-        {"id": cid, "kind": kind, "track": tr["name"]}
+    auto = not has_x          # 是否由系统自动分位（AI 未指定 x）
+    pos_note = "（自动分位 x=%.2f）" % x if auto else ""
+    return True, "已添加立绘 %s(%s) -> %s%s" % (
+        os.path.basename(path), kind, cid, pos_note), \
+        {"id": cid, "kind": kind, "track": tr["name"],
+         "x": round(x, 3), "y": round(y, 3), "scale": round(scale, 3),
+         "auto_layout": auto}
 
 
 def _cmd_figure_move(wb, args):
@@ -264,6 +407,9 @@ def _cmd_figure_move(wb, args):
     for k in ("x", "y", "scale", "rot"):
         if args.get(k) is not None:
             lay[k] = float(args[k])
+    # 手动调过位置 -> 退出自动重排组（AI 的安排优先，后续加人不再动它）
+    if args.get("x") is not None:
+        lay["auto_x"] = False
     c["layout"] = lay
     try:
         wb.push_history()
