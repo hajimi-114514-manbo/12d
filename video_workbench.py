@@ -546,6 +546,37 @@ class _TemplateCard(CardWidget):
         super().mousePressEvent(e)
 
 
+class _BgCateCard(CardWidget):
+    """背景页的分类标题卡：分类名 + 张数，点击展开/收起（同一时刻一个）。
+
+    与 _FxCateCard 同款交互（用户要求背景「和角色一样分类」）——首屏只
+    建分类标题（39 个），点开才解码缩略图，避免一次建 400 张卡卡顿。
+    """
+
+    def __init__(self, cat, count, expanded=False, on_toggle=None,
+                 parent=None):
+        super().__init__(parent)
+        self.cat = cat
+        self.on_toggle = on_toggle
+        self.setFixedSize(300, 46)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 5, 10, 5)
+        lay.setSpacing(6)
+        arrow = "▾" if expanded else "▸"
+        lbl = StrongBodyLabel("%s %s" % (arrow, cat), self)
+        lbl.setStyleSheet("color:%s;" % TH.t("text_hi"))
+        lay.addWidget(lbl, 1)
+        cap = CaptionLabel("%d 张" % count, self)
+        cap.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        lay.addWidget(cap)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_toggle:
+            self.on_toggle(self.cat)
+        super().mousePressEvent(e)
+
+
 class _BgCard(CardWidget):
     """背景栏的缩略图卡片：点一下=设为当前时刻的背景。
 
@@ -2291,10 +2322,24 @@ class VideoWorkbench(QWidget):
         return [k for k, _ in c.most_common()]
 
     def _rebuild_bg_cards(self, *_a):
-        """渲染背景栏：按分类筛选，显示缩略图卡片。"""
+        """渲染背景页：**按分类折叠**（和角色页同款交互）。
+
+        用户反馈「背景按钮点击太慢」——原来一次建 400 张缩略图卡（每张
+        都要 QImageReader 解码），切页要几秒。改成分组折叠：
+          · 首屏只建分类标题卡（39 个，几十 ms）
+          · 点开某分类才解码并建该分类的缩略图（最多几十张）
+          · 同一时刻只展开一个分类（与角色页一致，方便找）
+        分类下拉同步：选中某分类等价于展开它。
+        """
         items = self._load_bg_items()
+        if not items:
+            self.bg_empty.setText("素材库里没有背景图\n"
+                                  "（资产管理里确认素材库位置）")
+            self.bg_empty.setVisible(True)
+            self.bg_count.setText("")
+            return
         # 首次填充分类下拉（除「全部」外按条数降序）
-        if items and self.bg_combo.count() <= 1:
+        if self.bg_combo.count() <= 1:
             try:
                 self.bg_combo.blockSignals(True)
                 for cat in self._bg_categories():
@@ -2308,21 +2353,90 @@ class VideoWorkbench(QWidget):
             w = it.widget() if hasattr(it, "widget") else it
             if isinstance(w, QWidget):
                 w.deleteLater()
+        # 分类 -> 条目
+        from collections import Counter, OrderedDict
+        groups = OrderedDict()
+        for b in items:
+            groups.setdefault(b["cat"], []).append(b)
+        # 打开状态：下拉选了具体分类 -> 展开它；否则用点击记忆
         sel = ""
         try:
-            sel = self.bg_combo.currentText() if self.bg_combo.count() else "全部"
+            sel = self.bg_combo.currentText() if self.bg_combo.count() else ""
         except Exception:
-            sel = "全部"
-        show = [b for b in items if sel in ("", "全部") or b["cat"] == sel]
-        self.bg_count.setText("%d 张" % len(show))
-        for b in show[:400]:        # 上限 400（再多建卡片会卡，用下拉筛）
-            pm = self._bg_thumb(b["full"])
-            card = _BgCard(b, pm, on_click=self._apply_background,
-                           parent=self.bg_host)
-            self.bg_flow.addWidget(card)
-        self.bg_empty.setVisible(not show)
-        self.bg_empty.setText("素材库里没有背景图\n（资产管理里确认素材库位置）"
-                              if not items else "该分类下没有背景")
+            sel = ""
+        opened = getattr(self, "_bg_open", None)
+        if opened is None:
+            opened = self._bg_open = None
+        if sel and sel not in ("", "全部"):
+            opened = sel
+            self._bg_open = sel
+        elif sel in ("", "全部"):
+            pass          # 保持点击记忆
+        self.bg_count.setText("%d 张 / %d 类" % (len(items), len(groups)))
+        for cat, arr in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            exp = (cat == opened)
+            self.bg_flow.addWidget(_BgCateCard(cat, len(arr), expanded=exp,
+                                               on_toggle=self._toggle_bg_cat,
+                                               parent=self.bg_host))
+            if not exp:
+                continue
+            for b in arr:
+                pm = self._bg_thumb(b["full"])
+                self.bg_flow.addWidget(_BgCard(b, pm,
+                                               on_click=self._apply_background,
+                                               parent=self.bg_host))
+        self.bg_empty.setVisible(False)
+
+    def _toggle_bg_cat(self, cat):
+        """展开/收起某个背景分类（同一时刻只展开一个，与角色页一致）。"""
+        self._bg_open = None if getattr(self, "_bg_open", None) == cat else cat
+        # 下拉回到「全部」——展开状态由 _bg_open 表达，避免两处状态打架
+        try:
+            if self.bg_combo.currentIndex() != 0:
+                self.bg_combo.blockSignals(True)
+                self.bg_combo.setCurrentIndex(0)
+                self.bg_combo.blockSignals(False)
+        except Exception:
+            pass
+        self._rebuild_bg_keeping(cat)
+
+    def _rebuild_bg_keeping(self, cat):
+        """重建背景页，并让被点的分类标题卡停在原视口位置。"""
+        from PySide6.QtCore import QTimer
+        w0 = None
+        for i in range(self.bg_flow.count()):
+            it = self.bg_flow.itemAt(i)
+            w = it.widget() if hasattr(it, "widget") else it
+            if type(w).__name__ == "_BgCateCard" and getattr(w, "cat", None) == cat:
+                w0 = w
+                break
+        vy = None
+        if w0 is not None:
+            try:
+                # 用 mapTo 拿视口内 y；QPoint 未在本模块导入，用 Qt 的
+                # globalPos 换算（等价且不加 import）
+                from PySide6.QtCore import QPoint as _QP
+                vy = w0.mapTo(self.bg_scroll.viewport(), _QP(0, 0)).y()
+            except Exception:
+                vy = None
+        self._rebuild_bg_cards()
+        if vy is None:
+            return
+
+        def _fix():
+            for i in range(self.bg_flow.count()):
+                it = self.bg_flow.itemAt(i)
+                w = it.widget() if hasattr(it, "widget") else it
+                if type(w).__name__ == "_BgCateCard" \
+                        and getattr(w, "cat", None) == cat:
+                    try:
+                        sb = self.bg_scroll.verticalScrollBar()
+                        sb.setValue(max(0, w.y() - vy))
+                    except Exception:
+                        pass
+                    return
+        QTimer.singleShot(0, _fix)
+        QTimer.singleShot(40, _fix)
 
     def _bg_thumb(self, path):
         cache = getattr(self, "_bg_thumb_cache", None)
