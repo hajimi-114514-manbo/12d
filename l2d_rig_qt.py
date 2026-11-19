@@ -5493,6 +5493,22 @@ def _build_video_menus(win, wb, set_proj):
                         triggered=wb._add_puppet))
     mf.addAction(Action(FluentIcon.FOLDER_ADD, "导入脚本…",
                         triggered=lambda: _video_import_script(win, wb)))
+    # v3.6.2：模板页改成「特效」页后，原来那 4 张功能卡挪到这里
+    mf.addSeparator()
+    mf.addAction(Action(FluentIcon.DOCUMENT, "新建空白 WebGAL 工程",
+                        triggered=wb._load_template_blank))
+    mf.addAction(Action(FluentIcon.PHOTO, "单背景+双立绘演示工程",
+                        triggered=wb._load_template_demo))
+    mf.addAction(Action(FluentIcon.FOLDER_ADD, "导入 WebGAL 目录…",
+                        triggered=wb._import_webgal_dir))
+    _mf_runtime = RoundMenu("WebGAL 运行时", parent=win)
+    _mf_runtime.setIcon(FluentIcon.CLOUD)
+    _mf_runtime.addAction(Action(FluentIcon.CLOUD_DOWNLOAD, "在线获取运行时…",
+                                 triggered=wb._runtime_online))
+    _mf_runtime.addAction(Action(FluentIcon.ZIP_FOLDER, "导入运行时压缩包…",
+                                 triggered=wb._runtime_import_zip))
+    mf.addMenu(_mf_runtime)
+    mf.addSeparator()
     mf.addAction(Action(FluentIcon.PLAY, "导出视频",
                         triggered=wb._open_export_dialog))
     # v3.5.13（用户要求）：「导出 WebGAL」在素材库不可用时灰掉。

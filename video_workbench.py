@@ -55,8 +55,10 @@ DEFAULT_DUR = {"image": 3.0, "video": 0, "puppet": 0, "audio": 0}  # 0=用素材
 
 # ---------- 面板 splitter（可拖拽调宽高）----------
 SETTINGS_NAME = "muppet_workbench.ini"
-SPLIT_H_DEFAULT = [300, 880, 260]     # 素材库 | 预览 | 属性
-SPLIT_H_MIN = [180, 420, 180]
+# v3.6.2：素材库右侧加「背景」栏（用户要求），四栏：
+# 素材库 | 背景 | 预览 | 属性
+SPLIT_H_DEFAULT = [290, 190, 620, 250]
+SPLIT_H_MIN = [170, 130, 360, 170]
 SPLIT_V_DEFAULT = [560, 340]         # 上方区域 | 时间轴（约 38%）
 SPLIT_V_MIN_TIMELINE = 120
 
@@ -543,6 +545,123 @@ class _TemplateCard(CardWidget):
         super().mousePressEvent(e)
 
 
+class _BgCard(CardWidget):
+    """背景栏的缩略图卡片：点一下=设为当前时刻的背景。
+
+    比素材卡小（背景栏窄）：缩略图 96x54（16:9），名字单行省略。
+    """
+
+    def __init__(self, bg, thumb_qpixmap=None, on_click=None, parent=None):
+        super().__init__(parent)
+        self.bg = bg
+        self.on_click = on_click
+        self.setFixedSize(108, 92)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(5, 5, 5, 5)
+        lay.setSpacing(2)
+        self.img = QLabel(self)
+        self.img.setFixedSize(96, 54)
+        self.img.setAlignment(Qt.AlignCenter)
+        self.img.setStyleSheet("background:%s;border-radius:3px;"
+                               % TH.t("thumb_bg"))
+        if thumb_qpixmap is not None and not thumb_qpixmap.isNull():
+            self.img.setPixmap(thumb_qpixmap)
+        else:
+            self.img.setText("无图")
+        lay.addWidget(self.img)
+        name = str(bg.get("name") or os.path.basename(bg.get("full") or ""))
+        lbl = CaptionLabel(name, self)
+        lbl.setStyleSheet("color:%s;font-size:9px;" % TH.t("text"))
+        lbl.setToolTip("%s\n%s" % (name, bg.get("cat") or ""))
+        # 单行省略（背景名可能很长）
+        try:
+            lbl.setText(lbl.fontMetrics().elidedText(
+                name, Qt.ElideRight, 96))
+        except Exception:
+            pass
+        lay.addWidget(lbl)
+        self.setToolTip("%s\n分类：%s" % (name, bg.get("cat") or "-"))
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_click:
+            self.on_click(self.bg)
+        super().mousePressEvent(e)
+
+
+class _FxCateCard(CardWidget):
+    """特效页的分类标题卡：分类名 + 条数，点击展开/收起（默认收起）。
+
+    206 个特效全展开会建 206 个卡片（实测明显卡顿），所以按分类折叠，
+    首屏只建 6 个标题卡。
+    """
+
+    def __init__(self, cat, count, expanded=False, on_toggle=None,
+                 parent=None):
+        super().__init__(parent)
+        self.cat = cat
+        self.on_toggle = on_toggle
+        self.setFixedSize(300, 46)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 5, 10, 5)
+        lay.setSpacing(6)
+        arrow = "▾" if expanded else "▸"
+        lbl = StrongBodyLabel("%s %s" % (arrow, cat), self)
+        lbl.setStyleSheet("color:%s;" % TH.t("text_hi"))
+        lay.addWidget(lbl, 1)
+        cap = CaptionLabel("%d 个" % count, self)
+        cap.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        lay.addWidget(cap)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_toggle:
+            self.on_toggle(self.cat)
+        super().mousePressEvent(e)
+
+
+class _FxCard(CardWidget):
+    """特效卡片：名字 + 一句说明 + 点击插入当前时刻。
+
+    比模板卡窄一点、矮一点（206 个），名字过长用省略号（tooltip 给全文）。
+    """
+
+    def __init__(self, eff, on_apply=None, parent=None):
+        super().__init__(parent)
+        self.eff = eff
+        self.on_apply = on_apply
+        self.setFixedSize(220, 84)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(3)
+        name = str(eff.get("name") or "")
+        t = BodyLabel(name, self)
+        t.setStyleSheet("color:%s; font-size:12px; font-weight:600;"
+                        % TH.t("text_hi"))
+        t.setToolTip(name)
+        lay.addWidget(t)
+        desc = str(eff.get("desc") or "")
+        d = CaptionLabel(desc, self)
+        d.setWordWrap(True)
+        d.setStyleSheet("color:%s; font-size:10px;" % TH.t("text_dim"))
+        d.setToolTip(desc)
+        lay.addWidget(d, 1)
+        # 类型小标（滤镜/镜头/复合），让人一眼知道会改什么
+        kind = str(eff.get("kind") or "")
+        ktxt = {"transform": "滤镜", "animation": "镜头",
+                "combo": "复合"}.get(kind, "")
+        if ktxt:
+            k = CaptionLabel(ktxt, self)
+            k.setStyleSheet("color:%s; font-size:9px;" % TH.t("text_dim"))
+            lay.addWidget(k, 0, Qt.AlignRight)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_apply:
+            self.on_apply(self.eff)
+        super().mousePressEvent(e)
+
+
 class _RuntimeCard(CardWidget):
     """E2 模板页「WebGAL 运行时」状态卡：状态行 + 在线获取 / 导入压缩包。"""
 
@@ -822,10 +941,11 @@ class VideoWorkbench(QWidget):
             "QWidget#videoWorkbenchRoot{background:%s;}" % TH.t("window_bg"))
         self.pivot = Pivot(self)
         # Pivot 页签：去掉「贴纸」（用户要求），「特效」改为「滤镜」。
+        # v3.6.2：模板页改成特效库，页签名同步改成「特效」。
         for key, text in [("media", "角色"), ("audio", "音频"),
                           ("text", "文本"),
                           ("filter", "滤镜"), ("transition", "转场"),
-                          ("template", "模板")]:
+                          ("template", "特效")]:
             self.pivot.addItem(key, text)
         self.pivot.setCurrentItem("media")
         self._asset_tab = "media"   # currentItemChanged 槽参数记录（PivotItem 无 routeKey）
@@ -908,6 +1028,53 @@ class VideoWorkbench(QWidget):
         self.script_editor = ScriptEditor(self, left)
         ll.addWidget(self.script_editor, 1)
         hsplit.addWidget(left)
+
+        # ---- v3.6.2：背景栏（素材库右侧，用户要求）----
+        # 背景 = 素材库里 kind=bg 的图（asset_index 的 background/*）。
+        # 点缩略图=直接换当前时刻的背景（写入最底视频轨的 image clip），
+        # 不用再去角色/素材页翻。支持分类筛选 + 搜索式分组折叠。
+        bgpanel = QWidget(self)
+        bgpanel.setObjectName("bgPanel")
+        bgpanel.setMinimumWidth(SPLIT_H_MIN[1])
+        bgpanel.setStyleSheet("#bgPanel{background:%s;border-radius:8px;}"
+                              % TH.t("panel_bg"))
+        bl = QVBoxLayout(bgpanel)
+        bl.setContentsMargins(10, 10, 10, 10)
+        bl.setSpacing(8)
+        bh = QHBoxLayout()
+        self.bg_header = StrongBodyLabel("背景", bgpanel)
+        bh.addWidget(self.bg_header)
+        bh.addStretch(1)
+        self.bg_count = CaptionLabel("", bgpanel)
+        self.bg_count.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        bh.addWidget(self.bg_count)
+        bl.addLayout(bh)
+        # 分类下拉（按目录分组：白天/夜晚/教室/…）
+        from qfluentwidgets import ComboBox as _CB
+        self.bg_combo = _CB(bgpanel)
+        self.bg_combo.addItem("全部")
+        self.bg_combo.currentIndexChanged.connect(self._rebuild_bg_cards)
+        bl.addWidget(self.bg_combo)
+        self.bg_scroll = ScrollArea(bgpanel)
+        self.bg_scroll.setWidgetResizable(True)
+        self.bg_host = QWidget()
+        self.bg_host.setObjectName("bgHost")
+        _ibg = _inner_bg()
+        self.bg_scroll.setStyleSheet(
+            "QScrollArea{background:%s;border:none;}"
+            "QScrollArea::viewport{background:%s;}"
+            "QScrollArea > QWidget > QWidget{background:%s;}"
+            "QWidget#bgHost{background:%s;}" % (_ibg, _ibg, _ibg, _ibg))
+        self.bg_flow = FlowLayout(self.bg_host, needAni=False)
+        self.bg_flow.setContentsMargins(0, 0, 0, 0)
+        self.bg_scroll.setWidget(self.bg_host)
+        bl.addWidget(self.bg_scroll, 1)
+        self.bg_empty = CaptionLabel("素材库里没有背景图\n（资产管理里确认素材库位置）",
+                                     bgpanel)
+        self.bg_empty.setAlignment(Qt.AlignCenter)
+        bl.addWidget(self.bg_empty)
+        hsplit.addWidget(bgpanel)
+        self._bg_items = []          # 背景条目缓存（首次展开时读索引）
 
         # 中：预览
         center = QWidget(self)
@@ -1192,6 +1359,11 @@ class VideoWorkbench(QWidget):
 
         self._apply_project(None)
         self._seed_history()
+        # v3.6.2：背景栏首次填充（懒读索引；素材库不可用时空列表）
+        try:
+            self._rebuild_bg_cards()
+        except Exception:
+            pass
 
     # ================= splitter 尺寸持久化 =================
     def _save_splitter_sizes(self):
@@ -1573,23 +1745,10 @@ class VideoWorkbench(QWidget):
             return
         self._show_script_editor(False)
         if filt == "template":
-            # A4/E2 模板页：三张工程卡片 + 一张 WebGAL 运行时状态卡
-            cards = [
-                ("空白 WebGAL 工程", "新建空工程并清空台词，拖素材即可开始。",
-                 self._load_template_blank),
-                ("单背景+双立绘演示", "内置生成的渐变背景与两个剪影立绘，含示例台词。",
-                 self._load_template_demo),
-                ("导入 WebGAL 目录…", "选 WebGAL game 目录，反向导入背景与立绘。",
-                 self._import_webgal_dir),
-            ]
-            for title, desc, fn in cards:
-                self.asset_flow.addWidget(
-                    _TemplateCard(title, desc, fn, self.asset_host))
-            self._runtime_card = _RuntimeCard(self._runtime_online,
-                                              self._runtime_import_zip,
-                                              self.asset_host)
-            self.asset_flow.addWidget(self._runtime_card)
-            self.asset_empty.setVisible(False)
+            # v3.6.2：模板页改成「特效」页 —— 206 个高级演出特效。
+            # 原来的新建/演示/导入 WebGAL/运行时四个入口挪到「文件」菜单
+            # （用户要求模板换成特效；这些功能本来就该在菜单里）。
+            self._rebuild_effect_cards()
             return
         if filt == "media":
             # v3.5.16：媒体页改为「角色」页 —— 按角色分组，展开选模型
@@ -2083,7 +2242,224 @@ class VideoWorkbench(QWidget):
              else "应用到 %d 个片段" % len(targets)),
             parent=self, position=InfoBarPosition.TOP, duration=2000)
 
-    # ---------- 转场页 ----------
+    # ---------- 背景栏（素材库右侧） ----------
+    def _load_bg_items(self):
+        """读素材库 asset_index 里 kind=bg 的条目（首次调用时缓存）。"""
+        if self._bg_items:
+            return self._bg_items
+        try:
+            import asset_paths as AP
+            import json as _json
+            root = AP.ensure_library(scan=False)
+            if not root:
+                return []
+            p = os.path.join(root, "asset_index.json")
+            with open(p, encoding="utf-8-sig") as f:
+                idx = _json.load(f)
+        except Exception:
+            return []
+        out = []
+        for e in idx:
+            if not isinstance(e, dict) or e.get("kind") != "bg":
+                continue
+            rel = str(e.get("file") or "").replace("\\", "/")
+            if not rel:
+                continue
+            full = os.path.join(root, rel.replace("/", os.sep))
+            if not os.path.isfile(full):
+                continue
+            # 分类 = 父目录名（"background/商店/xx.webp" -> "商店"）
+            parts = rel.split("/")
+            cat = parts[-2] if len(parts) >= 3 else "未分类"
+            # 二级目录（"学校、工作/羽丘"）合并成 "学校、工作·羽丘"
+            if len(parts) >= 4:
+                cat = "%s·%s" % (parts[-3], parts[-2])
+            out.append({"full": full, "rel": rel, "name": str(e.get("name") or ""),
+                        "cat": cat})
+        self._bg_items = out
+        return out
+
+    def _bg_categories(self):
+        """背景分类列表（按条目数降序）。"""
+        from collections import Counter
+        c = Counter(b["cat"] for b in self._load_bg_items())
+        return [k for k, _ in c.most_common()]
+
+    def _rebuild_bg_cards(self, *_a):
+        """渲染背景栏：按分类筛选，显示缩略图卡片。"""
+        items = self._load_bg_items()
+        # 首次填充分类下拉（除「全部」外按条数降序）
+        if items and self.bg_combo.count() <= 1:
+            try:
+                self.bg_combo.blockSignals(True)
+                for cat in self._bg_categories():
+                    self.bg_combo.addItem(cat)
+                self.bg_combo.blockSignals(False)
+            except Exception:
+                pass
+        # 清空
+        while self.bg_flow.count():
+            it = self.bg_flow.takeAt(0)
+            w = it.widget() if hasattr(it, "widget") else it
+            if isinstance(w, QWidget):
+                w.deleteLater()
+        sel = ""
+        try:
+            sel = self.bg_combo.currentText() if self.bg_combo.count() else "全部"
+        except Exception:
+            sel = "全部"
+        show = [b for b in items if sel in ("", "全部") or b["cat"] == sel]
+        self.bg_count.setText("%d 张" % len(show))
+        for b in show[:400]:        # 上限 400（再多建卡片会卡，用下拉筛）
+            pm = self._bg_thumb(b["full"])
+            card = _BgCard(b, pm, on_click=self._apply_background,
+                           parent=self.bg_host)
+            self.bg_flow.addWidget(card)
+        self.bg_empty.setVisible(not show)
+        self.bg_empty.setText("素材库里没有背景图\n（资产管理里确认素材库位置）"
+                              if not items else "该分类下没有背景")
+
+    def _bg_thumb(self, path):
+        cache = getattr(self, "_bg_thumb_cache", None)
+        if cache is None:
+            cache = self._bg_thumb_cache = {}
+        if path in cache:
+            return cache[path]
+        pm = None
+        try:
+            from PySide6.QtGui import QPixmap, QImageReader
+            r = QImageReader(path)
+            r.setScaledSize(QSize(96, 54))     # 直接让 Qt 解码到小尺寸（快）
+            img = r.read()
+            if not img.isNull():
+                pm = QPixmap.fromImage(img)
+        except Exception:
+            pm = None
+        cache[path] = pm
+        return pm
+
+    def _apply_background(self, bg):
+        """点背景卡：把该图设为**当前时刻**生效的背景。
+
+        做法：写一个 cover 满幅 image clip 到最底视频轨，从当前时刻起
+        延续到工程末尾（或下一个背景 clip 起点前）。这样既有即时预览，
+        导出时也自然变成 changeBg。
+        """
+        t = float(getattr(self, "_t", 0.0) or 0.0)
+        try:
+            import video_source as VS
+            src = VS.probe_source(bg["full"])
+        except Exception as e:
+            InfoBar.warning("背景加载失败", str(e)[:120], parent=self,
+                            position=InfoBarPosition.TOP, duration=3000)
+            return
+        # 找/建底轨（BG 命名优先，否则最前可见视频轨）
+        tid = None
+        aid = getattr(self, "_cur_aid", None)
+        for tr in V._tracks_of(self.proj, aid):
+            if tr.get("kind") == "video" and not tr.get("hidden") \
+                    and str(tr.get("name") or "").upper().startswith("BG"):
+                tid = tr.get("id")
+                break
+        if tid is None:
+            ok, _m, tid = V.add_track(self.proj, "video", "BG", aid=aid)
+            if not ok:
+                InfoBar.warning("建立背景轨失败", _m, parent=self,
+                                position=InfoBarPosition.TOP, duration=2500)
+                return
+        tr = V.find_track(self.proj, tid, aid)
+        # 时长：到工程末尾（至少 5s），并让位于当前时刻之后的旧背景 clip
+        dur_end = max(V.project_duration(self.proj, aid), t + 5.0)
+        dur = max(V.MIN_DUR, dur_end - t)
+        clip = V.new_clip(src, t, dur)
+        lay = clip["layout"]
+        lay["x"], lay["y"], lay["scale"] = 0.5, 0.5, 1.0
+        lay["cover"] = True          # 背景铺满（WebGAL changeBg 语义）
+        # 与同轨后续背景冲突时，把新 clip 截到下一个起点
+        nxt = [float(c.get("start") or 0.0)
+               for c in (tr.get("clips") or [])
+               if float(c.get("start") or 0.0) > t + 1e-6]
+        if nxt:
+            clip["dur"] = round(min(float(clip["dur"]), min(nxt) - t), 3)
+            if clip["dur"] < V.MIN_DUR:
+                clip["dur"] = V.MIN_DUR
+        ok, cid = V.add_clip(self.proj, tid, clip, aid=aid)
+        if not ok:
+            InfoBar.warning("背景插入失败", cid, parent=self,
+                            position=InfoBarPosition.TOP, duration=2500)
+            return
+        self.push_history()
+        self.timeline.refresh()
+        self.render_frame(self._t)
+        self._after_edit()
+        InfoBar.success("背景已设置", bg.get("name") or os.path.basename(
+            bg["full"]), parent=self, position=InfoBarPosition.TOP,
+            duration=1800)
+    def _rebuild_effect_cards(self):
+        """特效页：按分类分组列出 206 个演出特效，点卡片=在当前时刻插入。
+
+        数据源 stage_effects（来自《WebGAL 高级演出特效代码整合》docx）。
+        特效是**按时刻生效的指令**，写进 proj["effects"]（[{t,cmd}]），
+        导出时按时刻原样 emit 回引擎——这条链路 webgal_import 已经在用
+        （导入端把 setTransform/setTempAnimation 留档到 effects）。
+        """
+        import stage_effects as SE
+        cur_aid = getattr(self, "_cur_aid", None)
+        # 分类折叠状态（默认全收起：206 张卡全展开太慢）
+        opened = getattr(self, "_fx_open", None)
+        if opened is None:
+            opened = self._fx_open = set()
+        for cat, cnt in SE.CATEGORIES:
+            items = SE.by_category(cat)
+            if not items:
+                continue
+            exp = cat in opened
+            self.asset_flow.addWidget(_FxCateCard(cat, len(items), expanded=exp,
+                                                  on_toggle=self._toggle_fx_cat,
+                                                  parent=self.asset_host))
+            if not exp:
+                continue
+            for e in items:
+                self.asset_flow.addWidget(_FxCard(e, self._apply_stage_effect,
+                                                  parent=self.asset_host))
+        self.asset_empty.setVisible(False)
+
+    def _toggle_fx_cat(self, cat):
+        s = getattr(self, "_fx_open", None)
+        if s is None:
+            s = self._fx_open = set()
+        if cat in s:
+            s.discard(cat)
+        else:
+            s.add(cat)
+        self._rebuild_keeping(
+            lambda w: (type(w).__name__ == "_FxCateCard"
+                       and getattr(w, "cat", None) == cat))
+
+    def _apply_stage_effect(self, eff):
+        """把特效指令插入当前时刻（写 proj["effects"]）。"""
+        t = float(getattr(self, "_t", 0.0) or 0.0)
+        codes = [str(c).strip().rstrip(";") for c in (eff.get("code") or [])
+                 if str(c).strip()]
+        if not codes:
+            return
+        effs = self.proj.get("effects")
+        if not isinstance(effs, list):
+            effs = self.proj["effects"] = []
+        for c in codes:
+            effs.append({"t": round(t, 3), "cmd": c + ";"})
+        # effects 需按时刻有序（导出/合成都按序扫）
+        try:
+            effs.sort(key=lambda x: float(x.get("t") or 0.0))
+        except Exception:
+            pass
+        self.push_history()
+        self._after_edit()
+        InfoBar.success(
+            "特效已插入",
+            "%s（%.2fs，%d 条指令）" % (eff.get("name") or "特效", t,
+                                     len(codes)),
+            parent=self, position=InfoBarPosition.TOP, duration=2200)
     def _rebuild_transition_cards(self):
         """转场页：列出引擎真实支持的转场预设（点卡片=设为全片转场）。
 
