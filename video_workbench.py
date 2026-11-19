@@ -546,6 +546,46 @@ class _TemplateCard(CardWidget):
         super().mousePressEvent(e)
 
 
+class _FxRow(CardWidget):
+    """已应用效果的一行：名称 + 时刻 + 删除按钮。
+
+    用在工程属性面板的「已应用的滤镜 / 特效」区。
+    kind: "effect"（proj["effects"] 里一条指令）/ "filter"（clip 上的滤镜）
+    """
+
+    def __init__(self, text, sub="", on_remove=None, parent=None,
+                 tooltip=""):
+        super().__init__(parent)
+        self.on_remove = on_remove
+        self.setFixedHeight(38)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 4, 4, 4)
+        lay.setSpacing(4)
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        t = CaptionLabel(str(text or ""), self)
+        t.setStyleSheet("color:%s;font-size:11px;" % TH.t("text"))
+        col.addWidget(t)
+        if sub:
+            s = CaptionLabel(str(sub), self)
+            s.setStyleSheet("color:%s;font-size:9px;" % TH.t("text_dim"))
+            col.addWidget(s)
+        lay.addLayout(col, 1)
+        self.btn_del = ToolButton(self)
+        self.btn_del.setIcon(FluentIcon.DELETE.icon())
+        self.btn_del.setFixedSize(20, 20)
+        self.btn_del.setToolTip("删除这一条")
+        self.btn_del.clicked.connect(self._remove)
+        lay.addWidget(self.btn_del)
+        if tooltip:
+            self.setToolTip(tooltip)
+
+    def _remove(self):
+        if self.on_remove:
+            self.on_remove()
+
+
 class _BgCateCard(CardWidget):
     """背景页的分类标题卡：分类名 + 张数，点击展开/收起（同一时刻一个）。
 
@@ -1202,6 +1242,59 @@ class VideoWorkbench(QWidget):
         rl.addLayout(r2)
         self.dur_lbl = CaptionLabel("总时长：00:00.0", right)
         rl.addWidget(self.dur_lbl)
+
+        # ---- v3.6.2：已应用的滤镜 / 特效管理（用户要求「能删除」）----
+        # 分两块：
+        #   · 特效（proj["effects"]）：按时刻的 setTransform / setTempAnimation，
+        #     一个工程可能堆几十条，逐条列出来删
+        #   · 滤镜（clip["filter"]）：挂在片段上的调色参数，列「哪个片段带了
+        #     滤镜」+ 一键清除
+        # 原来只能覆盖不能删：点了滤镜/特效后再想取消，只能撤销，撤销栈一长
+        # 就找不回来了。
+        _fx_title = QHBoxLayout()
+        _fx_title.addWidget(StrongBodyLabel("已应用的滤镜 / 特效", right))
+        _fx_title.addStretch(1)
+        self.fx_count_lbl = CaptionLabel("", right)
+        self.fx_count_lbl.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        _fx_title.addWidget(self.fx_count_lbl)
+        rl.addLayout(_fx_title)
+
+        self.fx_empty_lbl = CaptionLabel("当前工程没有特效，也没有片段带滤镜",
+                                         right)
+        self.fx_empty_lbl.setStyleSheet("color:%s;font-size:11px;"
+                                        % TH.t("text_dim"))
+        self.fx_empty_lbl.setWordWrap(True)
+        rl.addWidget(self.fx_empty_lbl)
+
+        # 特效列表容器（动态填 _FxRow）
+        self.fx_rows_host = QWidget(right)
+        self.fx_rows_lay = QVBoxLayout(self.fx_rows_host)
+        self.fx_rows_lay.setContentsMargins(0, 0, 0, 0)
+        self.fx_rows_lay.setSpacing(3)
+        rl.addWidget(self.fx_rows_host)
+
+        # 滤镜列表容器
+        self.flt_rows_host = QWidget(right)
+        self.flt_rows_lay = QVBoxLayout(self.flt_rows_host)
+        self.flt_rows_lay.setContentsMargins(0, 0, 0, 0)
+        self.flt_rows_lay.setSpacing(3)
+        rl.addWidget(self.flt_rows_host)
+
+        # 批量删除按钮
+        _fx_btns = QHBoxLayout()
+        self.btn_clear_effects = PushButton("清空所有特效", right)
+        self.btn_clear_effects.setFixedHeight(26)
+        self.btn_clear_effects.setToolTip(
+            "删除当前幕里全部 setTransform / setTempAnimation 特效指令")
+        self.btn_clear_effects.clicked.connect(self._clear_all_effects)
+        _fx_btns.addWidget(self.btn_clear_effects)
+        self.btn_clear_filters = PushButton("清空所有滤镜", right)
+        self.btn_clear_filters.setFixedHeight(26)
+        self.btn_clear_filters.setToolTip("删除所有片段上挂的滤镜参数")
+        self.btn_clear_filters.clicked.connect(self._clear_all_filters)
+        _fx_btns.addWidget(self.btn_clear_filters)
+        rl.addLayout(_fx_btns)
+
         rl.addSpacing(10)
         self.clip_title = StrongBodyLabel("选中片段属性", right)
         rl.addWidget(self.clip_title)
@@ -1391,6 +1484,11 @@ class VideoWorkbench(QWidget):
 
         self._apply_project(None)
         self._seed_history()
+        # v3.6.2：工程属性里「已应用的滤镜 / 特效」首屏填充
+        try:
+            self._refresh_fx_panel()
+        except Exception:
+            pass
         # v3.6.2：背景页签**懒渲染** —— 首次切到「背景」时才读索引建卡
         # （1053 条目建 400 张卡有开销，不该拖慢启动）。这里只清空占位。
 
@@ -1427,6 +1525,10 @@ class VideoWorkbench(QWidget):
             pass
         self._update_transport()
         self._fill_clip_props()
+        try:
+            self._refresh_fx_panel()
+        except Exception:
+            pass
         if not self._playing:
             self.render_frame(self._t)
 
@@ -2278,7 +2380,190 @@ class VideoWorkbench(QWidget):
              else "应用到 %d 个片段" % len(targets)),
             parent=self, position=InfoBarPosition.TOP, duration=2000)
 
-    # ---------- 背景栏（素材库右侧） ----------
+    # ---------- 已应用的滤镜 / 特效（删除管理） ----------
+    def _fx_effect_label(self, ef):
+        """把一条 effects 指令折成便于阅读的「名字 + 关键参数」摘要。"""
+        import re as _re
+        cmd = str((ef or {}).get("cmd") or "")
+        try:
+            t = float((ef or {}).get("t") or 0.0)
+        except (TypeError, ValueError):
+            t = 0.0
+        head = cmd.split(":", 1)[0].strip() if ":" in cmd else cmd[:16]
+        tm = _re.search(r"-target=(\S+?)(?:\s|;|$)", cmd)
+        target = tm.group(1) if tm else ""
+        # 参数摘要：挑几个最能说明效果的键
+        params = ""
+        m = _re.search(r"[{\(\[](.+?)[\}\)\]]", cmd, _re.S)
+        if m:
+            body = m.group(1)
+            keys = _re.findall(r'"([A-Za-z]+)"\s*:', body)
+            show = [k for k in keys
+                    if k in ("brightness", "contrast", "saturation", "gamma",
+                             "bevel", "bloom", "blur", "oldFilm", "glitchFilm",
+                             "rgbFilm", "dotFilm", "scale", "shakePower",
+                             "position", "alpha", "colorRed")]
+            params = ", ".join(show[:4])
+        if head == "setTempAnimation":
+            kind = "镜头动画"
+        elif head == "setTransform":
+            kind = "滤镜"
+        else:
+            kind = head
+        tgt_txt = {"bg-main": "背景", "fig-center": "立绘中",
+                   "fig-left": "立绘左", "fig-right": "立绘右"}.get(
+                       target, target)
+        parts = [kind]
+        if tgt_txt:
+            parts.append(tgt_txt)
+        if params:
+            parts.append(params)
+        return " · ".join(parts), "%.2fs" % t
+
+    def _refresh_fx_panel(self):
+        """重建「已应用的滤镜 / 特效」列表（工程属性面板里）。"""
+        # ---- 清空旧行 ----
+        for lay in (getattr(self, "fx_rows_lay", None),
+                    getattr(self, "flt_rows_lay", None)):
+            if lay is None:
+                continue
+            while lay.count():
+                it = lay.takeAt(0)
+                w = it.widget() if hasattr(it, "widget") else it
+                if isinstance(w, QWidget):
+                    w.deleteLater()
+        if not hasattr(self, "fx_count_lbl"):
+            return
+        aid = getattr(self, "_cur_aid", None)
+        effects = list(V.act_view(self.proj, aid).get("effects") or [])
+        # 片段上的滤镜
+        clips_with_filter = []
+        for tr in V._tracks_of(self.proj, aid):
+            for c in (tr.get("clips") or []):
+                f = c.get("filter")
+                if isinstance(f, dict) and f:
+                    clips_with_filter.append((tr, c, f))
+
+        n_eff = len(effects)
+        n_flt = len(clips_with_filter)
+        self.fx_count_lbl.setText("特效 %d · 滤镜 %d" % (n_eff, n_flt))
+        empty = (n_eff == 0 and n_flt == 0)
+        self.fx_empty_lbl.setVisible(empty)
+        self.fx_rows_host.setVisible(n_eff > 0)
+        self.flt_rows_host.setVisible(n_flt > 0)
+        self.btn_clear_effects.setEnabled(n_eff > 0)
+        self.btn_clear_filters.setEnabled(n_flt > 0)
+
+        # ---- 特效行 ----
+        for idx, ef in enumerate(effects):
+            title, sub = self._fx_effect_label(ef)
+            cmd = str(ef.get("cmd") or "")
+            row = _FxRow(title, sub,
+                         on_remove=(lambda i=idx: self._remove_effect(i)),
+                         parent=self.fx_rows_host,
+                         tooltip=cmd[:300])
+            self.fx_rows_lay.addWidget(row)
+
+        # ---- 滤镜行 ----
+        for tr, c, f in clips_with_filter:
+            # 参数摘要
+            keys = [k for k in ("brightness", "contrast", "saturation", "gamma",
+                                "bevel", "bloom", "blur", "colorRed",
+                                "colorGreen", "colorBlue", "oldFilm",
+                                "glitchFilm", "rgbFilm", "dotFilm")
+                    if k in f]
+            src = (c.get("source") or {})
+            nm = os.path.basename(str(src.get("path") or "").rstrip("\\/")) \
+                or str(c.get("id") or "")
+            sub = "%s · %.2fs" % (nm[:18], float(c.get("start") or 0.0))
+            row = _FxRow("滤镜 · " + (", ".join(keys[:5]) or "（空）"), sub,
+                         on_remove=(lambda cid=c.get("id"):
+                                    self._remove_clip_filter(cid)),
+                         parent=self.flt_rows_host)
+            self.flt_rows_lay.addWidget(row)
+
+    def _remove_effect(self, idx):
+        """删掉 proj["effects"] 里第 idx 条（当前幕）。"""
+        aid = getattr(self, "_cur_aid", None)
+        view = V.act_view(self.proj, aid)
+        effs = view.get("effects")
+        if not isinstance(effs, list) or not (0 <= idx < len(effs)):
+            return
+        try:
+            name, _sub = self._fx_effect_label(effs[idx])
+            del effs[idx]
+        except Exception:
+            return
+        self.push_history()
+        self._after_edit()
+        self.render_frame(self._t)
+        self._refresh_fx_panel()
+        InfoBar.success("已删除特效", name or "特效已移除", parent=self,
+                        position=InfoBarPosition.TOP, duration=1800)
+
+    def _remove_clip_filter(self, clip_id):
+        """删掉某片段上的滤镜。"""
+        try:
+            _tr, c = V.find_clip(self.proj, clip_id)
+        except Exception:
+            _tr, c = None, None
+        if not isinstance(c, dict) or "filter" not in c:
+            return
+        c.pop("filter", None)
+        self.push_history()
+        self._after_edit()
+        self.render_frame(self._t)
+        self._refresh_fx_panel()
+        InfoBar.success("已删除滤镜", "片段滤镜已清除", parent=self,
+                        position=InfoBarPosition.TOP, duration=1800)
+
+    def _clear_all_effects(self):
+        """清空当前幕全部特效（二次确认）。"""
+        aid = getattr(self, "_cur_aid", None)
+        view = V.act_view(self.proj, aid)
+        effs = view.get("effects")
+        if not isinstance(effs, list) or not effs:
+            return
+        n = len(effs)
+        box = MessageBox("清空所有特效",
+                         "确定删除当前幕的全部 %d 条特效指令吗？\n"
+                         "（可用撤销恢复）" % n, self)
+        if not box.exec():
+            return
+        effs.clear()
+        self.push_history()
+        self._after_edit()
+        self.render_frame(self._t)
+        self._refresh_fx_panel()
+        InfoBar.success("已清空", "删除 %d 条特效" % n, parent=self,
+                        position=InfoBarPosition.TOP, duration=2000)
+
+    def _clear_all_filters(self):
+        """清空所有片段上的滤镜（二次确认）。"""
+        aid = getattr(self, "_cur_aid", None)
+        hits = []
+        for tr in V._tracks_of(self.proj, aid):
+            for c in (tr.get("clips") or []):
+                if isinstance(c.get("filter"), dict) and c["filter"]:
+                    hits.append(c)
+        if not hits:
+            return
+        n = len(hits)
+        box = MessageBox("清空所有滤镜",
+                         "确定删除 %d 个片段上的滤镜吗？\n"
+                         "（可用撤销恢复）" % n, self)
+        if not box.exec():
+            return
+        for c in hits:
+            c.pop("filter", None)
+        self.push_history()
+        self._after_edit()
+        self.render_frame(self._t)
+        self._refresh_fx_panel()
+        InfoBar.success("已清空", "删除 %d 个片段的滤镜" % n, parent=self,
+                        position=InfoBarPosition.TOP, duration=2000)
+
+    # ---------- 背景栏数据（背景页签用；页面在左栏内） ----------
     def _load_bg_items(self):
         """读素材库 asset_index 里 kind=bg 的条目（首次调用时缓存）。"""
         if self._bg_items:
@@ -3855,6 +4140,11 @@ class VideoWorkbench(QWidget):
         """任何成功编辑后：刷新预览/时长/属性。"""
         self._update_transport()
         self._fill_clip_props()
+        # v3.6.2：滤镜/特效列表跟着工程变（插入特效、套滤镜、删片段都要刷）
+        try:
+            self._refresh_fx_panel()
+        except Exception:
+            pass
         if not self._playing:
             self.render_frame(self._t)
 
