@@ -43,15 +43,31 @@ import zipfile
 from PySide6.QtCore import QThread, Signal
 
 # ---------------- 常量（测试可整体替换这些模块级变量造假服务器） ----------------
-OWNER_REPO = "hajimi-114514-manbo/12d"
+# v3.6.2：主源迁到 Gitee（国内直连快、GitHub 常被墙/需镜像），GitHub 保留
+# 作回退——两个平台任一可达即可检查更新，双保险。
+GITEE_OWNER_REPO = "manbomanbodingdongjihajimi/itsmygo"
+GH_OWNER_REPO = "hajimi-114514-manbo/12d"
+OWNER_REPO = GH_OWNER_REPO          # 兼容旧调用方/测试对 OWNER_REPO 的引用
 BRANCH = "main"
+# Gitee raw 分支名：仓库主分支常见 master/main 两种，都试（releases 走 raw/master）
+GITEE_BRANCHES = ("master", "main")
+
 REPO_VERSION_URLS = [
-    "https://raw.githubusercontent.com/%s/%s/version.json" % (OWNER_REPO, BRANCH),
-    "https://ghfast.top/https://raw.githubusercontent.com/%s/%s/version.json" % (OWNER_REPO, BRANCH),
-    "https://cdn.jsdelivr.net/gh/%s@%s/version.json" % (OWNER_REPO, BRANCH),
+    # ---- Gitee 优先（3 种回退：raw 两种分支）----
+    "https://gitee.com/%s/raw/master/version.json" % GITEE_OWNER_REPO,
+    "https://gitee.com/%s/raw/main/version.json" % GITEE_OWNER_REPO,
+    # ---- GitHub 回退（直连 + 镜像 + CDN）----
+    "https://raw.githubusercontent.com/%s/%s/version.json" % (GH_OWNER_REPO, BRANCH),
+    "https://ghfast.top/https://raw.githubusercontent.com/%s/%s/version.json" % (GH_OWNER_REPO, BRANCH),
+    "https://cdn.jsdelivr.net/gh/%s@%s/version.json" % (GH_OWNER_REPO, BRANCH),
 ]
-RELEASE_URL_TPL = ("https://github.com/%s/releases/download/v{ver}/"
-                   "MuppetStudio-Setup-v{ver}.exe" % OWNER_REPO)
+# 安装包/增量包：Gitee Release 附件优先，GitHub Release 回退。
+# Gitee 的 release 附件下载地址形如
+#   https://gitee.com/<owner>/<repo>/releases/download/v<ver>/<file>
+# （与 GitHub 同构，社区版支持；仓库未开 Release 时该 URL 404 -> 自动落到 GitHub）
+GITEE_RELEASE_BASE = "https://gitee.com/%s/releases/download" % GITEE_OWNER_REPO
+GH_RELEASE_BASE = "https://github.com/%s/releases/download" % GH_OWNER_REPO
+RELEASE_URL_TPL = GH_RELEASE_BASE + "/v{ver}/MuppetStudio-Setup-v{ver}.exe"
 MIRROR_PREFIX = "https://ghfast.top/"
 # 安装包文件名。发布版带版本号（用户要求"给安装包名字打上版本号"），
 # 便于下载后一眼看出是哪个版本；老版本无参调用走 INSTALLER_NAME 保持兼容。
@@ -59,8 +75,7 @@ INSTALLER_NAME = "MuppetStudio-Setup.exe"
 INSTALLER_NAME_TPL = "MuppetStudio-Setup-v{ver}.exe"
 # 增量包命名（与 D:\scripts\temp\make_incr_pack.py 产物一致；发布脚本会照着写清单）
 PATCH_NAME_TPL = "MuppetStudio-Update-v{to}-from-v{from}.zip"
-PATCH_URL_TPL = ("https://github.com/%s/releases/download/v{to}/"
-                 "MuppetStudio-Update-v{to}-from-v{from}.zip" % OWNER_REPO)
+PATCH_URL_TPL = GH_RELEASE_BASE + "/v{to}/MuppetStudio-Update-v{to}-from-v{from}.zip"
 PATCH_MAX_BYTES = 256 * 1024 * 1024   # 增量包解压后总大小上限（防呆，非业务限制）
 PATCH_MAX_ENTRIES = 20000             # 条目数上限（防 zip 炸弹）
 # 发布包里给"人工覆盖"用的两个文件：自动更新时不需要，解包阶段就跳过
@@ -97,6 +112,44 @@ def installer_name(ver=None):
 
 def installer_path(ver=None):
     return os.path.join(update_dir(), installer_name(ver))
+
+
+# ---------------- 下载地址多源（Gitee 优先，GitHub 回退） ----------------
+def release_urls(ver):
+    """某版本的安装包候选下载地址（按优先级）。
+
+    Gitee Release 附件优先（国内直连快）；未上传附件/仓库没开 Release
+    时该 URL 404，_download_installer 会继续试 GitHub 直连与 ghfast 镜像。
+
+    **测试可打桩**：若 RELEASE_URL_TPL 已被替换成非默认值（假服务器），
+    就直接用它 + MIRROR_PREFIX，不再拼 gitee/github 绝对地址——保持
+    既有测试「整体替换模块级变量」的约定。"""
+    default_tpl = GH_RELEASE_BASE + "/v{ver}/" + INSTALLER_NAME_TPL
+    if RELEASE_URL_TPL != default_tpl:
+        u = RELEASE_URL_TPL.format(ver=ver)
+        return [u, MIRROR_PREFIX + u]
+    fname = installer_name(ver)
+    gh = GH_RELEASE_BASE + "/v%s/%s" % (ver, fname)
+    return [
+        "%s/v%s/%s" % (GITEE_RELEASE_BASE, ver, fname),
+        gh,
+        MIRROR_PREFIX + gh,
+    ]
+
+
+def patch_urls(to_ver, from_ver):
+    """某增量包的候选下载地址（按优先级，口径同 release_urls）。"""
+    default_tpl = GH_RELEASE_BASE + "/v{to}/" + PATCH_NAME_TPL
+    if PATCH_URL_TPL != default_tpl:
+        u = PATCH_URL_TPL.format(to=str(to_ver), **{"from": str(from_ver)})
+        return [u, MIRROR_PREFIX + u]
+    fname = patch_name(to_ver, from_ver)
+    gh = GH_RELEASE_BASE + "/v%s/%s" % (to_ver, fname)
+    return [
+        "%s/v%s/%s" % (GITEE_RELEASE_BASE, to_ver, fname),
+        gh,
+        MIRROR_PREFIX + gh,
+    ]
 
 
 # ---------------- 增量包：路径与清单解析 ----------------
@@ -857,8 +910,7 @@ class UpdateThread(QThread):
             if self._cancelled():
                 return
             self.status.emit("改用完整安装包 v%s…" % remote)
-        url = RELEASE_URL_TPL.format(ver=remote)
-        urls = [url, MIRROR_PREFIX + url]
+        urls = release_urls(remote)
         target = installer_path(remote)
         # 上一轮已下好且仍是要的版本：直接复用
         if os.path.isfile(target) and os.path.getsize(target) > 0:
@@ -918,8 +970,7 @@ class UpdateThread(QThread):
             target = patch_path(to, frm)
         except OSError:
             return False
-        url = patch_url(to, frm)
-        urls = [url, MIRROR_PREFIX + url]
+        urls = patch_urls(to, frm)
         # 上一轮已下好且校验通过：直接复用，不重复下载
         if os.path.isfile(target) and os.path.getsize(target) > 0:
             try:
@@ -999,8 +1050,7 @@ class UpdateThread(QThread):
                     except OSError:
                         reuse = False
                 if not reuse:
-                    url = patch_url(to, frm)
-                    urls = [url, MIRROR_PREFIX + url]
+                    urls = patch_urls(to, frm)
                     base = got
                     ok = _download_installer(
                         urls, target,
