@@ -687,157 +687,193 @@ const puppetAPI = {
     state.filter = [bgB && bgB.css, figB && figB.css].filter(Boolean).join(" | ");
   },
 
-  // ================= v3.6.2：立绘 PIXI 滤镜（bevel / bloom） =================
-  // 为什么用 PIXI 滤镜而不是 CSS：bevel（斜面浮雕/边缘光）和 bloom（泛光）
-  // 都需要对**立绘像素本身**做卷积，CSS filter 表达不了。运行时自带
-  // pixi.js v6.5.10，其中 PIXI.filters 有 BlurFilter / ColorMatrixFilter /
-  // AlphaFilter / NoiseFilter，BlurFilter 正是做 bloom 的模糊阶段要的。
+  // ================= v3.6.3：立绘 PIXI 滤镜（bevel / bloom）=================
+  // **照搬引擎真实实现**（不是近似）。运行时主包里打包了完整 pixi-filters
+  // v4.2.0（37 个滤镜包），引擎用混淆类名 bIe(BEVEL) / r2e(ADVANCED_BLOOM)
+  // 实例化，这些类没暴露到 window，但 GLSL 源码就在 bundle 里，直接抠出来
+  // 用 PIXI.Filter 重建 —— 参数语义与引擎逐项对齐。
   //
-  // 做法：
-  //   bevel —— 手写 Filter（3x3 邻域求梯度当边缘，按 bevelRotation 方向
-  //            选 colors，叠到原图上；强度 bevel、厚度 bevelThickness 控制
-  //            采样距离，颜色取 bevelRed/Green/Blue）
-  //   bloom —— 拆成两段：BlurFilter 模糊 + 一个 screen 混合 Filter 把模糊
-  //            图按 bloomBrightness 叠回原图；bloomBlur 控半径、bloom 控强度
-  // 两个各是一个 Filter 实例，按需 attach 到 figLayer.filters。
+  // 为什么必须照搬（用户给的参考图验证）：引擎 bevel 用 **alpha 差**判边缘，
+  // 高光走「滤色」、阴影走「正片叠底」，还带方向柔化；手写近似用亮度差 +
+  // 简单加法，出不来「人物边缘一圈暖色轮廓光」的电影感效果。
+  //
+  // 参数映射（引擎 bundle 里的 gD 映射表，逐字核对过）：
+  //   bevel          -> bevel.lightAlpha
+  //   bevelThickness -> bevel.thickness
+  //   bevelRotation  -> bevel.rotation（度）
+  //   bevelSoftness  -> bevel.softness（0~1）
+  //   bevelRed/Green/Blue -> lightColor（RGB 打包成 0xRRGGBB）
+  //   bloom          -> bloom.bloomScale
+  //   bloomBrightness-> bloom.brightness
+  //   bloomBlur      -> bloom.blur
+  //   bloomThreshold -> bloom.threshold
+
+  // ---- bevel：引擎 bIe 的 frag（原样）----
+  _BEVEL_FRAG: [
+    "precision mediump float;",
+    "varying vec2 vTextureCoord;",
+    "uniform sampler2D uSampler;",
+    "uniform sampler2D mask;",          // 柔化时传模糊后的 alpha 图
+    "uniform vec4 filterArea;",
+    "uniform float transformX;",
+    "uniform float transformY;",
+    "uniform vec3 lightColor;",
+    "uniform float lightAlpha;",
+    "uniform vec3 shadowColor;",
+    "uniform float shadowAlpha;",
+    "void main(void) {",
+    "  vec2 transform = vec2(1.0 / filterArea) * vec2(transformX, transformY);",
+    "  vec4 color = texture2D(uSampler, vTextureCoord);",
+    "  float light = texture2D(mask, vTextureCoord - transform).a;",
+    "  float shadow = texture2D(mask, vTextureCoord + transform).a;",
+    // 高光：滤色（screen）——这是「边缘一圈亮光」的来源
+    "  color.rgb = mix(color.rgb,",
+    "    vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - lightColor),",
+    "    clamp((color.a - light) * lightAlpha, 0.0, 1.0));",
+    // 阴影：正片叠底（multiply）
+    "  color.rgb = mix(color.rgb, color.rgb * shadowColor,",
+    "    clamp((color.a - shadow) * shadowAlpha, 0.0, 1.0));",
+    "  gl_FragColor = vec4(color.rgb, color.a);",
+    "}",
+  ].join("\n"),
+
+  // ---- advanced-bloom：引擎 r2e 的三段式 ----
+  _BLOOM_EXTRACT_FRAG: [
+    "uniform sampler2D uSampler;",
+    "varying vec2 vTextureCoord;",
+    "uniform float threshold;",
+    "void main() {",
+    "  vec4 color = texture2D(uSampler, vTextureCoord);",
+    "  float _max = max(max(color.r, color.g), color.b);",
+    "  float _min = min(min(color.r, color.g), color.b);",
+    "  float brightness = (_max + _min) * 0.5;",
+    "  if (brightness > threshold) { gl_FragColor = color; }",
+    "  else { gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0); }",
+    "}",
+  ].join("\n"),
+  _BLOOM_COMBINE_FRAG: [
+    "uniform sampler2D uSampler;",
+    "varying vec2 vTextureCoord;",
+    "uniform sampler2D bloomTexture;",
+    "uniform float bloomScale;",
+    "uniform float brightness;",
+    "void main() {",
+    "  vec4 color = texture2D(uSampler, vTextureCoord);",
+    "  color.rgb *= brightness;",
+    "  vec4 bloomColor = vec4(texture2D(bloomTexture, vTextureCoord).rgb, 0.0);",
+    "  bloomColor.rgb *= bloomScale;",
+    "  gl_FragColor = color + bloomColor;",
+    "}",
+  ].join("\n"),
+
   _ensureBevelFilter() {
     if (figFilters.bevel) return figFilters.bevel;
     const PIXI = window.PIXI;
     if (!PIXI || !PIXI.Filter) return null;
-    // GLSL：用邻居像素亮度差近似法线，按 rotation 方向算边缘高光/阴影
-    const frag = [
-      "varying vec2 vTextureCoord;",
-      "uniform sampler2D uSampler;",
-      "uniform vec4 uInputSize;",          // 输入纹理尺寸
-      "uniform float uStrength;",          // bevel 强度
-      "uniform float uThickness;",         // 采样距离（px）
-      "uniform float uAngle;",             // 方向角（度）
-      "uniform vec3 uColor;",              // 边缘颜色
-      "void main(void) {",
-      "  vec4 base = texture2D(uSampler, vTextureCoord);",
-      "  vec2 px = uInputSize.zw * uThickness;",
-      "  float a = radians(uAngle);",
-      "  vec2 dir = vec2(cos(a), sin(a));",
-      "  vec2 off = dir * px;",
-      // 沿方向左右各采一点，亮度差 = 边缘
-      "  vec3 c1 = texture2D(uSampler, vTextureCoord + off).rgb;",
-      "  vec3 c2 = texture2D(uSampler, vTextureCoord - off).rgb;",
-      "  float l1 = dot(c1, vec3(0.299, 0.587, 0.114));",
-      "  float l2 = dot(c2, vec3(0.299, 0.587, 0.114));",
-      "  float edge = (l1 - l2);",
-      // 只在不透明区域画边（避免透明区变脏）
-      "  float mask = smoothstep(0.05, 0.35, base.a);",
-      "  float k = edge * uStrength * mask;",
-      // 正梯度提亮（高光），负梯度压暗（阴影）——这是浮雕感的来源
-      "  vec3 hl = clamp(base.rgb + vec3(k) * uColor, 0.0, 1.0);",
-      "  vec3 sh = clamp(base.rgb + vec3(k) * 0.45, 0.0, 1.0);",
-      "  vec3 outc = (k >= 0.0) ? hl : sh;",
-      "  gl_FragColor = vec4(outc, base.a);",
-      "}",
-    ].join("\n");
-    const f = new PIXI.Filter(undefined, frag, {
-      uStrength: 0,
-      uThickness: 2,
-      uAngle: 30,
-      uColor: new Float32Array([1, 1, 1]),
+    const f = new PIXI.Filter(undefined, this._BEVEL_FRAG, {
+      transformX: 0,
+      transformY: 0,
+      lightColor: new Float32Array([1, 1, 1]),
+      lightAlpha: 0,
+      shadowColor: new Float32Array([0, 0, 0]),
+      shadowAlpha: 0.7,
     });
-    // uInputSize / 其余自动 uniform 由 PIXI 注入（用默认 filterUniforms）
+    f.padding = 1;
     figFilters.bevel = f;
     return f;
   },
-  _ensureBloomFilter() {
-    if (figFilters.bloom) return figFilters.bloom;
+  _ensureBloomFilters() {
+    if (figFilters.bloom) return figFilters;
     const PIXI = window.PIXI;
     if (!PIXI || !PIXI.Filter) return null;
-    // 与背景做 screen 混合：bloom 图按强度加亮原图
-    const frag = [
-      "varying vec2 vTextureCoord;",
-      "uniform sampler2D uSampler;",       // 输入（原图）
-      "uniform sampler2D uBloomMap;",      // 模糊后的图
-      "uniform float uStrength;",          // bloom 强度
-      "uniform float uBrightness;",        // bloom 亮度
-      "void main(void) {",
-      "  vec4 base = texture2D(uSampler, vTextureCoord);",
-      "  vec4 blo = texture2D(uBloomMap, vTextureCoord);",
-      "  // 泛光只取亮的区域（阈值筛），screen 混合提亮",
-      "  float lum = dot(blo.rgb, vec3(0.299, 0.587, 0.114));",
-      "  float k = smoothstep(0.28, 0.75, lum) * uStrength * uBrightness;",
-      "  vec3 bloomed = 1.0 - (1.0 - base.rgb) * (1.0 - blo.rgb * k);",
-      "  gl_FragColor = vec4(clamp(bloomed, 0.0, 1.0), base.a);",
-      "}",
-    ].join("\n");
-    const f = new PIXI.Filter(undefined, frag, {
-      uStrength: 0,
-      uBrightness: 1,
-    });
-    figFilters.bloom = f;
-    return f;
+    // ① 阈值提取
+    figFilters.bloomExtract = new PIXI.Filter(undefined,
+      this._BLOOM_EXTRACT_FRAG, { threshold: 0 });
+    // ② 模糊（复用内置 BlurFilter）
+    if (!figFilters.blurPass && PIXI.filters && PIXI.filters.BlurFilter) {
+      figFilters.blurPass = new PIXI.filters.BlurFilter(8, 2);
+    }
+    // ③ 相加合成
+    figFilters.bloom = new PIXI.Filter(undefined,
+      this._BLOOM_COMBINE_FRAG, {
+        bloomTexture: null,
+        bloomScale: 0,
+        brightness: 1,
+      });
+    return figFilters;
   },
-  // 从 spec 里取 bevel 参数合法性判断（任一参数非默认即需要）
+
+  // 把引擎单位转成 shader uniform（thickness/rotation -> transformX/Y）
+  _bevelSet(f, g) {
+    const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
+    const thick = v("bevelThickness", 2);
+    const deg = v("bevelRotation", 45);
+    const rad = deg * Math.PI / 180.0;
+    // 与引擎 _updateTransform 完全一致
+    f.uniforms.transformX = thick * Math.cos(rad);
+    f.uniforms.transformY = thick * Math.sin(rad);
+    f.uniforms.lightAlpha = v("bevel", 0);
+    f.uniforms.shadowAlpha = v("bevel", 0) * 0.7;   // 阴影略淡
+    const r = v("bevelRed", 255) / 255;
+    const gg = v("bevelGreen", 255) / 255;
+    const b = v("bevelBlue", 255) / 255;
+    const lc = f.uniforms.lightColor;
+    if (lc && lc.length === 3) { lc[0] = r; lc[1] = gg; lc[2] = b; }
+    else { f.uniforms.lightColor = new Float32Array([r, gg, b]); }
+  },
+
+  // 从 spec 里判断要不要挂（与引擎 isDefault 同口径）
   _specWantsBevel(g) {
     if (!g) return false;
     const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-    return v("bevel", 0) > 0;
+    // 引擎 isDefault: lightAlpha/2? 实际只要 lightAlpha>0 或 thickness>0 即非默认
+    return v("bevel", 0) > 0 || v("bevelThickness", 0) > 0;
   },
   _specWantsBloom(g) {
     if (!g) return false;
     const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-    return v("bloom", 0) > 0 || v("bloomBrightness", 1) !== 1;
+    return v("bloom", 0) > 0 || v("bloomBlur", 0) > 0
+      || v("bloomThreshold", 0) > 0;
   },
 
-  // 把 bevel / bloom 参数落到 figLayer 的 PIXI 滤镜上（幂等）
+  // 把 bevel / bloom 参数落到 figLayer 的 PIXI 滤镜链上（幂等）
   _applyFigFilters(g) {
     if (!figLayer) return;
-    const cur = figLayer.filters ? figLayer.filters.filter(Boolean) : [];
     const want = [];
     // ---- bevel ----
     if (this._specWantsBevel(g)) {
       const f = this._ensureBevelFilter();
-      if (f) {
-        const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-        f.uniforms.uStrength = v("bevel", 1) * 1.6;
-        f.uniforms.uThickness = Math.max(1, Math.min(20,
-          v("bevelThickness", 10) / 6));       // 30px -> 5px 采样
-        f.uniforms.uAngle = v("bevelRotation", 30);
-        const r = v("bevelRed", 255) / 255, gg = v("bevelGreen", 255) / 255,
-              b = v("bevelBlue", 255) / 255;
-        if (f.uniforms.uColor && f.uniforms.uColor.length === 3) {
-          f.uniforms.uColor[0] = r;
-          f.uniforms.uColor[1] = gg;
-          f.uniforms.uColor[2] = b;
-        } else {
-          f.uniforms.uColor = new Float32Array([r, gg, b]);
-        }
-        want.push(f);
-      }
+      if (f) { this._bevelSet(f, g); want.push(f); }
     }
-    // ---- bloom ----
+    // ---- bloom（三段链：阈值 -> 模糊 -> 合成）----
     if (this._specWantsBloom(g)) {
-      const f = this._ensureBloomFilter();
-      const blur = figFilters.blurPass;
-      if (f && blur) {
+      const fs = this._ensureBloomFilters();
+      if (fs && fs.bloomExtract && fs.blurPass && fs.bloom) {
         const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-        f.uniforms.uStrength = v("bloom", 1) * 1.2;
-        f.uniforms.uBrightness = v("bloomBrightness", 1);
-        blur.blur = Math.max(0, Math.min(40,
-          v("bloomBlur", 8) * 0.6));          // bloomBlur 10 -> 模糊 6
-        // bloom 需要「模糊图」作为附加纹理：PIXI 会自动把上一级 filter
-        // 输出作为下一级输入，这里把 blurPass 排在 bloom 前面即可
-        want.push(blur, f);
+        fs.bloomExtract.uniforms.threshold = v("bloomThreshold", 0) / 100.0;
+        fs.blurPass.blur = Math.max(0, Math.min(40,
+          v("bloomBlur", 0) * 0.6));
+        fs.bloom.uniforms.bloomScale = v("bloom", 0);
+        fs.bloom.uniforms.brightness = v("bloomBrightness", 1);
+        want.push(fs.bloomExtract, fs.blurPass, fs.bloom);
       }
     }
-    // 只在变化时重设（PIXI filters 赋值会触发重编译）
-    const sig = want.map(x => (x === figFilters.bevel ? "bevel"
-                              : x === figFilters.bloom ? "bloom"
-                              : "blur") + (x.uniforms ?
-                                JSON.stringify(Object.keys(x.uniforms)
-                                  .reduce((o, k) => {
-                                    const u = x.uniforms[k];
-                                    o[k] = (u && u.length) ? Array.from(u) : u;
-                                    return o;
-                                  }, {})) : "")).join("|");
-    if (sig === state.figFilterSig) return;
-    state.figFilterSig = sig;
+    // 签名幂等（PIXI 每次赋 filters 都会重编译 shader）
+    const sig = want.map(x => {
+      const u = {};
+      if (x.uniforms) {
+        Object.keys(x.uniforms).forEach(k => {
+          const v = x.uniforms[k];
+          if (v && typeof v === "object" && v.length) u[k] = Array.from(v);
+          else if (v === null || typeof v !== "object") u[k] = v;
+        });
+      }
+      if (x.blur !== undefined) u.__blur = x.blur;
+      return u;
+    });
+    const sigStr = JSON.stringify(sig);
+    if (sigStr === state.figFilterSig) return;
+    state.figFilterSig = sigStr;
     figLayer.filters = want.length ? want : null;
   },
 
@@ -941,6 +977,30 @@ window.__muppetState = function () {
                     ? document.getElementById("sub-text").textContent : "" };
     })(),
     filter: state.filter,
+    // v3.6.3：立绘滤镜（bevel/bloom）实际挂载状态 —— 断言「到底生不生效」
+    // 必须能看到 figLayer.filters 里有几个、uniform 是什么，否则
+    // 「无编译错误」也可能只是滤镜压根没创建（踩过这个假通过）。
+    figFilters: (function () {
+      if (!figLayer) return { count: -1, names: [] };
+      const fs = figLayer.filters || [];
+      const arr = Array.isArray(fs) ? fs : [fs];
+      return {
+        count: arr.length,
+        names: arr.map(function (f, i) {
+          if (!f || !f.uniforms) return "?";
+          const u = f.uniforms;
+          if (u.transformX !== undefined) return "bevel";
+          if (u.bloomTexture !== undefined) return "bloom";
+          if (u.threshold !== undefined) return "bloomExtract";
+          if (u.blur !== undefined || f.blur !== undefined) return "blur";
+          return "filter" + i;
+        }),
+        hasBevelUniforms: arr.some(f => f && f.uniforms
+          && f.uniforms.transformX !== undefined),
+        hasBloomUniforms: arr.some(f => f && f.uniforms
+          && f.uniforms.bloomTexture !== undefined),
+      };
+    })(),
     // 手动时钟状态（导出动画泵/测试用）：heads 给每个 slot 当前步号
     clock: (function () {
       const heads = {};
