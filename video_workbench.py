@@ -1952,24 +1952,98 @@ class VideoWorkbench(QWidget):
         self.asset_empty.setVisible(False)
 
     def _filter_presets(self):
-        """滤镜预设表：(名字, 说明, 应用回调)。"""
-        return [
-            ("原片", "不做任何处理", lambda: self._apply_filter(None)),
-            ("黄昏暖", "偏暖 + 略降饱和", lambda: self._apply_filter(
-                {"brightness": 0.95, "contrast": 0.92, "saturation": 0.85,
-                 "colorRed": 255, "colorGreen": 205, "colorBlue": 171})),
-            ("雨夜冷", "偏冷 + 提对比", lambda: self._apply_filter(
-                {"brightness": 0.85, "contrast": 1.12, "saturation": 0.8,
-                 "colorRed": 170, "colorGreen": 190, "colorBlue": 255})),
-            ("褪色", "低饱和旧照片感", lambda: self._apply_filter(
-                {"brightness": 0.98, "contrast": 0.95, "saturation": 0.45,
-                 "colorRed": 240, "colorGreen": 235, "colorBlue": 225})),
-            ("高反差黑白", "去色 + 强对比", lambda: self._apply_filter(
-                {"brightness": 0.95, "contrast": 1.35, "saturation": 0.0})),
-            ("柔光", "提亮 + 低对比", lambda: self._apply_filter(
-                {"brightness": 1.12, "contrast": 0.85, "saturation": 1.0,
-                 "bloom": 0.8, "bloomBrightness": 0.85, "bloomBlur": 12})),
-        ]
+        """滤镜预设表：(名字, 说明, 应用回调)。
+
+        v3.6.2：改为《webgal电影感滤镜1.21》的 17 个电影感预设（源自
+        B站北风的猫 5306 整合包，作者见 film_filters.CREDIT_*）。
+        每个预设是「背景 + 人物」成对参数——电影感靠两层配合，只调一层
+        会脱节。应用时按 clip 所在轨类型分别取 bg / fig 参数。
+        """
+        import film_filters as FF
+        out = [("原片", "不做任何处理", lambda: self._apply_filter(None))]
+        for f in FF.FILM_FILTERS:
+            desc = f.get("desc") or ""
+            credit = f.get("credit") or ""
+            if credit:
+                desc = "%s｜%s" % (desc, credit)
+            out.append((f["name"], desc,
+                        (lambda name=f["name"]:
+                         self._apply_film_filter(name))))
+        return out
+
+    def _clip_is_bg(self, clip, tr):
+        """该 clip 是否算「背景层」（决定套用 bg 还是 fig 参数）。"""
+        try:
+            name = str((tr or {}).get("name") or "").upper()
+            if name.startswith("BG"):
+                return True
+            src = clip.get("source") or {}
+            lay = V.layout_at(clip)
+            # 满幅 + cover + 无 alpha = 背景（与导出器口径一致）
+            return bool(lay.get("cover")) and src.get("kind") == "image"
+        except Exception:
+            return False
+
+    def _apply_film_filter(self, name):
+        """把电影感预设套到目标 clip(s)：背景用 bg 参数、立绘用 fig 参数。"""
+        import film_filters as FF
+        preset = FF.by_name(name)
+        if preset is None:
+            return
+        cid = getattr(self, "_sel_clip", None)
+        targets = []
+        want_bg = preset.get("bg")
+        want_fig = preset.get("fig")
+        # 先定应用范围：有选中就只作用于选中 clip，否则整幕可见视频 clip
+        if cid:
+            try:
+                tr, c = V.find_clip(self.proj, cid)
+            except Exception:
+                tr, c = None, None
+            if isinstance(c, dict):
+                targets = [(tr, c)]
+        if not targets:
+            for tr in V._tracks_of(self.proj,
+                                   getattr(self, "_cur_aid", None)):
+                if tr.get("kind") != "video" or tr.get("hidden"):
+                    continue
+                for c in (tr.get("clips") or []):
+                    targets.append((tr, c))
+        if not targets:
+            InfoBar.warning("没有可应用的对象",
+                            "先选中一个片段，或让时间轴上有画面片段。",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=2500)
+            return
+        n_bg = n_fig = 0
+        for tr, c in targets:
+            is_bg = self._clip_is_bg(c, tr)
+            filt = want_bg if is_bg else want_fig
+            if not filt:
+                continue
+            c["filter"] = dict(filt)
+            if is_bg:
+                n_bg += 1
+            else:
+                n_fig += 1
+        self.push_history()
+        self.timeline.refresh()
+        self._after_edit()
+        parts = []
+        if n_bg:
+            parts.append("背景 %d 个" % n_bg)
+        if n_fig:
+            parts.append("人物 %d 个" % n_fig)
+        if not parts:
+            InfoBar.warning("该滤镜不适用",
+                            "「%s」只调%s层，当前没有对应片段。"
+                            % (name, "背景" if want_bg else "人物"),
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        InfoBar.success("滤镜已应用", "%s：%s" % (name, "，".join(parts)),
+                        parent=self, position=InfoBarPosition.TOP,
+                        duration=2500)
 
     def _apply_filter(self, filt):
         """把滤镜写到目标 clip（有选中写选中，否则整幕所有可见 clip）。"""

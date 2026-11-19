@@ -1348,6 +1348,8 @@ def _sanitize_preset(raw, ids_fn):
 
 # 滤镜（原「特效」页）：只收 setTransform 那套数值键，范围按引擎语义夹紧。
 # 未知键一律丢弃（导出器不认识，留着只会让工程文件漂移）。
+# v3.6.2：补齐 docx《webgal电影感滤镜1.21》用到的全部键（bevel 斜面浮雕
+# 系列 / bloomThreshold / blur），引擎 TransformMap 里都有。
 _FILTER_KEYS = {
     # key: (下限, 上限)  —— brightness/saturation 等是倍率，0.0~3.0 足够覆盖
     "brightness": (0.0, 3.0),
@@ -1357,9 +1359,21 @@ _FILTER_KEYS = {
     "bloom": (0.0, 2.0),
     "bloomBrightness": (0.0, 2.0),
     "bloomBlur": (0.0, 100.0),
+    "bloomThreshold": (0.0, 100.0),
     "colorRed": (0.0, 255.0),
     "colorGreen": (0.0, 255.0),
     "colorBlue": (0.0, 255.0),
+    # 斜面浮雕（漫画/赛博感边缘光）：strength / 厚度px / 角度° / 柔化 / 颜色
+    "bevel": (0.0, 10.0),
+    "bevelThickness": (0.0, 100.0),
+    "bevelRotation": (-360.0, 360.0),
+    "bevelSoftness": (0.0, 10.0),
+    "bevelRed": (0.0, 255.0),
+    "bevelGreen": (0.0, 255.0),
+    "bevelBlue": (0.0, 255.0),
+    # 高斯模糊（docx 里「特写用 20 / 大场景用 5」）
+    "blur": (0.0, 100.0),
+    "alpha": (0.0, 1.0),
 }
 _FILTER_BOOL_KEYS = ("glitchFilm", "rgbFilm", "oldFilm", "dotFilm")
 

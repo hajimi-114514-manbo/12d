@@ -216,6 +216,66 @@ def _slot(x):
     return "center"
 
 
+# ---- v3.6.2：clip["filter"] -> setTransform 行 ----
+# 滤镜页把预设写进 clip["filter"]（见 video_workbench._apply_filter），
+# 但此前**导出链路完全不消费它**——导出脚本里一个 setTransform 都没有，
+# 用户点完滤镜导出后发现没效果（实测确认）。这里补上：
+#   · 背景轨 clip -> -target=bg-main
+#   · 立绘 clip   -> -target=fig-<槽位>（center/left/right…）
+# 参数名与引擎 setTransform 完全同名同义（引擎 TransformMap 里 33 个键
+# 实测都在），所以原样透写即可；非法键由 video_model._sanitize_filter
+# 在写库阶段已经挡掉。
+_FILTER_TARGET_SLOT = {"left": "fig-left", "center": "fig-center",
+                       "right": "fig-right"}
+
+
+# 引擎 setTransform 认识的键（实测自运行时 index-*.js 的 TransformMap，
+# 33 个全在）。白名单外的键一律不写——脏键会让引擎报 unknown 或静默污染。
+_FILTER_ALLOWED = frozenset({
+    "alpha", "blur", "brightness", "contrast", "saturation", "gamma",
+    "colorRed", "colorGreen", "colorBlue",
+    "bevel", "bevelThickness", "bevelRotation", "bevelSoftness",
+    "bevelRed", "bevelGreen", "bevelBlue",
+    "bloom", "bloomBrightness", "bloomBlur", "bloomThreshold",
+    "oldFilm", "dotFilm", "reflectionFilm", "glitchFilm", "rgbFilm",
+    "godrayFilm", "shockwaveFilter", "radiusAlphaFilter",
+})
+
+
+def _filter_stmt(filt, target):
+    """滤镜 dict -> `setTransform:{...} -target=xx -duration=0;`；无效返回 None。
+
+    只保留**引擎认识的键**且值为数字/布尔；脏键、脏值一律丢弃
+    （引擎收到不认识的键会报 unknown，或静默忽略导致用户以为生效）。"""
+    if not isinstance(filt, dict) or not filt:
+        return None
+    clean = {}
+    for k, v in filt.items():
+        if k not in _FILTER_ALLOWED:
+            continue
+        if isinstance(v, bool):
+            clean[k] = v
+        elif isinstance(v, (int, float)):
+            clean[k] = v
+    if not clean:
+        return None
+    try:
+        body = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return None
+    return "setTransform:%s -target=%s -duration=0;" % (body, target)
+
+
+def _clear_filter_stmt(target):
+    """清滤镜：把关键调色参数复位为默认（引擎默认值见 TransformMap）。"""
+    base = {"brightness": 1, "contrast": 1, "saturation": 1, "gamma": 1,
+            "colorRed": 255, "colorGreen": 255, "colorBlue": 255,
+            "bloom": 0, "bloomBrightness": 1, "bloomBlur": 0,
+            "bevel": 0, "bevelThickness": 0, "blur": 0}
+    return "setTransform:%s -target=%s -duration=0;" % (
+        json.dumps(base, ensure_ascii=False, separators=(",", ":")), target)
+
+
 # K1（task-69）平移：x 恰在三分位快捷值（0.2/0.5/0.8 ± 0.02）→ 维持旧
 # -left/-center/-right 形态（≤3 人导出逐字节=现状锚）；非三分位 → 角色
 # 稳定 -id 句柄 + -transform 中心原点绝对像素定位（step0 取证：官方
@@ -2105,6 +2165,11 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         if c.get("expression"):
             line += " -expression=%s" % c["expression"]
         lines.append(line + ";")
+        # v3.6.2：立绘滤镜 -> setTransform -target=fig-<槽位>
+        _fst = _filter_stmt(c.get("filter"),
+                            _FILTER_TARGET_SLOT.get(slot, "fig-center"))
+        if _fst:
+            lines.append(_fst)
         if extra:
             lines.extend(extra)
         events.append((t0, 1, seq, lines))
@@ -2157,7 +2222,12 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                         continue
                     if first_bg is None:
                         first_bg = nm
-                    events.append((t0, 0, seq, ["changeBg:%s -next;" % nm]))
+                    # v3.6.2：背景滤镜 -> setTransform -target=bg-main
+                    _bg_lines = ["changeBg:%s -next;" % nm]
+                    _fst = _filter_stmt(c.get("filter"), "bg-main")
+                    if _fst:
+                        _bg_lines.append(_fst)
+                    events.append((t0, 0, seq, _bg_lines))
                     seq += 1
                 else:
                     # 非底轨/非满幅 image -> 立绘
@@ -2241,6 +2311,12 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                 "可用表情: %s" %
                                 ", ".join(info["expressions"][:8])))
                         lines.append(line + ";")
+                        # v3.6.2：立绘滤镜 -> setTransform -target=fig-<槽位>
+                        _fst2 = _filter_stmt(
+                            c.get("filter"),
+                            _FILTER_TARGET_SLOT.get(slot, "fig-center"))
+                        if _fst2:
+                            lines.append(_fst2)
                         lines.append(_note(
                             "WebGAL 运行时原生支持 Cubism2，"
                             "直接可玩（无需 .moc3 手工步骤）"))
