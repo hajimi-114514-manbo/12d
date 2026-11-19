@@ -92,13 +92,21 @@ ASSETS = [
         "desc": "无需自己装 Python，装完即可启动（含程序运行所需 CPU 版推理库，约 420MB）",
         "kind": "runtime",
         "size": 416261511,
-        # 运行时是我们自己打包的，走 Release 资产
-        # v3.1.0 起含 CPU 推理栈（torch 2.11.0+cpu + diffusers 全家桶）
-        # v3.6.2：Gitee 优先（>100MB 的单文件传不了 Gitee，实际会回退
-        # GitHub/ghfast；若今后切成 <100MB 分卷传到 Gitee，无需改代码）
+        # v3.6.2：补上整包 sha256（此前缺失 -> 下载器无法校验完整性，
+        # 坏包/镜像篡改都发现不了）。值与 GitHub Release v3.1.1 的
+        # runtime.zip 逐字节一致（416261511 字节，实测核对）。
+        #
+        # 为什么仍是单文件模式：分卷模式（5×79.4MB）的代码路径已写好
+        # （mode=parts + target=dest + 分卷 parts 列表，切分脚本
+        # D:\scripts\temp\split_runtime.py，分卷产物 D:\build\runtime_parts），
+        # 但 **分卷尚未上传到 Gitee**（网络太慢，见 3.6.2 提交说明）。
+        # 若此刻切 parts，用户下载会 gitee 404 -> GitHub 也没有分卷 -> 全挂。
+        # 上传完成后把下面这几行换成 parts 配置即可（模板见 CHANGELOG 3.6.2）。
         "urls": _release_urls("v3.1.1", "runtime.zip"),
         "url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
                 "download/v3.1.1/runtime.zip"),
+        "zip_sha256": ("abd0b816bdec2e9c3457144f426e51603a2622bb41c4413f"
+                       "e2a6739ae9601c13"),
         "dest": "runtime",
         # v3.1.0：判定升级——旧运行时（无 torch）必须可被识别为"未装"，
         # 否则老用户永远拿不到内置 CPU 推理栈
@@ -272,10 +280,16 @@ def runtime_root(base_dir):
 
 
 def parts_target_dir(asset, base_dir):
-    """parts 资产的实际落地目录。target="site-packages" 是语义糖，
-    展开为 runtime_root\\Lib\\site-packages。"""
+    """parts 资产的实际落地目录。
+
+    target 语义：
+      "site-packages"（默认，CUDA 包用）-> runtime_root\\Lib\\site-packages
+      "dest"（运行时整包用）            -> base_dir\\<dest>，即解压到 dest 根
+    """
     try:
         t = (asset.get("target") or "site-packages").strip()
+        if t == "dest":
+            return installed_path(asset, base_dir)
         rr = runtime_root(base_dir)
         if not rr:
             return ""

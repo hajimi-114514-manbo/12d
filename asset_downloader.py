@@ -643,7 +643,10 @@ class AssetDownloadThread(QThread):
         if not parts:
             self.failed.emit("分卷清单为空")
             return
-        if "torch" in sys.modules:
+        # torch 锁定检查只对「替换进 site-packages」的包有意义（CUDA 包）。
+        # 运行时是解压到 dest 根（整包替换），不走这条。
+        _tgt_sem = (asset.get("target") or "site-packages").strip()
+        if _tgt_sem != "dest" and "torch" in sys.modules:
             self.failed.emit("当前会话已加载推理引擎(torch)，CUDA 包的文件替换会被 "
                              "DLL 锁定。已下载部分已保留：重启应用后不要拆图，"
                              "直接到「资产管理→推理加速」重新点击安装即可"
@@ -651,7 +654,9 @@ class AssetDownloadThread(QThread):
             return
         target = AC.parts_target_dir(asset, self.base_dir)
         if not target:
-            self.failed.emit("找不到运行时目录（runtime\\Lib\\site-packages）")
+            self.failed.emit("找不到落地目录（%s）" % (
+                "运行时根" if _tgt_sem == "dest"
+                else "runtime\\Lib\\site-packages"))
             return
         # 磁盘预检：卷大小已知按 1.2x 估，未知按 4GB 兜底
         need = sum(int(p.get("size") or 0) for p in parts) or 4 * 2 ** 30
@@ -664,7 +669,9 @@ class AssetDownloadThread(QThread):
                 return
         except Exception:
             pass
-        work = os.path.join(os.environ.get("TEMP") or target, "muppet_cuda_dl")
+        work = os.path.join(os.environ.get("TEMP") or target,
+                            "muppet_%s_dl" % ("rt" if _tgt_sem == "dest"
+                                              else "cuda"))
         try:
             os.makedirs(work, exist_ok=True)
         except Exception as e:
@@ -700,8 +707,10 @@ class AssetDownloadThread(QThread):
                 return
             done += sz
             self._emit_progress(done, total_bytes or done)
-        # 拼接（流式，不把 2.6GB 读进内存）
-        zip_path = os.path.join(work, "cuda_pack.zip")
+        # 拼接（流式，不把整包读进内存）。zip 名按资产 id 起，避免运行时
+        # 与 CUDA 包共用工作目录时互相覆盖。
+        zip_path = os.path.join(work, "%s.zip" % (
+            asset.get("id") or "parts"))
         self.status.emit("合并分卷…")
         try:
             with open(zip_path, "wb") as out:
