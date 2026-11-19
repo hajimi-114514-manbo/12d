@@ -599,25 +599,32 @@ if HAS_WEBENGINE:
                 pass
 
         def _apply_filter(self, proj, t):
-            """当前时刻生效的 setTransform -> setFilter（**按 target 分层**）。
+            """当前时刻生效的滤镜 -> setFilter（**按 target 分层**）。
 
-            v3.6.2 重写：原来把所有 setTransform 压成一份、只取最后一条、
-            target 忽略——电影感滤镜是「背景 bg-main + 人物 fig-*」成对
-            参数，压成一份后预览只剩整体变色（用户报「显示不了完整滤镜」
-            的根因）。
+            v3.6.2：**两条数据源都要读**。这是个真实断点（用户报「滤镜在
+            实时预览里不生效」）：
+              · proj["effects"] —— setTransform 指令（特效页插入的）
+              · clip["filter"]  —— 滤镜页/电影滤镜套在片段上的参数
+            此前只读前者，而滤镜页写的正是后者，两边完全没打通，用户套完
+            滤镜在预览里看不到任何变化。
 
-            现在按 target 归成 {bg:{...}, fig:{...}} 两层推送，页面端
-            分别作用在背景 DOM 层和立绘 canvas 上。
-            同层多条时**后写的覆盖先写的**（与引擎语义一致：同 target 的
-            新 setTransform 覆盖旧状态并持续到再被覆盖）。
+            归一成 {bg:{...}, fig:{...}} 两层推送：
+              · 片段滤镜按**该片段的类型**归层（背景轨/cover 满幅 -> bg，
+                其余 -> fig）
+              · 特效指令按 -target 归层
+            同层多个时后写的覆盖先写的（与引擎「同 target 新值覆盖旧值」
+            语义一致）；片段滤镜优先于更早的特效指令。
             """
             try:
                 import json as _json
                 import re as _re
                 import video_model as VM
-                view = VM.act_view(proj, getattr(self, "_aid", None))
+                aid = getattr(self, "_aid", None)
+                view = VM.act_view(proj, aid)
                 bg = {}
                 fig = {}
+
+                # ---- ① 先应用 setTransform 特效指令 ----
                 for ef in (view.get("effects") or []):
                     try:
                         et = float(ef.get("t") or 0.0)
@@ -643,6 +650,43 @@ if HAS_WEBENGINE:
                         bg = params
                     else:
                         fig = params
+
+                # ---- ② 再叠加当前时刻在场片段的 clip["filter"] ----
+                # 后写覆盖：片段上的滤镜是用户在滤镜页/电影滤镜里最近套的，
+                # 应当盖过更早的 effects 指令。
+                eps = 1e-6
+                for tr in VM._tracks_of(proj, aid):
+                    if not isinstance(tr, dict) or tr.get("hidden"):
+                        continue
+                    if tr.get("kind") != "video":
+                        continue
+                    for c in (tr.get("clips") or []):
+                        f = c.get("filter")
+                        if not isinstance(f, dict) or not f:
+                            continue
+                        try:
+                            s0 = float(c.get("start") or 0.0)
+                            d0 = float(c.get("dur") or 0.0)
+                        except (TypeError, ValueError):
+                            continue
+                        if not (s0 - eps <= t < s0 + d0 - eps):
+                            continue
+                        # 判断是背景还是立绘（与导出器/工作台同口径）
+                        is_bg = False
+                        try:
+                            nm = str(tr.get("name") or "").upper()
+                            lay = VM.layout_at(c)
+                            src = c.get("source") or {}
+                            is_bg = nm.startswith("BG") or (
+                                bool(lay.get("cover"))
+                                and src.get("kind") == "image")
+                        except Exception:
+                            is_bg = False
+                        if is_bg:
+                            bg = dict(f)
+                        else:
+                            fig = dict(f)
+
                 want = {"bg": bg, "fig": fig}
                 key = _json.dumps(want, sort_keys=True)
                 if key == getattr(self, "_filter_key", None):
