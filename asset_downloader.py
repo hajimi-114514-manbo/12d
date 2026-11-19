@@ -50,14 +50,32 @@ def human_mb(n):
 
 
 def asset_file_urls(asset):
-    """资产 -> 候选下载 URL 列表。
+    """资产 -> 候选下载 URL 列表（按优先级，逐个尝试）。
 
     asset["url"] 非空时优先用它（运行时 zip 等自有资源）；
-    否则按 repo 拼 hf 镜像地址（模型目录会打包成 tar/zip，见 download_plan）。
+    asset["urls"]（列表）给出时按顺序全试——Gitee 优先、GitHub 回退用；
+    asset["mirrors"] 是**前缀式镜像**（如 ghfast），追加在末尾兜底。
+    都没有时按 repo 拼 hf 镜像地址（模型目录打包成 zip）。
     """
+    out = []
+    multi = asset.get("urls")
+    if isinstance(multi, (list, tuple)):
+        out.extend(str(u) for u in multi if u)
     url = (asset.get("url") or "").strip()
-    if url:
-        return [url]
+    if url and url not in out:
+        out.append(url)
+    if out:
+        # 前缀镜像追加在末尾（官方/主源优先，镜像兜底）
+        for m in (asset.get("mirrors") or []):
+            m = str(m or "").strip()
+            if not m:
+                continue
+            pref = m if m.endswith("/") else m + "/"
+            for u in list(out):
+                cand = pref + u
+                if cand not in out:
+                    out.append(cand)
+        return out
     repo = asset.get("repo") or ""
     if not repo:
         return []
@@ -661,7 +679,11 @@ class AssetDownloadThread(QThread):
             url = (p.get("url") or "").strip()
             fname = os.path.basename(url.split("?")[0]) or ("part%02d" % (i + 1))
             dest = os.path.join(work, fname)
-            urls = [url, AC.GH_MIRROR + url]
+            # v3.6.2：分卷也支持多源（p["urls"] 给出时按序全试，Gitee 优先）；
+            # 否则退回「url + ghfast 镜像」老口径。
+            urls = [str(u) for u in (p.get("urls") or []) if u]
+            if not urls:
+                urls = [url, AC.GH_MIRROR + url] if url else []
             sz = None
             for u in urls:
                 self.status.emit("下载卷 %d/%d（%s）" % (i + 1, len(parts), fname))

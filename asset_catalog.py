@@ -21,6 +21,23 @@ _EXE_MIN = 1024 * 1024
 # 下载镜像（与安装器一致：国内镜像优先，官方兜底）
 HF_MIRRORS = ["https://hf-mirror.com/", "https://huggingface.co/"]
 GH_MIRROR = "https://ghfast.top/"
+# v3.6.2：自有 Release 资产主源迁到 Gitee（国内直连快），GitHub 回退。
+# 注意 Gitee 免费仓库硬限制：**单文件 100MB**、Release 附件总配额约 1GB。
+# 因此运行时（416MB）与 cuda_pack 分卷（各 669MB）**不能**原样传 Gitee，
+# 只能走 GitHub/镜像（下面 _gh_release 的 urls 会把 Gitee 排前面，未上传
+# 时 404 自动落到 GitHub，配好切分卷后无需再改代码）。
+GITEE_RELEASE_BASE = ("https://gitee.com/manbomanbodingdongjihajimi/"
+                      "itsmygo/releases/download")
+GH_RELEASE_BASE = "https://github.com/hajimi-114514-manbo/12d/releases/download"
+
+
+def _release_urls(version, filename):
+    """自有 Release 资产的候选 URL：Gitee 优先 -> GitHub -> ghfast 镜像。
+
+    Gitee 未上传该附件时返回 404，下载器会自动试下一条。"""
+    gh = "%s/%s/%s" % (GH_RELEASE_BASE, version, filename)
+    return ["%s/%s/%s" % (GITEE_RELEASE_BASE, version, filename),
+            gh, GH_MIRROR + gh]
 
 # 模型仓库 -> 文件清单（相对 repo 根）。
 # 这些文件是 HF 上 24yearsold 的公开模型，**不需要我们自己上传**，
@@ -75,8 +92,11 @@ ASSETS = [
         "desc": "无需自己装 Python，装完即可启动（含程序运行所需 CPU 版推理库，约 420MB）",
         "kind": "runtime",
         "size": 416261511,
-        # 运行时是我们自己打包的，走 GitHub Release 资产
+        # 运行时是我们自己打包的，走 Release 资产
         # v3.1.0 起含 CPU 推理栈（torch 2.11.0+cpu + diffusers 全家桶）
+        # v3.6.2：Gitee 优先（>100MB 的单文件传不了 Gitee，实际会回退
+        # GitHub/ghfast；若今后切成 <100MB 分卷传到 Gitee，无需改代码）
+        "urls": _release_urls("v3.1.1", "runtime.zip"),
         "url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
                 "download/v3.1.1/runtime.zip"),
         "dest": "runtime",
@@ -139,14 +159,14 @@ ASSETS = [
         # 分卷：cuda_pack.zip（2007028506 B，deflate1，torch cu130 + bitsandbytes）
         # 按 669009502 B 切 3 段纯字节卷；构建脚本 D:\scripts\temp\build_cuda_pack.py
         "parts": [
-            {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                     "download/v3.1.1/cuda_pack.zip.part01"),
+            {"url": _release_urls("v3.1.1", "cuda_pack.zip.part01")[0],
+             "urls": _release_urls("v3.1.1", "cuda_pack.zip.part01"),
              "size": 669009502},
-            {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                     "download/v3.1.1/cuda_pack.zip.part02"),
+            {"url": _release_urls("v3.1.1", "cuda_pack.zip.part02")[0],
+             "urls": _release_urls("v3.1.1", "cuda_pack.zip.part02"),
              "size": 669009502},
-            {"url": ("https://github.com/hajimi-114514-manbo/12d/releases/"
-                     "download/v3.1.1/cuda_pack.zip.part03"),
+            {"url": _release_urls("v3.1.1", "cuda_pack.zip.part03")[0],
+             "urls": _release_urls("v3.1.1", "cuda_pack.zip.part03"),
              "size": 669009502},
         ],
         "zip_sha256": ("7bf280ac8775d2836019993487e5acc1e6e40a3134f06f6f0f95"
