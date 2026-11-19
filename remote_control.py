@@ -102,20 +102,6 @@ def _track_by_name(wb, name):
     return None
 
 
-def _new_fig_track(wb):
-    V = _vm()
-    n = 1
-    while True:
-        name = "FIG-%d" % n
-        if _track_by_name(wb, name) is None:
-            break
-        n += 1
-    ok, msg, tid = V.add_track(wb.proj, "video", name)
-    if not ok:
-        raise RuntimeError(msg or "新建立绘轨失败")
-    return V.find_track(wb.proj, tid)
-
-
 # ---------------- 命令实现（全部在主线程执行） ----------------
 def _cmd_project_new(wb, args):
     V = _vm()

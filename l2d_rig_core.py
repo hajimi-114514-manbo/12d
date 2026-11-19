@@ -275,11 +275,6 @@ def _contact_point(child_alpha, parent_alpha):
     return float(xs[idx]), float(ys[idx])
 
 
-def _dist_to(parent_alpha):
-    """到 parent 层 alpha 的距离场（供 UI 复用接触点算法）"""
-    return ndimage.distance_transform_edt(~(parent_alpha > 0.5))
-
-
 def detect_pivots(layers, W, H):
     by_node = {}
     for l in layers:
@@ -553,10 +548,6 @@ def _blend_premul(canvas, y0, y1, x0, x1, src):
     sub = canvas[y0:y1, x0:x1]
     sub[:, :, :3] = sub[:, :, :3] * (1.0 - a) + src[:, :, :3].astype(np.float32) * a
     sub[:, :, 3:4] += a * (1.0 - sub[:, :, 3:4])
-
-
-def render_static(rig):
-    return render_frame(rig, 0.0)
 
 
 # ---------------- ④ 导出 PSD（CA 分组结构）----------------

@@ -4765,44 +4765,6 @@ def _refresh_styles():
 TH.register(_refresh_styles)
 
 
-def _apply_window_frost(win):
-    """给窗口铺主题底色。
-
-    浅色主题的"磨砂"是画出来的：窗口底铺一层柔和斜向渐变，各面板用
-    半透明白叠在上面，渐变从面板底下透出来就有磨砂层次感。
-    FluentWindow 自己会刷一层不透明背景，所以这里连 stackedWidget 的
-    三层容器一起设成透明，让渐变真正露出来。
-    """
-    try:
-        bg = TH.t("window_bg")
-        win.setStyleSheet("QMainWindow{background:%s;}" % bg
-                          if False else
-                          "QWidget#frostRoot{background:%s;}" % bg)
-    except Exception:
-        pass
-    for attr in ("stackedWidget",):
-        o = getattr(win, attr, None)
-        if o is None:
-            continue
-        try:
-            o.setStyleSheet("background:transparent;")
-        except Exception:
-            pass
-        for sub in ("view", "stackedWidget"):
-            s = getattr(o, sub, None)
-            if s is not None:
-                try:
-                    s.setStyleSheet("background:transparent;")
-                except Exception:
-                    pass
-    # 关键：让 FluentWindow 自己不画不透明底，改成主题渐变
-    try:
-        win.setCustomBackgroundColor(TH.qcolor("window_bg"),
-                                     TH.qcolor("window_bg"))
-    except Exception:
-        pass
-
-
 class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()

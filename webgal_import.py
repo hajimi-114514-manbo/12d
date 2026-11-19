@@ -323,11 +323,6 @@ def _resolve_asset(game_dir, rel):
     return p, None
 
 
-def _entry_motions(e, n=8):
-    m = (e or {}).get("meta") or {}
-    return (m.get("motions") or [])[:n]
-
-
 # ---------------- assets.query（DSH 命令的消费端实现） ----------------
 def assets_query(kind=None, tags=None, limit=30):
     """素材库过滤查询（纯 py，HTTP 线程直接调）。返回 (ok, msg, data)：
@@ -1470,40 +1465,6 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
     return ok, "导入 %d 幕%s，警告 %d%s" % (
         n_act, ("（吸收 %d 个伪幕）" % n_pseudo) if n_pseudo else "",
         len(all_warn), ("；" + _hint) if _hint else ""), proj
-
-
-def _absorb_pseudo(builder, scene_path, pending, resolve_target, pseudo_set):
-    """把某幕 choose 选项指向的伪幕吸收回 option.set（原地改 builder 的 choices）。
-
-    伪幕形如 a1__c1_0.txt，内容 = setVar* + changeScene:<真目标>。
-    吸收后：该选项 set = "k=v;k2=v2"，target = 真目标（不再是伪幕）。"""
-    resolve = resolve_target
-    for ch in builder._choices:
-        for o in (ch.get("options") or []):
-            tgt = str(o.get("target") or "").strip()
-            if not tgt:
-                continue
-            rp = resolve(tgt)
-            if not rp or rp not in pseudo_set:
-                continue
-            info = pending.get(rp) or {}
-            sets = info.get("sets") or []
-            if sets:
-                o["set"] = ";".join(sets)
-            # 真目标：伪幕里的 changeScene
-            real = None
-            try:
-                for raw in open(rp, encoding="utf-8",
-                                errors="ignore").readlines():
-                    head, rest, err = _split_line(raw)
-                    if err or head is None:
-                        continue
-                    if head == "changeScene":
-                        real = str(rest or "").strip()
-                        break
-            except OSError:
-                pass
-            o["target"] = real or ""
 
 
 # ================= CLI =================
