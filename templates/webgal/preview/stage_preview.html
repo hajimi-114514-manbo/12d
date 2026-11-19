@@ -96,6 +96,14 @@
 </head>
 <body>
 <div id="stagebox">
+  <!-- v3.6.2：背景独立层（DOM img），可与立绘层分别套不同 CSS filter。
+       层级：bglayer(0) < canvas(1) < tint(5) < subtitle(20) -->
+  <div id="bglayer" style="position:absolute;inset:0;z-index:0;display:none;
+       overflow:hidden;pointer-events:none;">
+    <img id="bgimg" alt="" style="position:absolute;left:50%;top:50%;
+         min-width:100%;min-height:100%;width:auto;height:auto;
+         transform:translate(-50%,-50%);object-fit:cover;" />
+  </div>
   <div id="tint"></div>
   <div id="subtitle">
     <span id="sub-name"></span>
@@ -528,28 +536,28 @@ const puppetAPI = {
   //          + 叠加色层，对齐 setTransform 的语义子集
 
   async setBackground(url) {
+    // v3.6.2：背景改成**独立 DOM 层**（不再用 PIXI sprite）。
+    // 为什么：PIXI canvas 里背景和立绘在同一张画布，CSS filter 只能整块
+    // 作用——而引擎的 setTransform 是按 target 分层的（bg-main / fig-*），
+    // 电影感滤镜几乎都是「背景压暗 + 人物提亮」成对参数，不分开就完全
+    // 看不到效果（用户报「实时预览显示不了完整滤镜」的根因之一）。
+    // 拆成 <div id=bgLayer><img></div> 后，两层各挂各的 filter。
     if (!(await boot())) return;
     const u = url ? new URL(url, location.href).href : "";
     if (state.bgUrl === u) return;                    // 幂等
     state.bgUrl = u;
-    if (bgSprite) {
-      app.stage.removeChild(bgSprite);
-      bgSprite.destroy({ texture: true, baseTexture: true });
-      bgSprite = null;
-    }
-    if (!u) return;
+    const layer = document.getElementById("bglayer");
+    const img = document.getElementById("bgimg");
+    if (!layer || !img) return;
+    if (!u) { layer.style.display = "none"; img.removeAttribute("src"); return; }
     try {
-      const tex = await window.PIXI.Texture.fromURL(u);
-      bgSprite = new window.PIXI.Sprite(tex);
-      // 铺满舞台（cover）：等比放大到刚好盖住，居中裁切
-      const k = Math.max(STAGE_W / tex.width, STAGE_H / tex.height);
-      bgSprite.width = tex.width * k;
-      bgSprite.height = tex.height * k;
-      bgSprite.x = (STAGE_W - bgSprite.width) / 2;
-      bgSprite.y = (STAGE_H - bgSprite.height) / 2;
-      bgSprite.zIndex = -1;                            // 压到立绘下面
-      app.stage.sortableChildren = true;
-      app.stage.addChildAt(bgSprite, 0);
+      await new Promise((res, rej) => {
+        img.onload = () => res(true);
+        img.onerror = () => rej(new Error("load failed"));
+        img.src = u;
+      });
+      // 铺满舞台（cover）：object-fit 交给 CSS，这里只控制显隐
+      layer.style.display = "block";
       sendEvt("bgReady", { url: u });
     } catch (e) {
       sendEvt("error", { code: "bg_failed", msg: String(e).slice(0, 160) });
@@ -574,41 +582,133 @@ const puppetAPI = {
   },
 
   async setFilter(spec) {
-    // spec = {brightness, contrast, saturate, blur, sepia, hue, opacity,
-    //         colorRed, colorGreen, colorBlue, target}
-    // 同时作用于舞台容器（背景+立绘一起），target 只做记录（PIXI 未分层）
+    // v3.6.2：**分层滤镜** —— spec 可以是：
+    //   {target:"bg-main"|"fig-*", ...参数}      单层（引擎 setTransform 语义）
+    //   {bg:{...}, fig:{...}}                    两层分别给（工作台推送用）
+    //   {...参数}                                旧口径：两层都套（兼容）
+    //
+    // 支持：brightness / contrast / saturate / blur / gamma(近似) /
+    //       colorRed/Green/Blue 染色 / sepia / hue / opacity
+    // 未实现的（bevel 浮雕 / bloom 泛光 / 各种 Film / shockwave）在
+    // 预览里退化为最接近的近似或忽略——精确效果以 WebGAL 导出为准。
     const f = spec || {};
+    const bgLayer = document.getElementById("bglayer");
+    const canvas = app && app.view ? app.view : null;
+    const tintEl = document.getElementById("tint");
+
+    // ---- 把一组参数折成 CSS filter 串 + tint 信息 ----
+    function build(spec1) {
+      const g = spec1 || {};
+      const num = (v, d) => (v === undefined || v === null ? d : Number(v));
+      const out = [];
+      const br = num(g.brightness, 1);
+      const ct = num(g.contrast, 1);
+      const sa = num(g.saturation, 1);
+      const bl = num(g.blur, 0);
+      const ga = num(g.gamma, 1);
+      const se = num(g.sepia, 0);
+      const hu = num(g.hue, 0);
+      const op = num(g.alpha, 1);
+      if (br !== 1) out.push("brightness(" + br + ")");
+      if (ct !== 1) out.push("contrast(" + ct + ")");
+      if (sa !== 1) out.push("saturate(" + Math.max(0, sa) + ")");
+      // gamma：CSS 无原生等价，用 brightness^gamma 近似（>1 提亮暗部）
+      if (ga !== 1 && ga > 0) {
+        const k = Math.pow(ga, 0.45);          // 经验指数，观感贴近
+        if (Math.abs(k - 1) > 0.02) out.push("brightness(" + k.toFixed(3) + ")");
+      }
+      if (bl > 0) out.push("blur(" + Math.min(bl, 30) + "px)");
+      if (se > 0) out.push("sepia(" + Math.min(1, se) + ")");
+      if (hu) out.push("hue-rotate(" + hu + "deg)");
+      if (op !== 1) out.push("opacity(" + Math.max(0, Math.min(1, op)) + ")");
+      // 染色（RGB 乘子）→ 用 CSS 近似：偏色方向叠 sRGB 通道
+      let tint = null;
+      const hasRgb = (g.colorRed !== undefined && g.colorRed !== 255) ||
+                     (g.colorGreen !== undefined && g.colorGreen !== 255) ||
+                     (g.colorBlue !== undefined && g.colorBlue !== 255);
+      if (hasRgb) {
+        const r = g.colorRed === undefined ? 255 : g.colorRed;
+        const gg = g.colorGreen === undefined ? 255 : g.colorGreen;
+        const b = g.colorBlue === undefined ? 255 : g.colorBlue;
+        tint = "rgba(" + r + "," + gg + "," + b + "," +
+               ((1 - Math.min(r, gg, b) / 255) * 0.55).toFixed(3) + ")";
+      }
+      return { css: out.join(" "), tint: tint };
+    }
+
+    // ---- 归一成 bg / fig 两组参数 ----
+    let bgSpec = null, figSpec = null;
+    if (f.bg !== undefined || f.fig !== undefined) {
+      bgSpec = f.bg || null;
+      figSpec = f.fig || null;
+    } else if (f.target) {
+      if (String(f.target).indexOf("bg") === 0) bgSpec = f; else figSpec = f;
+    } else {
+      bgSpec = f;                     // 旧口径：两层都套
+      figSpec = f;
+    }
+
+    const bgB = bgSpec !== null ? build(bgSpec) : null;
+    const figB = figSpec !== null ? build(figSpec) : null;
+
+    // 背景层：CSS filter 挂在 bglayer（含 img）
+    if (bgLayer) bgLayer.style.filter = bgB ? bgB.css : "";
+    // 立绘层：canvas 整体（立绘都在 PIXI 里；背景已拆出去，所以这里是纯立绘）
+    if (canvas) canvas.style.filter = figB ? figB.css : "";
+
+    // 染色层：两层都要染时取「更明显」的那个（单 tint 层的近似）
+    if (tintEl) {
+      const t = (figB && figB.tint) || (bgB && bgB.tint) || null;
+      if (t) { tintEl.style.background = t; tintEl.style.display = "block"; }
+      else { tintEl.style.display = "none"; }
+    }
+    state.filter = [bgB && bgB.css, figB && figB.css].filter(Boolean).join(" | ");
+  },
+
+  async setCamera(cam) {
+    // v3.6.2：镜头动画（引擎 setTempAnimation）的预览近似。
+    // 引擎那些特效是「容器级」的 scale / position / rotation / blur 关键帧
+    // （推近、拉远、摇摄、震动…），这里把算好的当前帧参数用 CSS transform
+    // 作用在**整个舞台**上（背景层 + 立绘 canvas 一起动，与引擎语义一致）。
+    //
+    // 注意：只做视觉近似——引擎是真·关键帧插值 + 各种 filter 链，
+    // 精确效果以 WebGAL 导出/视频导出为准。但没有它，149 个镜头特效在
+    // 预览里完全看不到（用户报「显示不了特效」的主因）。
     const box = document.getElementById("stagebox");
     if (!box) return;
-    const parts = [];
-    const pct = (v, d) => (v === undefined || v === null ? d : Number(v));
-    const br = pct(f.brightness, 1), ct = pct(f.contrast, 1);
-    const sa = f.saturation !== undefined ? Number(f.saturation) : 1;
-    const bl = f.blur !== undefined ? Number(f.blur) : 0;
-    if (br !== 1) parts.push("brightness(" + br + ")");
-    if (ct !== 1) parts.push("contrast(" + ct + ")");
-    if (sa !== 1) parts.push("saturate(" + Math.max(0, sa) + ")");
-    if (bl > 0) parts.push("blur(" + Math.min(bl, 20) + "px)");
-    box.style.filter = parts.length ? parts.join(" ") : "";
-    // 叠加色层（tint）：用半透明遮罩近似 colorRed/Green/Blue 的染色
-    const tint = document.getElementById("tint");
-    if (tint) {
-      const hasRgb = (f.colorRed !== undefined && f.colorRed !== 255) ||
-                     (f.colorGreen !== undefined && f.colorGreen !== 255) ||
-                     (f.colorBlue !== undefined && f.colorBlue !== 255);
-      if (hasRgb) {
-        const r = f.colorRed === undefined ? 255 : f.colorRed;
-        const g = f.colorGreen === undefined ? 255 : f.colorGreen;
-        const b = f.colorBlue === undefined ? 255 : f.colorBlue;
-        // 只对"缺色"方向补一层，模拟该 RGB 乘子偏色
-        tint.style.background =
-          "rgba(" + r + "," + g + "," + b + "," + (1 - Math.min(r, g, b) / 255) * 0.55 + ")";
-        tint.style.display = "block";
-      } else {
-        tint.style.display = "none";
-      }
+    const c = cam || {};
+    if (!c.active) {
+      box.style.transform = "";
+      box.style.transformOrigin = "50% 50%";
+      state.camera = "";
+      return;
     }
-    state.filter = parts.join(" ") || "";
+    const sx = c.scaleX === undefined ? 1 : Number(c.scaleX);
+    const sy = c.scaleY === undefined ? sx : Number(c.scaleY);
+    // x/y 是「相对舞台宽高的百分比偏移」（Python 侧已换算）
+    const tx = c.x === undefined ? 0 : Number(c.x);
+    const ty = c.y === undefined ? 0 : Number(c.y);
+    const rot = c.rot === undefined ? 0 : Number(c.rot);
+    const parts = [];
+    if (Math.abs(tx) > 0.001 || Math.abs(ty) > 0.001) {
+      parts.push("translate(" + tx + "%, " + ty + "%)");
+    }
+    if (Math.abs(sx - 1) > 0.001 || Math.abs(sy - 1) > 0.001) {
+      parts.push("scale(" + sx + ", " + sy + ")");
+    }
+    if (Math.abs(rot) > 0.001) parts.push("rotate(" + rot + "deg)");
+    box.style.transformOrigin = "50% 50%";
+    box.style.transform = parts.join(" ");
+    // 动画里的 blur / alpha 也一并反映（震动/闪白类特效会用到）
+    if (c.blur !== undefined && Number(c.blur) > 0) {
+      box.style.filter = "blur(" + Math.min(30, Number(c.blur)) + "px)";
+    } else if (box.style.filter && box.style.filter.indexOf("blur(") === 0) {
+      box.style.filter = "";
+    }
+    if (c.alpha !== undefined) {
+      box.style.opacity = String(Math.max(0, Math.min(1, Number(c.alpha))));
+    }
+    state.camera = parts.join(" ");
   },
 };
 
@@ -627,6 +727,8 @@ window.__muppetOnCmd = function (j) {
     case "setBackground": enqueue("__bg__", () => puppetAPI.setBackground(a.url || "")); break;
     case "setSubtitle": puppetAPI.setSubtitle(a.who || "", a.text || ""); break;
     case "setFilter": puppetAPI.setFilter(a); break;
+    // v3.6.2：镜头动画（setTempAnimation）—— 用 CSS transform 模拟
+    case "setCamera": puppetAPI.setCamera(a); break;
     // 手动时钟（导出动画泵）：这两条**同步**执行并回传结果，
     // 泵一次往返就要拿到「实际走了几步」，不能靠事后读快照。
     case "setManualClock": return clockAPI.setManual(a.on);

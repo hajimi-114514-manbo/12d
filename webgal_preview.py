@@ -524,6 +524,7 @@ if HAS_WEBENGINE:
             self._apply_bg(proj, t)
             self._apply_subtitle(proj, t)
             self._apply_filter(proj, t)
+            self._apply_camera(proj, t)      # v3.6.2：镜头动画
 
         # ---------- v3.5.2：三层推送（各自 diff，不重复发）----------
         def _apply_bg(self, proj, t):
@@ -598,15 +599,30 @@ if HAS_WEBENGINE:
                 pass
 
         def _apply_filter(self, proj, t):
-            """当前时刻生效的 setTransform 特效 -> setFilter（CSS 语义子集）"""
+            """当前时刻生效的 setTransform -> setFilter（**按 target 分层**）。
+
+            v3.6.2 重写：原来把所有 setTransform 压成一份、只取最后一条、
+            target 忽略——电影感滤镜是「背景 bg-main + 人物 fig-*」成对
+            参数，压成一份后预览只剩整体变色（用户报「显示不了完整滤镜」
+            的根因）。
+
+            现在按 target 归成 {bg:{...}, fig:{...}} 两层推送，页面端
+            分别作用在背景 DOM 层和立绘 canvas 上。
+            同层多条时**后写的覆盖先写的**（与引擎语义一致：同 target 的
+            新 setTransform 覆盖旧状态并持续到再被覆盖）。
+            """
             try:
                 import json as _json
                 import re as _re
                 import video_model as VM
                 view = VM.act_view(proj, getattr(self, "_aid", None))
-                want = {}
+                bg = {}
+                fig = {}
                 for ef in (view.get("effects") or []):
-                    et = float(ef.get("t") or 0.0)
+                    try:
+                        et = float(ef.get("t") or 0.0)
+                    except (TypeError, ValueError):
+                        continue
                     if et > t + 1e-6:
                         continue
                     cmd = str(ef.get("cmd") or "")
@@ -616,15 +632,170 @@ if HAS_WEBENGINE:
                     if not m:
                         continue
                     try:
-                        want = _json.loads(m.group(0))
+                        params = _json.loads(m.group(0))
                     except Exception:
                         continue
-                # 只在变化时发（effects 每帧都会被查，重复发会刷爆 IPC）
+                    if not isinstance(params, dict):
+                        continue
+                    tm = _re.search(r"-target=(\S+?)(?:\s|;|$)", cmd)
+                    target = tm.group(1) if tm else "bg-main"
+                    if target.startswith("bg"):
+                        bg = params
+                    else:
+                        fig = params
+                want = {"bg": bg, "fig": fig}
                 key = _json.dumps(want, sort_keys=True)
                 if key == getattr(self, "_filter_key", None):
                     return
                 self._filter_key = key
                 self._send("setFilter", want)
+            except Exception:
+                pass
+
+        def _apply_camera(self, proj, t):
+            """当前时刻生效的 setTempAnimation -> setCamera（镜头动画）。
+
+            v3.6.2 新增：206 个演出特效里 149 个是 setTempAnimation（推近/
+            拉远/摇摄/震动/缩放），原来预览**直接跳过**，用户看不到。
+            这里解析出该时刻正在播放的那条,把进度归一成 0..1 交给页面
+            用 CSS transform 模拟（scale/translate/rotate）。
+            多条同时生效时取最后一条（与引擎覆盖语义一致）。
+            """
+            try:
+                import json as _json
+                import re as _re
+                import video_model as VM
+                view = VM.act_view(proj, getattr(self, "_aid", None))
+                best = None
+                for ef in (view.get("effects") or []):
+                    try:
+                        et = float(ef.get("t") or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    if et > t + 1e-6:
+                        continue
+                    cmd = str(ef.get("cmd") or "")
+                    if not cmd.startswith("setTempAnimation"):
+                        continue
+                    m = _re.search(r"\[.*\]", cmd, _re.S)
+                    if not m:
+                        continue
+                    try:
+                        kfs = _json.loads(m.group(0))
+                    except Exception:
+                        continue
+                    if isinstance(kfs, list) and kfs:
+                        best = (et, kfs)
+                if not best:
+                    if getattr(self, "_cam_key", None) is not None:
+                        self._cam_key = None
+                        self._send("setCamera", {"active": False})
+                    return
+                t0, kfs = best
+                # 引擎 v1 关键帧语义（看引擎自带动画文件确认）：
+                #   [{"alpha":0,"duration":0}, {"alpha":1,"duration":300}]
+                # 读作：kf0 是**起始状态**（在 t0 生效），kf1 是**目标状态**，
+                # 从 kf0 过渡到 kf1 耗时 kf1.duration 毫秒。
+                # 所以 times[0]=0（kf0 生效），times[i]=times[i-1]+kfs[i].duration
+                # —— kfs[0].duration **不计入总时长**（它是起始状态的驻留，
+                # 常规写 0）。搞错这点会让插值起点跑偏（实测 scaleX 恒为末帧值）。
+                # 另：duration 单位是**毫秒**，t/el 是秒，必须换算。
+                total_ms = 0.0
+                times = [0.0]
+                for i in range(1, len(kfs)):
+                    try:
+                        d = float(kfs[i].get("duration") or 0.0)
+                    except (TypeError, ValueError):
+                        d = 0.0
+                    total_ms += d
+                    times.append(total_ms)
+                total = total_ms / 1000.0
+                if total <= 1e-9:
+                    return
+                el = max(0.0, min(t - t0, total))    # 结束后保持末帧
+                el_ms = el * 1000.0
+                # 段定位：落在 [times[i], times[i+1]) 的段 i（段 i 从 kfs[i]
+                # 过渡到 kfs[i+1]）；到末尾时取最后一段、p=1。
+                idx = 0
+                for i in range(len(times) - 1):
+                    if el_ms >= times[i] - 1e-6:
+                        idx = i
+                seg_start = times[idx]
+                seg_end = (times[idx + 1] if idx + 1 < len(times)
+                           else total_ms)
+                seg_dur = seg_end - seg_start
+                if seg_dur <= 1e-9:
+                    p = 1.0
+                else:
+                    p = min(1.0, max(0.0, (el_ms - seg_start) / seg_dur))
+
+                def _val(key, sub=None):
+                    """取该段的属性值（首段无对应键时沿用上一个关键帧）。"""
+                    for i in range(min(idx, len(kfs) - 1), -1, -1):
+                        k = kfs[i]
+                        v = k.get(key)
+                        if sub:
+                            if isinstance(v, dict) and v.get(sub) is not None:
+                                return float(v.get(sub))
+                        elif v is not None:
+                            try:
+                                return float(v)
+                            except (TypeError, ValueError):
+                                pass
+                    return None
+
+                def _lerp(a, b, r):
+                    if a is None:
+                        return b
+                    if b is None:
+                        return a
+                    return a + (b - a) * r
+
+                nxt = min(idx + 1, len(kfs) - 1)
+
+                def _pair(key, sub=None):
+                    a = _val(key, sub)
+                    b = None
+                    k2 = kfs[nxt]
+                    v = k2.get(key)
+                    if sub:
+                        if isinstance(v, dict) and v.get(sub) is not None:
+                            b = float(v.get(sub))
+                    elif v is not None:
+                        try:
+                            b = float(v)
+                        except (TypeError, ValueError):
+                            b = None
+                    return _lerp(a, b, p)
+
+                sx = _pair("scale", "x")
+                sy = _pair("scale", "y")
+                px = _pair("position", "x")
+                py = _pair("position", "y")
+                rot = _pair("rotation")
+                blur = _pair("blur")
+                alpha = _pair("alpha")
+                cam = {"active": True, "p": round(p, 4)}
+                if sx is not None:
+                    cam["scaleX"] = round(sx, 4)
+                if sy is not None:
+                    cam["scaleY"] = round(sy, 4)
+                # position 是「舞台百分比偏移」（引擎里 ±50 约等于半个屏）
+                if px is not None:
+                    cam["x"] = round(px / STAGE_W * 100.0, 3)
+                if py is not None:
+                    cam["y"] = round(py / STAGE_H * 100.0, 3)
+                if rot is not None:
+                    cam["rot"] = round(rot, 3)
+                if blur is not None:
+                    cam["blur"] = round(max(0.0, min(30.0, blur)), 3)
+                if alpha is not None:
+                    cam["alpha"] = round(max(0.0, min(1.0, alpha)), 3)
+                key = _json.dumps(cam, sort_keys=True)
+                if key == getattr(self, "_cam_key", None):
+                    return
+                self._cam_key = key
+                self._send("setCamera", cam)
             except Exception:
                 pass
 
