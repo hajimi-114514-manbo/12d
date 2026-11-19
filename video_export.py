@@ -1415,9 +1415,32 @@ def _track_clip_at(tr, t):
     return None
 
 
-def _over_rgba(dst3, rgb, a2f):
-    """把 rgb(同 dst3 区域大小) 按逐像素 alpha a2f(float32 HxWx1, 0..1)
-    混合进 dst3（就地 uint8）。out = fg*a + dst*(1-a)，四舍五入。"""
+def _over_rgba(dst3, rgb, a):
+    """rgb(u8 HxWx3) 按 u8 alpha a(HxW) source-over 混合进 dst3（就地）。
+    out = round(rgb*a/255 + dst*(255-a)/255)。
+
+    v3.6.2 提速（实测驱动）：原 float32 逐像素路径（astype→乘加→回写）
+    1080p 全帧 43ms，是普通预览卡顿的主因（探针 perf_probe_blend.py）；
+    改 cv2 SIMD u8 饱和运算后 5.3ms，最大像素差 1、>1 占比 0%（视觉无感，
+    且导出本就重编码）。入参常是画布的**不连续视图**，cv2 要求连续 Mat：
+    先 ascontiguousarray 拷进工作区（纯 memcpy，比 float 数学便宜一个量级），
+    算完一次拷回视图。alpha 由调用点直接给 u8（省掉原 float 归一的分配）。
+
+    dst3 是 float32（FX 路径 _paste_bg_layer 的浮点背景层）时保留旧
+    float32 公式：cv2 不接受混合类型输入，且该路径低频（有整层缓存），
+    不值得为它再优化。"""
+    if dst3.dtype == np.uint8:
+        import cv2
+        a3 = cv2.cvtColor(np.ascontiguousarray(a), cv2.COLOR_GRAY2BGR)
+        fg = cv2.multiply(np.ascontiguousarray(rgb), a3,
+                          dtype=cv2.CV_8U, scale=1.0 / 255.0)
+        inv = cv2.subtract(255, a3)
+        bg = cv2.multiply(np.ascontiguousarray(dst3), inv,
+                          dtype=cv2.CV_8U, scale=1.0 / 255.0)
+        cv2.add(fg, bg, dst=fg)
+        dst3[...] = fg
+        return
+    a2f = np.asarray(a, np.float32)[..., None] * (1.0 / 255.0)
     fg = rgb.astype(np.float32)
     out = fg * a2f + dst3.astype(np.float32) * (1.0 - a2f)
     np.add(out, 0.5, out=out)
@@ -1516,8 +1539,7 @@ def paste_layer(canvas, img, lay):
         if alpha is None:
             dst[...] = sub_rgb                  # 全不透明：直贴
         else:
-            a2 = alpha[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)] \
-                    .astype(np.float32)[:, :, None] * (1.0 / 255.0)
+            a2 = alpha[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
             _over_rgba(dst, sub_rgb, a2)
         return canvas
     # rot!=0：绕素材中心旋转到扩充画幅（透明边界），再平移贴
@@ -1533,20 +1555,19 @@ def paste_layer(canvas, img, lay):
         # 乘回（warp 后的 rgb 边缘已被 0 污染），混合才正确
         a2 = cv2.warpAffine(alpha, M, (rw, rh), flags=cv2.INTER_LINEAR,
                             borderMode=cv2.BORDER_CONSTANT,
-                            borderValue=0).astype(np.float32)
+                            borderValue=0)
     else:
         a2 = cv2.warpAffine(np.full((nh, nw), 255, np.uint8), M, (rw, rh),
                             flags=cv2.INTER_LINEAR,
                             borderMode=cv2.BORDER_CONSTANT,
-                            borderValue=0).astype(np.float32)
+                            borderValue=0)
     dx0, dy0 = max(0, ox), max(0, oy)
     dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
     if dx1 <= dx0 or dy1 <= dy0:
         return canvas
     sx0, sy0 = dx0 - ox, dy0 - oy
     sl = (slice(sy0, sy0 + (dy1 - dy0)), slice(sx0, sx0 + (dx1 - dx0)))
-    a2f = a2[sl][:, :, None] * (1.0 / 255.0)
-    _over_rgba(canvas[dy0:dy1, dx0:dx1], rgb[sl], a2f)
+    _over_rgba(canvas[dy0:dy1, dx0:dx1], rgb[sl], a2[sl])
     return canvas
 
 
