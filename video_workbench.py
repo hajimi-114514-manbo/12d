@@ -55,10 +55,11 @@ DEFAULT_DUR = {"image": 3.0, "video": 0, "puppet": 0, "audio": 0}  # 0=用素材
 
 # ---------- 面板 splitter（可拖拽调宽高）----------
 SETTINGS_NAME = "muppet_workbench.ini"
-# v3.6.2：素材库右侧加「背景」栏（用户要求），四栏：
-# 素材库 | 背景 | 预览 | 属性
-SPLIT_H_DEFAULT = [290, 190, 620, 250]
-SPLIT_H_MIN = [170, 130, 360, 170]
+# 三栏：素材库 | 预览 | 属性
+# （v3.6.2 背景改成素材库里的页签，不再是独立栏 —— 用户要求「背景放
+#   这个分类里面」，指的是和角色/音频/特效并列的页签）
+SPLIT_H_DEFAULT = [300, 880, 260]
+SPLIT_H_MIN = [180, 420, 180]
 SPLIT_V_DEFAULT = [560, 340]         # 上方区域 | 时间轴（约 38%）
 SPLIT_V_MIN_TIMELINE = 120
 
@@ -941,9 +942,10 @@ class VideoWorkbench(QWidget):
             "QWidget#videoWorkbenchRoot{background:%s;}" % TH.t("window_bg"))
         self.pivot = Pivot(self)
         # Pivot 页签：去掉「贴纸」（用户要求），「特效」改为「滤镜」。
-        # v3.6.2：模板页改成特效库，页签名同步改成「特效」。
+        # v3.6.2：模板页改成特效库（页签名同步）；背景单独成一页签
+        # （用户要求「背景放这个分类里面」——和角色/音频并列，不是独立栏）。
         for key, text in [("media", "角色"), ("audio", "音频"),
-                          ("text", "文本"),
+                          ("text", "文本"), ("bg", "背景"),
                           ("filter", "滤镜"), ("transition", "转场"),
                           ("template", "特效")]:
             self.pivot.addItem(key, text)
@@ -1027,35 +1029,31 @@ class VideoWorkbench(QWidget):
         # F1：文本页剧情编辑器常驻（tab 切换只 show/hide，表单内容不丢）
         self.script_editor = ScriptEditor(self, left)
         ll.addWidget(self.script_editor, 1)
-        hsplit.addWidget(left)
 
-        # ---- v3.6.2：背景栏（素材库右侧，用户要求）----
-        # 背景 = 素材库里 kind=bg 的图（asset_index 的 background/*）。
-        # 点缩略图=直接换当前时刻的背景（写入最底视频轨的 image clip），
-        # 不用再去角色/素材页翻。支持分类筛选 + 搜索式分组折叠。
-        bgpanel = QWidget(self)
-        bgpanel.setObjectName("bgPanel")
-        bgpanel.setMinimumWidth(SPLIT_H_MIN[1])
-        bgpanel.setStyleSheet("#bgPanel{background:%s;border-radius:8px;}"
-                              % TH.t("panel_bg"))
-        bl = QVBoxLayout(bgpanel)
-        bl.setContentsMargins(10, 10, 10, 10)
-        bl.setSpacing(8)
-        bh = QHBoxLayout()
-        self.bg_header = StrongBodyLabel("背景", bgpanel)
-        bh.addWidget(self.bg_header)
-        bh.addStretch(1)
-        self.bg_count = CaptionLabel("", bgpanel)
+        # ---- v3.6.2：背景页签（用户要求「背景放这个分类里面」）----
+        # 和其它素材页签并列（角色/音频/背景/特效），切到「背景」页时
+        # 显示这个面板、隐藏素材卡片区。不是独立栏——用户明确要页签。
+        # 数据 = 素材库 kind=bg（1053 张），点缩略图=换当前时刻的背景。
+        self.bg_panel = QWidget(left)
+        self.bg_panel.setObjectName("bgPanel")
+        self.bg_panel.setStyleSheet(
+            "QWidget#bgPanel{background:transparent;}")
+        bl = QVBoxLayout(self.bg_panel)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(6)
+        _bgr = QHBoxLayout()
+        self.bg_count = CaptionLabel("", self.bg_panel)
         self.bg_count.setStyleSheet("color:%s;" % TH.t("text_dim"))
-        bh.addWidget(self.bg_count)
-        bl.addLayout(bh)
-        # 分类下拉（按目录分组：白天/夜晚/教室/…）
+        _bgr.addWidget(self.bg_count)
+        _bgr.addStretch(1)
+        bl.addLayout(_bgr)
+        # 分类下拉（按目录分组：商店/路边/学校、工作·羽丘/…）
         from qfluentwidgets import ComboBox as _CB
-        self.bg_combo = _CB(bgpanel)
+        self.bg_combo = _CB(self.bg_panel)
         self.bg_combo.addItem("全部")
         self.bg_combo.currentIndexChanged.connect(self._rebuild_bg_cards)
         bl.addWidget(self.bg_combo)
-        self.bg_scroll = ScrollArea(bgpanel)
+        self.bg_scroll = ScrollArea(self.bg_panel)
         self.bg_scroll.setWidgetResizable(True)
         self.bg_host = QWidget()
         self.bg_host.setObjectName("bgHost")
@@ -1069,12 +1067,15 @@ class VideoWorkbench(QWidget):
         self.bg_flow.setContentsMargins(0, 0, 0, 0)
         self.bg_scroll.setWidget(self.bg_host)
         bl.addWidget(self.bg_scroll, 1)
-        self.bg_empty = CaptionLabel("素材库里没有背景图\n（资产管理里确认素材库位置）",
-                                     bgpanel)
+        self.bg_empty = CaptionLabel(
+            "素材库里没有背景图\n（资产管理里确认素材库位置）", self.bg_panel)
         self.bg_empty.setAlignment(Qt.AlignCenter)
         bl.addWidget(self.bg_empty)
-        hsplit.addWidget(bgpanel)
+        ll.addWidget(self.bg_panel, 1)
+        self.bg_panel.setVisible(False)     # 默认在「角色」页，背景面板隐藏
         self._bg_items = []          # 背景条目缓存（首次展开时读索引）
+
+        hsplit.addWidget(left)
 
         # 中：预览
         center = QWidget(self)
@@ -1359,11 +1360,8 @@ class VideoWorkbench(QWidget):
 
         self._apply_project(None)
         self._seed_history()
-        # v3.6.2：背景栏首次填充（懒读索引；素材库不可用时空列表）
-        try:
-            self._rebuild_bg_cards()
-        except Exception:
-            pass
+        # v3.6.2：背景页签**懒渲染** —— 首次切到「背景」时才读索引建卡
+        # （1053 条目建 400 张卡有开销，不该拖慢启动）。这里只清空占位。
 
     # ================= splitter 尺寸持久化 =================
     def _save_splitter_sizes(self):
@@ -1742,8 +1740,15 @@ class VideoWorkbench(QWidget):
         if filt == "text":
             # F1：文本页 = 剧情编辑器
             self._show_script_editor(True)
+            self._show_bg_panel(False)
             return
         self._show_script_editor(False)
+        if filt == "bg":
+            # v3.6.2：背景页签 —— 切到这一页只显示背景面板
+            self._show_bg_panel(True)
+            self._rebuild_bg_cards()
+            return
+        self._show_bg_panel(False)
         if filt == "template":
             # v3.6.2：模板页改成「特效」页 —— 206 个高级演出特效。
             # 原来的新建/演示/导入 WebGAL/运行时四个入口挪到「文件」菜单
@@ -2771,6 +2776,10 @@ class VideoWorkbench(QWidget):
         try:
             self.asset_scroll.setVisible(not show)
             self.asset_empty.setVisible(not show)
+            # v3.6.2：文本页也要把背景面板收起来（否则文本页会叠在上面）
+            bp = getattr(self, "bg_panel", None)
+            if bp is not None and show:
+                bp.setVisible(False)
             if self.btn_add_file is not None:
                 self.btn_add_file.setVisible(not show)
             if self.btn_add_puppet is not None:
@@ -2780,6 +2789,23 @@ class VideoWorkbench(QWidget):
             pass
         if show:
             se.refresh()
+
+    def _show_bg_panel(self, show):
+        """背景 tab：只显示背景面板，隐藏素材卡片区（与文本页互斥）。"""
+        bp = getattr(self, "bg_panel", None)
+        if bp is None:
+            return
+        try:
+            bp.setVisible(bool(show))
+            self.asset_scroll.setVisible(not show)
+            self.asset_empty.setVisible(False if show else
+                                        self.asset_empty.isVisible())
+            self.asset_header.setText("背景" if show else "素材库")
+            if show:
+                # 头行交给面板自己的计数标签；「素材库」标题保留也没关系
+                pass
+        except Exception:
+            pass
 
     def _filter_assets(self, key):
         self._asset_tab = str(key) if key else "media"
