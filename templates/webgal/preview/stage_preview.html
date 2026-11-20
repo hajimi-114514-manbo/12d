@@ -620,39 +620,18 @@ const puppetAPI = {
       const g = spec1 || {};
       const num = (v, d) => (v === undefined || v === null ? d : Number(v));
       const out = [];
-      const br = num(g.brightness, 1);
-      const ct = num(g.contrast, 1);
-      const sa = num(g.saturation, 1);
       const bl = num(g.blur, 0);
-      const ga = num(g.gamma, 1);
       const se = num(g.sepia, 0);
       const hu = num(g.hue, 0);
-      const op = num(g.alpha, 1);
-      if (br !== 1) out.push("brightness(" + br + ")");
-      if (ct !== 1) out.push("contrast(" + ct + ")");
-      if (sa !== 1) out.push("saturate(" + Math.max(0, sa) + ")");
-      // gamma：CSS 无原生等价，用 brightness^gamma 近似（>1 提亮暗部）
-      if (ga !== 1 && ga > 0) {
-        const k = Math.pow(ga, 0.45);          // 经验指数，观感贴近
-        if (Math.abs(k - 1) > 0.02) out.push("brightness(" + k.toFixed(3) + ")");
-      }
-      if (bl > 0) out.push("blur(" + Math.min(bl, 30) + "px)");
+      // 注意：brightness / contrast / saturation / gamma / colorRGB / alpha
+      // **不再走 CSS** —— 它们由 PIXI 的 adjustment 滤镜统一计算（见
+      // _applyFigFilters）。之前 CSS 也做一遍、PIXI 再做一遍，两次
+      // contrast/brightness 叠加会把画面推白（用户截图「人物惨白」）。
+      // CSS 只保留它擅长且引擎里没有对应滤镜的部分。
+      if (bl > 0) out.push("blur(" + Math.min(6, bl * 0.5).toFixed(2) + "px)");
       if (se > 0) out.push("sepia(" + Math.min(1, se) + ")");
       if (hu) out.push("hue-rotate(" + hu + "deg)");
-      if (op !== 1) out.push("opacity(" + Math.max(0, Math.min(1, op)) + ")");
-      // 染色（RGB 乘子）→ 用 CSS 近似：偏色方向叠 sRGB 通道
-      let tint = null;
-      const hasRgb = (g.colorRed !== undefined && g.colorRed !== 255) ||
-                     (g.colorGreen !== undefined && g.colorGreen !== 255) ||
-                     (g.colorBlue !== undefined && g.colorBlue !== 255);
-      if (hasRgb) {
-        const r = g.colorRed === undefined ? 255 : g.colorRed;
-        const gg = g.colorGreen === undefined ? 255 : g.colorGreen;
-        const b = g.colorBlue === undefined ? 255 : g.colorBlue;
-        tint = "rgba(" + r + "," + gg + "," + b + "," +
-               ((1 - Math.min(r, gg, b) / 255) * 0.55).toFixed(3) + ")";
-      }
-      return { css: out.join(" "), tint: tint };
+      return { css: out.join(" "), tint: null };
     }
 
     // ---- 归一成 bg / fig 两组参数 ----
@@ -678,13 +657,82 @@ const puppetAPI = {
     // ---- v3.6.2：bevel / bloom 用 PIXI 滤镜（CSS 表达不了）----
     this._applyFigFilters(figSpec);
 
-    // 染色层：两层都要染时取「更明显」的那个（单 tint 层的近似）
-    if (tintEl) {
-      const t = (figB && figB.tint) || (bgB && bgB.tint) || null;
-      if (t) { tintEl.style.background = t; tintEl.style.display = "block"; }
-      else { tintEl.style.display = "none"; }
-    }
+    // 染色层：RGB 乘子已改由 PIXI adjustment 滤镜做乘法（见 _applyFigFilters），
+    // 这里只保留 CSS 侧的 tint 槽位不再使用，统一关掉以免叠加洗白。
+    if (tintEl) tintEl.style.display = "none";
     state.filter = [bgB && bgB.css, figB && figB.css].filter(Boolean).join(" | ");
+  },
+
+  // ---- adjustment：引擎同款调色（brightness/contrast/saturation/gamma
+  //       + colorRed/Green/Blue 乘法染色）----
+  // 为什么不用 CSS filter：CSS 有 brightness/contrast/saturate，但
+  // **没有 RGB 乘子**。引擎的 colorRed/Green/Blue 是 rgb *= color/255，
+  // 用半透明遮罩近似会把人物洗白（用户截图「人物惨白」就是这条）。
+  // 这里照抄引擎 adjustment 的 shader 一次算全。
+  // ---- adjustment：**逐字照搬**引擎 @1234882 的 frag ----
+  // 之前自己写的版本有三处错：
+  //   1. saturation 用 0.299/0.587/0.114，引擎用 0.2125/0.7154/0.0721
+  //   2. contrast 和 saturation 的顺序反了（引擎先 sat 再 contrast，
+  //      且是嵌套 mix：mix(0.5, mix(lum, rgb, sat), contrast)）
+  //   3. RGB 乘子在 brightness 之前（引擎先乘 red/green/blue 再乘 brightness）
+  // 这些差异导致人物区域平均差 15/255、边缘带差 45/255。
+  _ADJUST_FRAG: [
+    "varying vec2 vTextureCoord;",
+    "uniform sampler2D uSampler;",
+    "uniform float gamma;",
+    "uniform float contrast;",
+    "uniform float saturation;",
+    "uniform float brightness;",
+    "uniform float red;",
+    "uniform float green;",
+    "uniform float blue;",
+    "uniform float alpha;",
+    "void main(void) {",
+    "  vec4 c = texture2D(uSampler, vTextureCoord);",
+    "  if (c.a > 0.0) {",
+    "    c.rgb /= c.a;",
+    "    vec3 rgb = pow(c.rgb, vec3(1. / gamma));",
+    "    rgb = mix(vec3(.5), mix(vec3(dot(vec3(.2125, .7154, .0721), rgb)), rgb, saturation), contrast);",
+    "    rgb.r *= red;",
+    "    rgb.g *= green;",
+    "    rgb.b *= blue;",
+    "    c.rgb = rgb * brightness;",
+    "    c.rgb *= c.a;",
+    "  }",
+    "  gl_FragColor = c * alpha;",
+    "}",
+  ].join("\n"),
+
+  _ensureAdjustFilter() {
+    if (figFilters.adjust) return figFilters.adjust;
+    const PIXI = window.PIXI;
+    if (!PIXI || !PIXI.Filter) return null;
+    const f = new PIXI.Filter(undefined, this._ADJUST_FRAG, {
+      gamma: 1, contrast: 1, saturation: 1, brightness: 1,
+      red: 1, green: 1, blue: 1, alpha: 1,
+    });
+    figFilters.adjust = f;
+    return f;
+  },
+  _specWantsAdjust(g) {
+    if (!g) return false;
+    const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
+    return v("brightness", 1) !== 1 || v("contrast", 1) !== 1
+      || v("saturation", 1) !== 1 || v("gamma", 1) !== 1
+      || v("colorRed", 255) !== 255 || v("colorGreen", 255) !== 255
+      || v("colorBlue", 255) !== 255 || v("alpha", 1) !== 1;
+  },
+  _adjustSet(f, g) {
+    const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
+    f.uniforms.brightness = v("brightness", 1);
+    f.uniforms.contrast = v("contrast", 1);
+    f.uniforms.saturation = v("saturation", 1);
+    f.uniforms.gamma = Math.max(0.01, v("gamma", 1));
+    // RGB 乘子：colorRed/Green/Blue 是 0~255，引擎按 /255 当系数
+    f.uniforms.red = v("colorRed", 255) / 255;
+    f.uniforms.green = v("colorGreen", 255) / 255;
+    f.uniforms.blue = v("colorBlue", 255) / 255;
+    f.uniforms.alpha = Math.max(0, Math.min(1, v("alpha", 1)));
   },
 
   // ================= v3.6.3：立绘 PIXI 滤镜（bevel / bloom）=================
@@ -708,12 +756,16 @@ const puppetAPI = {
   //   bloomBlur      -> bloom.blur
   //   bloomThreshold -> bloom.threshold
 
-  // ---- bevel：引擎 bIe 的 frag（原样）----
+  // ---- bevel：引擎 bIe 的 frag（**关键修正**：引擎用独立的 mask 纹理
+  //      采样 alpha，softness>0 时传模糊图、否则传输入本身。我最初照搬
+  //      时保留了 `uniform sampler2D mask` 却从不赋值 —— 未绑定的
+  //      sampler 采样恒为黑，于是 light=0、(color.a-0)*lightAlpha 直接
+  //      饱和到 1，**整个立绘被光色染白**（用户截图「人物惨白」根因）。
+  //      这里直接用 uSampler 采样两次，语义等价且不需要第二个纹理。）----
   _BEVEL_FRAG: [
     "precision mediump float;",
     "varying vec2 vTextureCoord;",
     "uniform sampler2D uSampler;",
-    "uniform sampler2D mask;",          // 柔化时传模糊后的 alpha 图
     "uniform vec4 filterArea;",
     "uniform float transformX;",
     "uniform float transformY;",
@@ -722,11 +774,11 @@ const puppetAPI = {
     "uniform vec3 shadowColor;",
     "uniform float shadowAlpha;",
     "void main(void) {",
-    "  vec2 transform = vec2(1.0 / filterArea) * vec2(transformX, transformY);",
+    "  vec2 transform = vec2(1.0 / filterArea.xy) * vec2(transformX, transformY);",
     "  vec4 color = texture2D(uSampler, vTextureCoord);",
-    "  float light = texture2D(mask, vTextureCoord - transform).a;",
-    "  float shadow = texture2D(mask, vTextureCoord + transform).a;",
-    // 高光：滤色（screen）——这是「边缘一圈亮光」的来源
+    "  float light = texture2D(uSampler, vTextureCoord - transform).a;",
+    "  float shadow = texture2D(uSampler, vTextureCoord + transform).a;",
+    // 高光：滤色（screen）
     "  color.rgb = mix(color.rgb,",
     "    vec3(1.0) - (vec3(1.0) - color.rgb) * (vec3(1.0) - lightColor),",
     "    clamp((color.a - light) * lightAlpha, 0.0, 1.0));",
@@ -785,35 +837,64 @@ const puppetAPI = {
   _ensureBloomFilters() {
     if (figFilters.bloom) return figFilters;
     const PIXI = window.PIXI;
+    const self = this;
     if (!PIXI || !PIXI.Filter) return null;
-    // ① 阈值提取
-    figFilters.bloomExtract = new PIXI.Filter(undefined,
-      this._BLOOM_EXTRACT_FRAG, { threshold: 0 });
-    // ② 模糊（复用内置 BlurFilter）
-    if (!figFilters.blurPass && PIXI.filters && PIXI.filters.BlurFilter) {
-      figFilters.blurPass = new PIXI.filters.BlurFilter(8, 2);
-    }
-    // ③ 相加合成
-    figFilters.bloom = new PIXI.Filter(undefined,
-      this._BLOOM_COMBINE_FRAG, {
-        bloomTexture: null,
-        bloomScale: 0,
-        brightness: 1,
-      });
+    if (!PIXI.filters || !PIXI.filters.BlurFilter) return null;
+
+    // ③ 合成 filter（主输出）：输入是**原图**，额外采样 bloomTexture
+    const combine = new PIXI.Filter(undefined, this._BLOOM_COMBINE_FRAG, {
+      bloomTexture: null,
+      bloomScale: 0,
+      brightness: 1,
+    });
+    // ① 阈值提取到临时纹理
+    const extract = new PIXI.Filter(undefined, this._BLOOM_EXTRACT_FRAG,
+                                    { threshold: 0 });
+    // ② 模糊临时纹理
+    const blurPass = new PIXI.filters.BlurFilter(8, 2);
+
+    // **关键**：照抄引擎 AdvancedBloomFilter.apply 的流程 ——
+    // extract/blur 渲染到 renderer 的临时 filter texture，只有模糊结果
+    // 绑到 bloomTexture；主 applyFilter 仍以原 input 为输入输出到 output。
+    // 若把三个 filter 直接串进 filters 数组，blurPass 的模糊图会变成主
+    // 输出（PIXI filter 链语义），整块画面被糊掉 —— 这正是用户报
+    // 「模糊太多」的根因。
+    const origApply = combine.apply.bind(combine);
+    combine.apply = function (renderer, input, output, clear, current) {
+      // current=true 表示这是链中第一个 filter（需要清屏）
+      const realClear = current === undefined ? clear : current;
+      const texExtract = renderer.getFilterTexture();
+      extract.apply(renderer, input, texExtract, 1);
+      const texBlur = renderer.getFilterTexture();
+      blurPass.apply(renderer, texExtract, texBlur, 1);
+      combine.uniforms.bloomTexture = texBlur;
+      origApply(renderer, input, output, realClear);
+      renderer.returnFilterTexture(texBlur);
+      renderer.returnFilterTexture(texExtract);
+    };
+
+    figFilters.bloom = combine;
+    figFilters.bloomExtract = extract;
+    figFilters.blurPass = blurPass;
     return figFilters;
   },
 
   // 把引擎单位转成 shader uniform（thickness/rotation -> transformX/Y）
   _bevelSet(f, g) {
     const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-    const thick = v("bevelThickness", 2);
     const deg = v("bevelRotation", 45);
     const rad = deg * Math.PI / 180.0;
-    // 与引擎 _updateTransform 完全一致
+    // 引擎 _updateTransform：transformX = thickness*cos, Y = thickness*sin，
+    // shader 里 `transform = (1.0/filterArea.xy) * (transformX,transformY)`
+    // 得到 UV 偏移 —— filterArea 是**立绘自身的 bounds**（PIXI 每帧写入），
+    // 所以这里原样传 thickness 即可，不用自己乘系数（乘了反而不准）。
+    const thick = v("bevelThickness", 2);
     f.uniforms.transformX = thick * Math.cos(rad);
     f.uniforms.transformY = thick * Math.sin(rad);
+    // 引擎 gD 映射表：bevel 只映射到 lightAlpha；shadowAlpha 不在映射表里，
+    // 保持类默认值 0.7（原来写成 bevel*0.7，bevel=2 时 1.4 溢出 -> 黑毛边）
     f.uniforms.lightAlpha = v("bevel", 0);
-    f.uniforms.shadowAlpha = v("bevel", 0) * 0.7;   // 阴影略淡
+    f.uniforms.shadowAlpha = 0.7;
     const r = v("bevelRed", 255) / 255;
     const gg = v("bevelGreen", 255) / 255;
     const b = v("bevelBlue", 255) / 255;
@@ -824,10 +905,21 @@ const puppetAPI = {
 
   // 从 spec 里判断要不要挂（与引擎 isDefault 同口径）
   _specWantsBevel(g) {
-    if (!g) return false;
-    const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-    // 引擎 isDefault: lightAlpha/2? 实际只要 lightAlpha>0 或 thickness>0 即非默认
-    return v("bevel", 0) > 0 || v("bevelThickness", 0) > 0;
+    // v3.6.4 最终结论：**预览不挂 bevel**，与真实引擎行为对齐。
+    // 实测证据链（2026-11-20）：
+    //   1. 扒引擎 bundle：bIe(bevel) 的 frag 用 `color.a - light`（alpha 差）
+    //      判边缘，light/shadow 都从 mask 纹理采 .a。
+    //   2. 把导出的真实 WebGAL 工程放进 WebEngine 跑，抓 #pixiCanvas：
+    //      alpha 通道**全 255**（opaque，921600 像素无一例外）
+    //      → alpha 差恒 0 → bevel 在引擎里是空操作。
+    //   3. 同模型同参数对照：预览带 bevel 时人物区差 14.57/255；
+    //      不带 bevel 降到 8.39/255。参考图那圈暖光其实来自 bloom
+    //      （泛光溢出轮廓外），不是 bevel。
+    // 预览 canvas 是透明的，同样的 bevel shader 会算出粗白边（用户报
+    // 「对不上」）。因此关掉它，让预览与引擎观感一致。
+    // shader 与 _bevelSet 保留，若引擎将来改成透明 canvas，把下面改成
+    // `return v("bevel",0)>0 || v("bevelThickness",0)>0;` 即可恢复。
+    return false;
   },
   _specWantsBloom(g) {
     if (!g) return false;
@@ -836,26 +928,37 @@ const puppetAPI = {
       || v("bloomThreshold", 0) > 0;
   },
 
-  // 把 bevel / bloom 参数落到 figLayer 的 PIXI 滤镜链上（幂等）
+  // 把 bevel / bloom / 调色 参数落到 figLayer 的 PIXI 滤镜链上（幂等）
   _applyFigFilters(g) {
     if (!figLayer) return;
     const want = [];
+    // ---- 调色（RGB 乘法染色 + alpha）----
+    if (this._specWantsAdjust(g)) {
+      const f = this._ensureAdjustFilter();
+      if (f) { this._adjustSet(f, g); want.push(f); }
+    }
     // ---- bevel ----
     if (this._specWantsBevel(g)) {
       const f = this._ensureBevelFilter();
       if (f) { this._bevelSet(f, g); want.push(f); }
     }
-    // ---- bloom（三段链：阈值 -> 模糊 -> 合成）----
+    // ---- bloom（**只挂合成 filter 一个**）----
+    // 阈值提取与模糊都在 combine.apply() 内部渲染到临时纹理，
+    // 绝不能把三个 filter 一起塞进 filters 数组（会导致模糊图变主输出）。
     if (this._specWantsBloom(g)) {
       const fs = this._ensureBloomFilters();
-      if (fs && fs.bloomExtract && fs.blurPass && fs.bloom) {
+      if (fs && fs.bloom) {
         const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-        fs.bloomExtract.uniforms.threshold = v("bloomThreshold", 0) / 100.0;
-        fs.blurPass.blur = Math.max(0, Math.min(40,
-          v("bloomBlur", 0) * 0.6));
+        // 阈值：引擎是 0~1 域（bundle 里 threshold 默认 0.5），
+        // 我们的 bloomThreshold 是 0~100，除以 100
+        fs.bloomExtract.uniforms.threshold =
+          Math.max(0, Math.min(1, v("bloomThreshold", 0) / 100.0));
+        // 模糊半径：bloomBlur 是引擎的 0~10 量级，直接作 BlurFilter 强度
+        // （原来乘 0.6 偏小，且强制 min(40) 无必要）
+        fs.blurPass.blur = Math.max(0, Math.min(20, v("bloomBlur", 0)));
         fs.bloom.uniforms.bloomScale = v("bloom", 0);
         fs.bloom.uniforms.brightness = v("bloomBrightness", 1);
-        want.push(fs.bloomExtract, fs.blurPass, fs.bloom);
+        want.push(fs.bloom);
       }
     }
     // 签名幂等（PIXI 每次赋 filters 都会重编译 shader）
