@@ -2421,17 +2421,16 @@ class VideoWorkbench(QWidget):
         return " · ".join(parts), "%.2fs" % t
 
     def _refresh_fx_panel(self):
-        """重建「已应用的滤镜 / 特效」列表（工程属性面板里）。"""
-        # ---- 清空旧行 ----
-        for lay in (getattr(self, "fx_rows_lay", None),
-                    getattr(self, "flt_rows_lay", None)):
-            if lay is None:
-                continue
-            while lay.count():
-                it = lay.takeAt(0)
-                w = it.widget() if hasattr(it, "widget") else it
-                if isinstance(w, QWidget):
-                    w.deleteLater()
+        """重建「已应用的滤镜 / 特效」列表（工程属性面板里）。
+
+        v3.6.5 性能（用户报「加载滤镜很卡」）：原来每次 _after_edit 都
+        无条件清空并重建所有行 —— 220 条特效 = 220 个 _FxRow QWidget 的
+        创建与销毁，这才是卡顿的真正来源（不是渲染，渲染实测只 +0.13ms）。
+
+        现在先算「内容签名」（特效条数 + 每条 cmd 摘要 + 滤镜 clip id/参数），
+        签名没变就直接 return，不碰任何控件。纯播放/拖播放头/改无关属性
+        等大量 _after_edit 调用都会命中，只有真增删改才重建。
+        """
         if not hasattr(self, "fx_count_lbl"):
             return
         aid = getattr(self, "_cur_aid", None)
@@ -2443,6 +2442,31 @@ class VideoWorkbench(QWidget):
                 f = c.get("filter")
                 if isinstance(f, dict) and f:
                     clips_with_filter.append((tr, c, f))
+
+        # ---- 内容签名：变了才重建（幂等短路，最大收益点）----
+        try:
+            sig = (
+                len(effects),
+                tuple(str(ef.get("cmd") or "")[:80] for ef in effects),
+                tuple((str(c.get("id")), tuple(sorted(f.keys())))
+                      for _t, c, f in clips_with_filter),
+            )
+        except Exception:
+            sig = None
+        if sig is not None and sig == getattr(self, "_fx_panel_sig", None):
+            return
+        self._fx_panel_sig = sig
+
+        # ---- 清空旧行 ----
+        for lay in (getattr(self, "fx_rows_lay", None),
+                    getattr(self, "flt_rows_lay", None)):
+            if lay is None:
+                continue
+            while lay.count():
+                it = lay.takeAt(0)
+                w = it.widget() if hasattr(it, "widget") else it
+                if isinstance(w, QWidget):
+                    w.deleteLater()
 
         n_eff = len(effects)
         n_flt = len(clips_with_filter)

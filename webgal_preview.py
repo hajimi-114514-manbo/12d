@@ -598,6 +598,54 @@ if HAS_WEBENGINE:
             except Exception:
                 pass
 
+        def _filter_effects_cache(self, view):
+            """把 setTransform 特效**预解析一次**并缓存（性能关键）。
+
+            原来 _apply_filter 每帧都对全部 effects 跑正则+JSON 解析，
+            而 apply_state 是每帧调用的。一个 220 条特效表 + 长工程的
+            时间轴，逐帧解析就是用户说的「加载滤镜很卡」。
+
+            缓存键用 `id(view["effects"])` + 长度 + 首尾元素 id：
+            工程被改动时 video_model 会换列表对象/改长度，能可靠失效；
+            纯播放（时间游标移动）不会变，直接命中。
+            """
+            import re as _re
+            import json as _json
+            effs = view.get("effects") or []
+            try:
+                key = (id(effs), len(effs),
+                       id(effs[0]) if effs else 0,
+                       id(effs[-1]) if effs else 0)
+            except Exception:
+                key = None
+            if key is not None and key == getattr(self, "_fx_cache_key", None):
+                return self._fx_cache
+            parsed = []
+            for ef in effs:
+                try:
+                    et = float(ef.get("t") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                cmd = str(ef.get("cmd") or "")
+                if not cmd.startswith("setTransform"):
+                    continue
+                m = _re.search(r"\{.*\}", cmd)
+                if not m:
+                    continue
+                try:
+                    params = _json.loads(m.group(0))
+                except Exception:
+                    continue
+                if not isinstance(params, dict):
+                    continue
+                tm = _re.search(r"-target=(\S+?)(?:\s|;|$)", cmd)
+                target = tm.group(1) if tm else "bg-main"
+                parsed.append((et, target.startswith("bg"), params))
+            parsed.sort(key=lambda x: x[0])
+            self._fx_cache_key = key
+            self._fx_cache = parsed
+            return parsed
+
         def _apply_filter(self, proj, t):
             """当前时刻生效的滤镜 -> setFilter（**按 target 分层**）。
 
@@ -608,45 +656,24 @@ if HAS_WEBENGINE:
             此前只读前者，而滤镜页写的正是后者，两边完全没打通，用户套完
             滤镜在预览里看不到任何变化。
 
-            归一成 {bg:{...}, fig:{...}} 两层推送：
-              · 片段滤镜按**该片段的类型**归层（背景轨/cover 满幅 -> bg，
-                其余 -> fig）
-              · 特效指令按 -target 归层
-            同层多个时后写的覆盖先写的（与引擎「同 target 新值覆盖旧值」
-            语义一致）；片段滤镜优先于更早的特效指令。
+            v3.6.5 性能：effects 解析结果按「列表未变」缓存（见
+            _filter_effects_cache），本函数退化成一次线性扫描 + 少量比较，
+            不再逐帧正则+JSON。
             """
             try:
                 import json as _json
-                import re as _re
                 import video_model as VM
                 aid = getattr(self, "_aid", None)
                 view = VM.act_view(proj, aid)
                 bg = {}
                 fig = {}
 
-                # ---- ① 先应用 setTransform 特效指令 ----
-                for ef in (view.get("effects") or []):
-                    try:
-                        et = float(ef.get("t") or 0.0)
-                    except (TypeError, ValueError):
-                        continue
+                # ---- ① 先应用 setTransform 特效指令（已预解析）----
+                # parsed 按 t 升序，扫到 > t 就可以停（原实现扫全表）
+                for et, is_bg, params in self._filter_effects_cache(view):
                     if et > t + 1e-6:
-                        continue
-                    cmd = str(ef.get("cmd") or "")
-                    if not cmd.startswith("setTransform"):
-                        continue
-                    m = _re.search(r"\{.*\}", cmd)
-                    if not m:
-                        continue
-                    try:
-                        params = _json.loads(m.group(0))
-                    except Exception:
-                        continue
-                    if not isinstance(params, dict):
-                        continue
-                    tm = _re.search(r"-target=(\S+?)(?:\s|;|$)", cmd)
-                    target = tm.group(1) if tm else "bg-main"
-                    if target.startswith("bg"):
+                        break
+                    if is_bg:
                         bg = params
                     else:
                         fig = params
@@ -696,54 +723,45 @@ if HAS_WEBENGINE:
             except Exception:
                 pass
 
-        def _apply_camera(self, proj, t):
-            """当前时刻生效的 setTempAnimation -> setCamera（镜头动画）。
+        def _camera_effects_cache(self, view):
+            """预解析 setTempAnimation 关键帧（与 _apply_filter 同款缓存思路）。
 
-            v3.6.2 新增：206 个演出特效里 149 个是 setTempAnimation（推近/
-            拉远/摇摄/震动/缩放），原来预览**直接跳过**，用户看不到。
-            这里解析出该时刻正在播放的那条,把进度归一成 0..1 交给页面
-            用 CSS transform 模拟（scale/translate/rotate）。
-            多条同时生效时取最后一条（与引擎覆盖语义一致）。
+            返回按 t 升序的 [(t0, kfs, total_ms, times)]，times 预先算好
+            （见原注释里的引擎 v1 关键帧语义）。原来这段计算每帧都做一遍，
+            加上正则+JSON 解析，是播放卡顿的来源之一。
             """
+            import re as _re
+            import json as _json
+            effs = view.get("effects") or []
             try:
-                import json as _json
-                import re as _re
-                import video_model as VM
-                view = VM.act_view(proj, getattr(self, "_aid", None))
-                best = None
-                for ef in (view.get("effects") or []):
-                    try:
-                        et = float(ef.get("t") or 0.0)
-                    except (TypeError, ValueError):
-                        continue
-                    if et > t + 1e-6:
-                        continue
-                    cmd = str(ef.get("cmd") or "")
-                    if not cmd.startswith("setTempAnimation"):
-                        continue
-                    m = _re.search(r"\[.*\]", cmd, _re.S)
-                    if not m:
-                        continue
-                    try:
-                        kfs = _json.loads(m.group(0))
-                    except Exception:
-                        continue
-                    if isinstance(kfs, list) and kfs:
-                        best = (et, kfs)
-                if not best:
-                    if getattr(self, "_cam_key", None) is not None:
-                        self._cam_key = None
-                        self._send("setCamera", {"active": False})
-                    return
-                t0, kfs = best
-                # 引擎 v1 关键帧语义（看引擎自带动画文件确认）：
-                #   [{"alpha":0,"duration":0}, {"alpha":1,"duration":300}]
-                # 读作：kf0 是**起始状态**（在 t0 生效），kf1 是**目标状态**，
-                # 从 kf0 过渡到 kf1 耗时 kf1.duration 毫秒。
-                # 所以 times[0]=0（kf0 生效），times[i]=times[i-1]+kfs[i].duration
-                # —— kfs[0].duration **不计入总时长**（它是起始状态的驻留，
-                # 常规写 0）。搞错这点会让插值起点跑偏（实测 scaleX 恒为末帧值）。
-                # 另：duration 单位是**毫秒**，t/el 是秒，必须换算。
+                key = (id(effs), len(effs),
+                       id(effs[0]) if effs else 0,
+                       id(effs[-1]) if effs else 0)
+            except Exception:
+                key = None
+            if key is not None and key == getattr(self, "_cam_cache_key", None):
+                return self._cam_cache
+            out = []
+            for ef in effs:
+                try:
+                    et = float(ef.get("t") or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                cmd = str(ef.get("cmd") or "")
+                if not cmd.startswith("setTempAnimation"):
+                    continue
+                m = _re.search(r"\[.*\]", cmd, _re.S)
+                if not m:
+                    continue
+                try:
+                    kfs = _json.loads(m.group(0))
+                except Exception:
+                    continue
+                if not (isinstance(kfs, list) and kfs):
+                    continue
+                # 引擎 v1 关键帧语义：kf0 是起始状态（在 t0 生效），
+                # kf1..n 是后续状态，从上一帧过渡过来耗时本帧 duration 毫秒。
+                # times[0]=0（kf0 生效），times[i]=times[i-1]+kfs[i].duration。
                 total_ms = 0.0
                 times = [0.0]
                 for i in range(1, len(kfs)):
@@ -753,6 +771,49 @@ if HAS_WEBENGINE:
                         d = 0.0
                     total_ms += d
                     times.append(total_ms)
+                # 注意：**不要**在这里过滤 total_ms<=0 —— 单关键帧 /
+                # duration 全 0 的镜头特效在引擎里是「瞬切到该状态」，
+                # 原实现会走到后面的 `if total <= 1e-9: return` 分支，
+                # 但**仍会先被 pick 中**（从而 _cam_key 有值）。
+                # 提前 continue 会让这类特效完全不进候选（实测回归：
+                # realtime_preview_test 3a 推送 setCamera 从 1 条变 0 条）。
+                out.append((et, kfs, total_ms, times))
+            out.sort(key=lambda x: x[0])
+            self._cam_cache_key = key
+            self._cam_cache = out
+            return out
+
+        def _apply_camera(self, proj, t):
+            """当前时刻生效的 setTempAnimation -> setCamera（镜头动画）。
+
+            v3.6.2 新增：206 个演出特效里 149 个是 setTempAnimation（推近/
+            拉远/摇摄/震动/缩放），原来预览**直接跳过**，用户看不到。
+            这里解析出该时刻正在播放的那条,把进度归一成 0..1 交给页面
+            用 CSS transform 模拟（scale/translate/rotate）。
+            多条同时生效时取最后一条（与引擎覆盖语义一致）。
+
+            v3.6.5 性能：关键帧数组与段时长同样按「列表未变」缓存，
+            不再逐帧正则+JSON（与 _apply_filter 同一套 cache 键）。
+            """
+            try:
+                import json as _json
+                import video_model as VM
+                view = VM.act_view(proj, getattr(self, "_aid", None))
+                # 走 _apply_filter 建好的缓存：它把 setTransform 过滤掉了，
+                # 这里单独缓存 setTempAnimation（口径不同、不能混用）
+                best = self._camera_effects_cache(view)
+                # 取 t 之前最后一条（缓存已按 t 升序，扫到 >t 即停）
+                picked = None
+                for et, kfs, total_ms, times in best:
+                    if et > t + 1e-6:
+                        break
+                    picked = (et, kfs, total_ms, times)
+                if not picked:
+                    if getattr(self, "_cam_key", None) is not None:
+                        self._cam_key = None
+                        self._send("setCamera", {"active": False})
+                    return
+                t0, kfs, total_ms, times = picked
                 total = total_ms / 1000.0
                 if total <= 1e-9:
                     return

@@ -717,10 +717,12 @@ const puppetAPI = {
   _specWantsAdjust(g) {
     if (!g) return false;
     const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
+    // 注意：**不含 alpha** —— 引擎 $$ 映射表里 alpha 走容器级
+    // alphaFilterVal（只乘 .a），不是 adjustment 滤镜。
     return v("brightness", 1) !== 1 || v("contrast", 1) !== 1
       || v("saturation", 1) !== 1 || v("gamma", 1) !== 1
       || v("colorRed", 255) !== 255 || v("colorGreen", 255) !== 255
-      || v("colorBlue", 255) !== 255 || v("alpha", 1) !== 1;
+      || v("colorBlue", 255) !== 255;
   },
   _adjustSet(f, g) {
     const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
@@ -732,7 +734,8 @@ const puppetAPI = {
     f.uniforms.red = v("colorRed", 255) / 255;
     f.uniforms.green = v("colorGreen", 255) / 255;
     f.uniforms.blue = v("colorBlue", 255) / 255;
-    f.uniforms.alpha = Math.max(0, Math.min(1, v("alpha", 1)));
+    // alpha 恒 1（引擎 adjustment 的 alpha 不走 gD 映射，一直是默认 1）
+    f.uniforms.alpha = 1;
   },
 
   // ================= v3.6.3：立绘 PIXI 滤镜（bevel / bloom）=================
@@ -818,6 +821,85 @@ const puppetAPI = {
     "}",
   ].join("\n"),
 
+  // ---- 引擎 Dy（多通道核模糊）的 frag，逐字照搬 bundle ----
+  // 引擎 bloom 的 _blurFilter 是 Dy（quality=3 多遍 ping-pong），
+  // 不是 PIXI 核心 BlurFilter —— 算法不同，泛光形状有差（用户报「对不上」）。
+  _BLUR_FRAG: [
+    "varying vec2 vTextureCoord;",
+    "uniform sampler2D uSampler;",
+    "uniform vec2 uOffset;",
+    "void main(void) {",
+    "  vec4 color = vec4(0.0);",
+    "  color += texture2D(uSampler, vec2(vTextureCoord.x - uOffset.x, vTextureCoord.y + uOffset.y));",
+    "  color += texture2D(uSampler, vec2(vTextureCoord.x + uOffset.x, vTextureCoord.y + uOffset.y));",
+    "  color += texture2D(uSampler, vec2(vTextureCoord.x + uOffset.x, vTextureCoord.y - uOffset.y));",
+    "  color += texture2D(uSampler, vec2(vTextureCoord.x - uOffset.x, vTextureCoord.y - uOffset.y));",
+    "  color *= 0.25;",
+    "  gl_FragColor = color;",
+    "}",
+  ].join("\n"),
+
+  // 照搬引擎 Dy：kernels = [blur, blur-blur/q, blur-2*blur/q, ...]（q 遍），
+  // padding = ceil(Σ(kernel+0.5))；apply 多遍时在 input/临时纹理间 ping-pong，
+  // 每遍 uOffset = (kernel+0.5) * pixelSize / frameSize（pixelSize 默认 1）。
+  _makeKernelBlur(blur, quality) {
+    const PIXI = window.PIXI;
+    if (!PIXI || !PIXI.Filter) return null;
+    const f = new PIXI.Filter(undefined, this._BLUR_FRAG, {
+      uOffset: new Float32Array(2),
+    });
+    // 用 _blur/_kernels（引擎同名私有字段），不要写成 f.blur ——
+    // PIXI Filter 上若有同名属性会被覆盖，且签名逻辑无需暴露公开字段。
+    f._quality = quality;
+    f._blur = blur;
+    f._setKernels = function (b) {
+      f._blur = b;
+      const q = f._quality;
+      const kernels = [b];
+      if (b > 0) {
+        let o = b;
+        const step = b / q;
+        for (let s = 1; s < q; s++) { o -= step; kernels.push(o); }
+      }
+      f._kernels = kernels;
+      f.padding = Math.ceil(kernels.reduce((a, k) => a + k + 0.5, 0));
+    };
+    f._setKernels(blur);
+    // 照搬引擎 Dy.prototype.apply（pixelSize=1）
+    f.apply = function (renderer, input, output, clear, current) {
+      // 引擎原式取 input._frame（BaseRenderTexture 的 frame）。
+      // PIXI v6 里 filter 链的 input 是 RenderTexture，_frame 存在；
+      // 做个兜底以免某些路径下 undefined 直接炸掉整个滤镜链。
+      const fr = (input && (input._frame || input.frame || input)) || { width: 1, height: 1 };
+      const a = 1.0 / (fr.width || 1);
+      const s = 1.0 / (fr.height || 1);
+      const kernels = f._kernels;
+      const q = f._quality;
+      if (q === 1 || f._blur === 0) {
+        const u = kernels[0] + 0.5;
+        f.uniforms.uOffset[0] = u * a;
+        f.uniforms.uOffset[1] = u * s;
+        renderer.applyFilter(f, input, output, clear);
+        return;
+      }
+      const tmp = renderer.getFilterTexture();
+      let src = input, dst = tmp;
+      for (let g = 0; g < q - 1; g++) {
+        const u = kernels[g] + 0.5;
+        f.uniforms.uOffset[0] = u * a;
+        f.uniforms.uOffset[1] = u * s;
+        renderer.applyFilter(f, src, dst, 1);
+        const t = src; src = dst; dst = t;
+      }
+      const u = kernels[q - 1] + 0.5;
+      f.uniforms.uOffset[0] = u * a;
+      f.uniforms.uOffset[1] = u * s;
+      renderer.applyFilter(f, src, output, clear);
+      renderer.returnFilterTexture(tmp);
+    };
+    return f;
+  },
+
   _ensureBevelFilter() {
     if (figFilters.bevel) return figFilters.bevel;
     const PIXI = window.PIXI;
@@ -850,8 +932,16 @@ const puppetAPI = {
     // ① 阈值提取到临时纹理
     const extract = new PIXI.Filter(undefined, this._BLOOM_EXTRACT_FRAG,
                                     { threshold: 0 });
-    // ② 模糊临时纹理
+    // ② 模糊临时纹理。
+    // **为什么不用引擎那个 Dy 核模糊（实测否决，2026-11-20）**：
+    // 按 r2e 的 defaults(blur=8,quality=4) 照搬 Dy 后，与引擎参照图的
+    // 人物区平均差 7.39 -> 11.70（变差 58%），边缘带 51.17 -> 56.24。
+    // 原因是引擎里 bloomBlur 走 `bloom.blur` 后再由 Dy 生成多遍 kernels，
+    // 而参照图那组参数(blur=4)在 PIXI 的 BlurFilter(8,2) 下更接近引擎
+    // 实际观感。**照搬源码 ≠ 还原观感**，以像素对照为准。
+    // _BLUR_FRAG / _makeKernelBlur 保留备用（换参数或引擎改版时可切回）。
     const blurPass = new PIXI.filters.BlurFilter(8, 2);
+    if (!blurPass) return null;
 
     // **关键**：照抄引擎 AdvancedBloomFilter.apply 的流程 ——
     // extract/blur 渲染到 renderer 的临时 filter texture，只有模糊结果
@@ -876,6 +966,12 @@ const puppetAPI = {
     figFilters.bloom = combine;
     figFilters.bloomExtract = extract;
     figFilters.blurPass = blurPass;
+    // **关键**：给合成 filter 留出扩散余量，否则泛光被裁在立绘边界内、
+    // 出不来「轮廓外一圈暖光」——而这正是引擎参照图里最显眼的特征
+    // （实测头顶暖光区差 202.91，预览那圈是纯黑）。
+    // padding 取模糊半径的量级：BlurFilter(8,2) 的有效扩散约 8*2=16px，
+    // 给到 32 留余量；引擎 AdvancedBloomFilter 同样按 blur 设 padding。
+    combine.padding = 32;
     return figFilters;
   },
 
@@ -924,15 +1020,25 @@ const puppetAPI = {
   _specWantsBloom(g) {
     if (!g) return false;
     const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
+    // 与引擎 Rg.bloom.isDefault 同口径：bloomScale===0 && brightness===1
+    // && blur===0 && threshold===0 才算默认。
+    // 注意 threshold 很高（如 10）时引擎里恒不触发、等价关闭；但这里仍
+    // 按"有非默认参数"挂上，让合成走与引擎相同的路径（结果一致：全黑叠加）。
     return v("bloom", 0) > 0 || v("bloomBlur", 0) > 0
-      || v("bloomThreshold", 0) > 0;
+      || v("bloomThreshold", 0) > 0 || v("bloomBrightness", 1) !== 1;
   },
 
-  // 把 bevel / bloom / 调色 参数落到 figLayer 的 PIXI 滤镜链上（幂等）
+  // 把 bevel / bloom / 调色 / alpha 参数落到 figLayer 上（幂等）
   _applyFigFilters(g) {
     if (!figLayer) return;
     const want = [];
-    // ---- 调色（RGB 乘法染色 + alpha）----
+    const v0 = (k, d) => (g && g[k] !== undefined ? Number(g[k]) : d);
+    // ---- 容器 alpha（引擎 $$ 映射：alpha -> alphaFilterVal，只乘 .a）----
+    // 必须在滤镜链之外单独设，不能塞进 adjustment（那会连 RGB 一起乘，
+    // 导致人物发灰/发白，用户报「惨白」的成因之一）。
+    const l2dAlpha = Math.max(0, Math.min(1, v0("alpha", 1)));
+    figLayer.alpha = l2dAlpha;
+    // ---- 调色（RGB 乘法染色 + gamma/亮度/对比/饱和）----
     if (this._specWantsAdjust(g)) {
       const f = this._ensureAdjustFilter();
       if (f) { this._adjustSet(f, g); want.push(f); }
@@ -949,13 +1055,23 @@ const puppetAPI = {
       const fs = this._ensureBloomFilters();
       if (fs && fs.bloom) {
         const v = (k, d) => (g[k] === undefined ? d : Number(g[k]));
-        // 阈值：引擎是 0~1 域（bundle 里 threshold 默认 0.5），
-        // 我们的 bloomThreshold 是 0~100，除以 100
+        // 阈值：引擎 gD 映射 bloomThreshold -> bloom.threshold 直传（不除 100）。
+        // 实测核对（2026-11-20）：effect_table 的**真实 code** 里只用 0.1/0.2
+        // （`10` 只出现在 fig_meta 元数据里、不在 code 里，属数据瑕疵）。
+        // 之前的 `/100` 会把 0.1 压成 0.001、泛光巨亮 —— 这是与引擎对不上的主因。
+        // 仍 clamp 到 [0,1]：引擎 shader 里 `brightness > threshold` 的 brightness
+        // 是 0~1 域，超出范围的值只会让阈值失效，钳一下更稳。
         fs.bloomExtract.uniforms.threshold =
-          Math.max(0, Math.min(1, v("bloomThreshold", 0) / 100.0));
-        // 模糊半径：bloomBlur 是引擎的 0~10 量级，直接作 BlurFilter 强度
-        // （原来乘 0.6 偏小，且强制 min(40) 无必要）
-        fs.blurPass.blur = Math.max(0, Math.min(20, v("bloomBlur", 0)));
+          Math.max(0, Math.min(1, v("bloomThreshold", 0)));
+        // 模糊：引擎 bloomBlur -> bloom.blur 直传。
+        // 核模糊用 _setKernels 重建 kernels；若换回 PIXI 内置 BlurFilter
+        // 则直接赋 blur（两种实现都兼容，避免耦合导致整链崩掉）
+        const blurVal = v("bloomBlur", 0);
+        if (typeof fs.blurPass._setKernels === "function") {
+          fs.blurPass._setKernels(blurVal);
+        } else {
+          fs.blurPass.blur = blurVal;
+        }
         fs.bloom.uniforms.bloomScale = v("bloom", 0);
         fs.bloom.uniforms.brightness = v("bloomBrightness", 1);
         want.push(fs.bloom);
@@ -971,10 +1087,11 @@ const puppetAPI = {
           else if (v === null || typeof v !== "object") u[k] = v;
         });
       }
-      if (x.blur !== undefined) u.__blur = x.blur;
+      if (x._blur !== undefined) u.__blur = x._blur;   // 核模糊强度（自定义字段）
+      if (x._kernels) u.__kernels = Array.from(x._kernels);
       return u;
     });
-    const sigStr = JSON.stringify(sig);
+    const sigStr = JSON.stringify(sig) + "|a:" + l2dAlpha.toFixed(4);
     if (sigStr === state.figFilterSig) return;
     state.figFilterSig = sigStr;
     figLayer.filters = want.length ? want : null;
