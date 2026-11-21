@@ -2881,6 +2881,28 @@ class VideoWorkbench(QWidget):
         opened = getattr(self, "_fx_open", None)
         if opened is None:
             opened = self._fx_open = set()
+
+        # v3.6.2：**氛围光效**置顶（用官方引擎真支持的滤镜拼出的布光观感）。
+        # 它和下面的「206 个演出特效」是两套东西：光效库只有 13 条、每条
+        # 是精调过的双层参数（bg+fig），点一下同时作用于两层。
+        try:
+            import light_effects as LE
+            exp_light = "氛围光效" in opened
+            self.asset_flow.addWidget(
+                _FxCateCard("氛围光效", len(LE.LIGHT_PRESETS),
+                            expanded=exp_light,
+                            on_toggle=self._toggle_fx_cat,
+                            parent=self.asset_host))
+            if exp_light:
+                for p in LE.LIGHT_PRESETS:
+                    self.asset_flow.addWidget(
+                        _FxCard({"name": p["name"], "desc": p["desc"],
+                                 "kind": "transform", "_light": p},
+                                self._apply_light_preset,
+                                parent=self.asset_host))
+        except Exception:
+            pass
+
         for cat, cnt in SE.CATEGORIES:
             items = SE.by_category(cat)
             if not items:
@@ -2935,6 +2957,162 @@ class VideoWorkbench(QWidget):
 
     # ---------- v3.6.2：多段路径运镜 ----------
     # ---------- v3.6.2：批量脚本操作 ----------
+    # ---------- v3.6.2：氛围光效 / 人物投影 ----------
+    def _apply_light_preset(self, eff):
+        """把一条氛围光效预设落到当前时刻（背景 + 立绘各一条 setTransform）。
+
+        与「206 个演出特效」的区别：那些是单条指令、单一 target；光效预设
+        是**成对**的（bg 参数给背景、fig 参数给立绘），因为光效要让两层
+        协调才像"打光"，只调一层会脱节。
+        """
+        import light_effects as LE
+        p = (eff or {}).get("_light") or LE.by_name((eff or {}).get("name"))
+        if not p:
+            return
+        t = float(getattr(self, "_t", 0.0) or 0.0)
+        effs = self.proj.get("effects")
+        if not isinstance(effs, list):
+            effs = self.proj["effects"] = []
+        n = 0
+        target = p.get("target", "both")
+        for layer, tgt in (("bg", "bg-main"), ("fig", "fig-center")):
+            if target not in ("both", layer) and not (target == "fig"
+                                                      and layer == "fig"):
+                if target == "bg" and layer == "fig":
+                    continue
+                if target == "fig" and layer == "bg":
+                    continue
+            cmd = LE.to_transform_cmd(p["name"], target=tgt)
+            if not cmd:
+                continue
+            effs.append({"t": round(t, 3), "cmd": cmd})
+            n += 1
+        if not n:
+            return
+        try:
+            effs.sort(key=lambda x: float(x.get("t") or 0.0))
+        except Exception:
+            pass
+        self.push_history()
+        self._after_edit()
+        InfoBar.success(
+            "光效已应用",
+            "%s（%.2fs，%d 条指令）" % (p["name"], t, n),
+            parent=self, position=InfoBarPosition.TOP, duration=2400)
+
+    def _add_shadow(self, who=None):
+        """给指定角色加地面投影（用贴图 clip 实现，官方引擎真能渲染）。
+
+        为什么用贴图：官方 WebGAL 4.6.6 的滤镜注册表里没有投影能力
+        （见 light_effects.LIMITS）。但投影本质是「一张铺在地面的图」，
+        用普通 image clip 就能做到，导出后真能看到。
+        """
+        import character_shadow as CS
+        aid = getattr(self, "_cur_aid", None)
+        # 找该角色的立绘 clip（按 FIG-<角色> 轨名）
+        who = str(who or "").strip()
+        figs = []
+        for tr in V._tracks_of(self.proj, aid):
+            if not isinstance(tr, dict) or tr.get("kind") != "video":
+                continue
+            nm = str(tr.get("name") or "")
+            if not nm.upper().startswith("FIG"):
+                continue
+            ch = nm[4:].lstrip("-_")
+            if who and ch != who:
+                continue
+            for c in (tr.get("clips") or []):
+                figs.append((ch, tr, c))
+        if not figs:
+            InfoBar.warning("没有立绘",
+                            "先给角色上一条立绘 clip，再加投影",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        ch, tr, c = figs[0]
+        lay = V.layout_at(c)
+        # 按当前环境光决定影子浓度（暗场景影子淡）
+        cur_light = getattr(self, "_cur_light_name", None)
+        conc = CS.preset_concentration(cur_light) if cur_light else 0.38
+        s_layout = CS.place_shadow(lay, self.proj.get("width", 1920),
+                                   self.proj.get("height", 1080),
+                                   concentration=conc)
+        # 生成贴图
+        png = CS.make_shadow_png(
+            os.path.join(getattr(self, "proj_dir", "") or
+                         os.path.expanduser("~"),
+                         "_shadow_%s.png" % (ch or "default")),
+            concentration=conc, softness=0.55)
+        # 建一条 SHADOW-<角色> 轨，clip 覆盖人物 clip 的时间范围
+        sname = CS.shadow_track_name(ch)
+        strack = None
+        for t2 in V._tracks_of(self.proj, aid):
+            if isinstance(t2, dict) and str(t2.get("name")) == sname:
+                strack = t2
+                break
+        if strack is None:
+            # add_track 返回 (ok, msg, track_id) —— 是 id 字符串不是轨道字典，
+            # 要按 id 回查真实轨道对象（否则拿到 str 后续全崩）
+            try:
+                _ok, _msg, _tid = V.add_track(self.proj, "video", sname, aid=aid)
+                if _ok:
+                    for t2 in V._tracks_of(self.proj, aid):
+                        if isinstance(t2, dict) and str(t2.get("id")) == str(_tid):
+                            strack = t2
+                            break
+            except Exception:
+                strack = None
+        if strack is None:
+            InfoBar.warning("加投影失败", "无法创建投影轨",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        try:
+            sc = V.new_clip(V.new_source("image", png),
+                            float(c.get("start") or 0.0),
+                            float(c.get("dur") or 5.0))
+            sc["layout"] = dict(s_layout)
+            strack.setdefault("clips", []).append(sc)
+            # 投影必须在人物**下面**：把它移到人物轨之前
+            try:
+                trucks = self.proj.get("tracks") or []
+                if strack in trucks and tr in trucks:
+                    trucks.remove(strack)
+                    trucks.insert(trucks.index(tr), strack)
+            except Exception:
+                pass
+        except Exception as e:
+            InfoBar.warning("加投影失败", str(e),
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        self.push_history()
+        self.timeline.refresh()
+        self._after_edit()
+        InfoBar.success(
+            "投影已添加",
+            "%s（浓度 %.0f%%）" % (sname, conc * 100),
+            parent=self, position=InfoBarPosition.TOP, duration=2600)
+
+    def _clear_shadows(self):
+        """移除所有投影轨（SHADOW-*）。"""
+        tracks = self.proj.get("tracks") or []
+        keep = [t for t in tracks if not str(t.get("name") or "")
+                .upper().startswith("SHADOW")]
+        n = len(tracks) - len(keep)
+        if n <= 0:
+            InfoBar.info("没有投影", "当前工程里没有投影轨",
+                         parent=self, position=InfoBarPosition.TOP,
+                         duration=2000)
+            return
+        self.proj["tracks"] = keep
+        self.push_history()
+        self.timeline.refresh()
+        self._after_edit()
+        InfoBar.success("已移除投影", "清理 %d 条投影轨" % n,
+                        parent=self, position=InfoBarPosition.TOP,
+                        duration=2200)
+
     def _run_batch(self, name, extra=None):
         """执行一个批处理动作（由 batch_bar 触发）。
 

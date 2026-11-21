@@ -1619,7 +1619,13 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                 setp = getattr(src, "set_preset", None)
                 if callable(setp):
                     setp(clip.get("motion", ""), clip.get("expression", ""))
-                img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
+                # **clip["src_in"] 可能不存在**（手写/外部构造的 clip 不带它，
+                # 只有 V.new_clip 会补）。原来直接下标取 -> KeyError -> 被
+                # 外层 except 吞掉 -> 整条轨静默跳过 -> 画面全黑。
+                # 这是既有健壮性缺口：测试用 compose_frame 造像素对照时
+                # 一路黑屏，排查了很久才发现是这里。
+                img = src.frame(max(0.0, t - clip["start"]
+                                    + float(clip.get("src_in") or 0.0)))
             except Exception:
                 continue
             if img is None or img.size == 0:
@@ -1647,7 +1653,10 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                 setp = getattr(src, "set_preset", None)
                 if callable(setp):
                     setp(clip.get("motion", ""), clip.get("expression", ""))
-                img = src.frame(max(0.0, t - clip["start"] + clip["src_in"]))
+                # 同旧路径：src_in 可能缺失，不能直接下标（否则 KeyError
+                # 被外层吞掉 -> 该轨静默跳过 -> 合成全黑）
+                img = src.frame(max(0.0, t - clip["start"]
+                                    + float(clip.get("src_in") or 0.0)))
             except Exception:
                 continue
             if img is None or img.size == 0:
