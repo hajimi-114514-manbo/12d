@@ -1174,6 +1174,758 @@ def _cmd_assets_check(wb, args):
         len(full), rep["placeholder"], rep["real"], summary or "详见 data"), data
 
 
+# ================= v3.6.2：运镜 / 光效 / 投影 / 批量操作 的联动入口 =================
+# 这四个能力原本只在 GUI 里能点。DSH 要真正「用」它们，必须有命令通道：
+# AI 不能（也不该）去模拟鼠标点按钮。所以这里把它们的**核心产出**
+# 暴露成命令——运镜写 effects、光效写 effects、投影建贴图轨、批处理改工程。
+
+
+def _cmd_camera_apply(wb, args):
+    """应用一段多段运镜（写 proj["effects"] 的 setTempAnimation）。
+
+    args:
+      preset: 模板名（缓慢推进/缓慢拉远/向左取景/…/恢复全部运镜）
+      keyframes: 直接给关键帧数组（优先于 preset），形如
+                 [{"duration":0,"scale":{"x":1,"y":1}},
+                  {"duration":800,"scale":{"x":1.15,"y":1.15}}]
+      target: "bg-main"（背景/整个舞台）| "fig-center"（立绘）| "both"
+      t: 生效时刻（秒），默认当前播放头
+    返回 data 里带上生成的指令，便于 AI 校验。
+    """
+    import camera_path as CP
+    import video_model as V  # noqa: F401
+    target = str(args.get("target") or "both")
+    t = args.get("t")
+    try:
+        t = float(t) if t is not None else float(getattr(wb, "_t", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        t = float(getattr(wb, "_t", 0.0) or 0.0)
+
+    kfs = args.get("keyframes")
+    preset = str(args.get("preset") or "")
+    paths = []
+    # target 归一：both=两层都写；bg-main/fig-center 只写那一层
+    if target in ("both", "", None):
+        want_layers = ("stage", "fig")
+    elif str(target).startswith("bg"):
+        want_layers = ("stage",)
+    else:
+        want_layers = ("fig",)
+    for layer, tgt in (("stage", CP.TARGET_STAGE), ("fig", CP.TARGET_FIG)):
+        if layer not in want_layers:
+            continue
+        if isinstance(kfs, list) and kfs:
+            use = CP.normalize_keys(kfs)
+        elif preset:
+            use = CP.template_keys(preset, layer)
+        else:
+            return False, "需要 preset 或 keyframes 之一", None
+        if not use:
+            return False, "找不到模板: %s（可用：%s）" % (
+                preset, ", ".join(CP.TEMPLATE_NAMES)), None
+        if CP.total_ms(use) <= 0 and preset != "恢复全部运镜":
+            continue
+        paths.append({"level": layer, "target": tgt,
+                      "cmd": CP.build_cmd(use, target=tgt),
+                      "keyframes": use, "total_ms": CP.total_ms(use)})
+    if not paths:
+        return False, "这段运镜没有时长（全是瞬切），没有可应用的内容", None
+
+    from PySide6.QtWidgets import QApplication
+    wb._t = t
+    effs = wb.proj.get("effects")
+    if not isinstance(effs, list):
+        effs = wb.proj["effects"] = []
+    for p in paths:
+        effs.append({"t": round(t, 3), "cmd": p["cmd"]})
+    try:
+        effs.sort(key=lambda x: float(x.get("t") or 0.0))
+    except Exception:
+        pass
+    wb.push_history()
+    wb._after_edit()
+    QApplication.processEvents()
+    return True, "已应用运镜：%s（%.2fs，%d 条路径）" % (
+        preset or "自定义关键帧", t, len(paths)), {
+            "t": t, "paths": [{"level": p["level"], "target": p["target"],
+                               "cmd": p["cmd"], "total_ms": p["total_ms"]}
+                              for p in paths]}
+
+
+def _cmd_light_apply(wb, args):
+    """应用一条氛围光效预设（成对写 bg + fig 的 setTransform）。
+
+    args:
+      preset: 预设名（黄昏长影/烛火暖光/月夜银蓝/舞台双束聚光/…）
+      t: 生效时刻，默认播放头
+      layer: "both"（默认）| "bg" | "fig"
+    """
+    import light_effects as LE
+    name = str(args.get("preset") or args.get("name") or "")
+    p = LE.by_name(name)
+    if not p:
+        return False, "未知光效: %s（可用：%s）" % (
+            name, ", ".join(LE.LIGHT_NAMES)), None
+    try:
+        _t = args.get("t")
+        t = float(_t) if _t is not None else float(getattr(wb, "_t", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        t = float(getattr(wb, "_t", 0.0) or 0.0)
+    layer = str(args.get("layer") or "both")
+    effs = wb.proj.get("effects")
+    if not isinstance(effs, list):
+        effs = wb.proj["effects"] = []
+    cmds = []
+    for lay, tgt in (("bg", "bg-main"), ("fig", "fig-center")):
+        if layer != "both" and layer != lay:
+            continue
+        cmd = LE.to_transform_cmd(name, target=tgt)
+        if cmd:
+            cmds.append({"layer": lay, "target": tgt, "cmd": cmd})
+            effs.append({"t": round(t, 3), "cmd": cmd})
+    if not cmds:
+        return False, "该预设没有可作用的层（target 不匹配）", None
+    try:
+        effs.sort(key=lambda x: float(x.get("t") or 0.0))
+    except Exception:
+        pass
+    wb._cur_light_name = name      # 供加投影时决定影子浓度
+    wb.push_history()
+    wb._after_edit()
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    return True, "已应用光效「%s」（%.2fs，%d 条）" % (name, t, len(cmds)), {
+        "t": t, "preset": name, "cmds": [c["cmd"] for c in cmds],
+        "limits": LE.LIMITS["unsupported"],
+    }
+
+
+def _cmd_light_list(wb, args):
+    """列出可用的光效预设 + 能力边界（AI 选预设前应先查这个）。"""
+    import light_effects as LE
+    data = {
+        "presets": [{"name": p["name"], "desc": p["desc"],
+                     "target": p["target"], "note": p["note"]}
+                    for p in LE.LIGHT_PRESETS],
+        "supported": LE.LIMITS["supported"],
+        "unsupported": LE.LIMITS["unsupported"],
+        "reason": LE.LIMITS["reason"],
+    }
+    return True, "共 %d 条光效预设" % len(LE.LIGHT_PRESETS), data
+
+
+def _cmd_shadow_add(wb, args):
+    """给角色加地面投影（贴图实现，官方引擎真能渲染）。
+
+    args:
+      who: 角色名（对应 FIG-<角色> 轨）；不传则取第一条立绘
+      concentration/softness/width_pct: 可选覆盖默认参数
+    """
+    import character_shadow as CS
+    import video_model as V
+    who = str(args.get("who") or "").strip()
+    aid = getattr(wb, "_cur_aid", None)
+    figs = []
+    for tr in V._tracks_of(wb.proj, aid):
+        if not isinstance(tr, dict) or tr.get("kind") != "video":
+            continue
+        nm = str(tr.get("name") or "")
+        if not nm.upper().startswith("FIG"):
+            continue
+        ch = nm[4:].lstrip("-_")
+        if who and ch != who:
+            continue
+        for c in (tr.get("clips") or []):
+            figs.append((ch, tr, c))
+    if not figs:
+        return False, "没有找到立绘 clip（先 figure.add）", None
+    ch, tr, c = figs[0]
+    lay = V.layout_at(c)
+    cur_light = getattr(wb, "_cur_light_name", None)
+    conc = args.get("concentration")
+    if conc is None:
+        conc = CS.preset_concentration(cur_light) if cur_light else 0.38
+    try:
+        conc = float(conc)
+    except (TypeError, ValueError):
+        conc = 0.38
+    soft = args.get("softness")
+    try:
+        soft = float(soft) if soft is not None else 0.55
+    except (TypeError, ValueError):
+        soft = 0.55
+    s_layout = CS.place_shadow(lay, wb.proj.get("width", 1920),
+                               wb.proj.get("height", 1080),
+                               concentration=conc, softness=soft)
+    import os as _os
+    base = getattr(wb, "proj_dir", None) or _os.path.expanduser("~")
+    png = CS.make_shadow_png(_os.path.join(base, "_shadow_%s.png"
+                                          % (ch or "default")),
+                             concentration=conc, softness=soft)
+    sname = CS.shadow_track_name(ch)
+    strack = None
+    for t2 in V._tracks_of(wb.proj, aid):
+        if isinstance(t2, dict) and str(t2.get("name")) == sname:
+            strack = t2
+            break
+    created = False
+    if strack is None:
+        try:
+            _ok, _msg, _tid = V.add_track(wb.proj, "video", sname, aid=aid)
+            if _ok:
+                for t2 in V._tracks_of(wb.proj, aid):
+                    if isinstance(t2, dict) and str(t2.get("id")) == str(_tid):
+                        strack = t2
+                        break
+                created = True
+        except Exception:
+            strack = None
+    if strack is None:
+        return False, "创建投影轨失败", None
+    try:
+        sc = V.new_clip(V.new_source("image", png),
+                        float(c.get("start") or 0.0),
+                        float(c.get("dur") or 5.0))
+        sc["layout"] = dict(s_layout)
+        strack.setdefault("clips", []).append(sc)
+        trucks = wb.proj.get("tracks") or []
+        if strack in trucks and tr in trucks:
+            trucks.remove(strack)
+            trucks.insert(trucks.index(tr), strack)
+    except Exception as e:
+        return False, "添加投影失败: %s" % e, None
+    wb.push_history()
+    try:
+        wb.timeline.refresh()
+    except Exception:
+        pass
+    wb._after_edit()
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    return True, "已给「%s」加投影（浓度 %.0f%%）" % (ch, conc * 100), {
+        "who": ch, "track": sname, "png": png,
+        "concentration": conc, "softness": soft,
+        "layout": s_layout, "track_created": created,
+    }
+
+
+def _cmd_shadow_remove(wb, args):
+    """移除投影轨。args: who（只删这个角色）或不传（删全部 SHADOW-*）。"""
+    who = str(args.get("who") or "").strip()
+    want = ("SHADOW-%s" % who).upper() if who else "SHADOW-"
+    tracks = wb.proj.get("tracks") or []
+    keep, removed = [], []
+    for t in tracks:
+        nm = str(t.get("name") or "").upper()
+        if nm.startswith(want):
+            removed.append(t.get("name"))
+        else:
+            keep.append(t)
+    if not removed:
+        return True, "没有匹配的投影轨", {"removed": []}
+    wb.proj["tracks"] = keep
+    wb.push_history()
+    try:
+        wb.timeline.refresh()
+    except Exception:
+        pass
+    wb._after_edit()
+    return True, "已移除 %d 条投影轨" % len(removed), {"removed": removed}
+
+
+def _cmd_batch_run(wb, args):
+    """执行一个批量脚本操作。
+
+    args:
+      action: fix_ids | add_next | auto_exit | retime
+              | apply_filter | clear_filter
+      scope:  apply_filter/clear_filter 用：all | fig | bg
+      filter: apply_filter 用，参数字典；不传则用「当前滤镜」
+      max_gap: add_next 用（默认 2.5 秒）
+    """
+    import batch_ops as BO
+    action = str(args.get("action") or "")
+    aid = getattr(wb, "_cur_aid", None)
+    try:
+        if action in ("apply_filter", "clear_filter"):
+            scope = str(args.get("scope") or "all")
+            which = scope if scope in ("all", "fig", "bg") else "all"
+            filt = None
+            if action == "apply_filter":
+                filt = args.get("filter")
+                if not isinstance(filt, dict) or not filt:
+                    filt = getattr(wb, "_cur_filter_preset", None)
+                if not filt:
+                    return False, ("没有可用的滤镜参数：传 filter={...}，"
+                                   "或先在滤镜页选一个"), None
+            newp, st = BO.apply_filter_batch(wb.proj, filt, which=which,
+                                             aid=aid)
+            msg = ("%s %d 个片段" % ("套用滤镜到" if filt else "清除滤镜",
+                                     st["updated"]))
+        elif action == "fix_ids":
+            newp, st = BO.fix_ids(wb.proj, aid=aid)
+            msg = "补全 %d 个 clip id、%d 个轨道 id" % (
+                st["clips_fixed"], st["tracks_fixed"])
+        elif action == "add_next":
+            kw = {}
+            if args.get("max_gap") is not None:
+                try:
+                    kw["max_gap"] = float(args["max_gap"])
+                except (TypeError, ValueError):
+                    pass
+            newp, st = BO.add_next_to_dialogue(wb.proj, aid=aid, **kw)
+            msg = "为 %d 句连续台词加上 -next" % st["updated"]
+        elif action == "auto_exit":
+            newp, st = BO.auto_exit_figures(wb.proj, aid=aid)
+            msg = "收尾 %d 条立绘轨（%d 个 clip）" % (
+                st["tracks_touched"], st["clips_trimmed"])
+        elif action == "retime":
+            kw = {}
+            for k in ("chars_per_sec", "min_dur", "keep_longer"):
+                if args.get(k) is not None:
+                    kw[k] = args[k]
+            newp, st = BO.retime_dialogue(wb.proj, aid=aid, **kw)
+            msg = "按字数调整 %d 句台词时长" % st["updated"]
+        else:
+            return False, ("未知 action: %s（可用：fix_ids / add_next / "
+                           "auto_exit / retime / apply_filter / clear_filter）"
+                           % action), None
+    except Exception as e:
+        return False, "批处理异常: %s: %s" % (type(e).__name__, e), None
+
+    changed = any((st or {}).values())
+    if changed:
+        wb.proj = newp
+        wb.push_history()
+        try:
+            wb.timeline.refresh()
+        except Exception:
+            pass
+        wb._after_edit()
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+    return True, msg + ("" if changed else "（无改动）"), {
+        "action": action, "stats": st, "changed": changed,
+    }
+
+
+def _cmd_track_add(wb, args):
+    """新建轨道。args: kind=video|audio, name, act(aid 可选)。"""
+    V = _vm()
+    kind = str(args.get("kind") or "video")
+    if kind not in ("video", "audio"):
+        return False, "kind 只能是 video/audio", None
+    name = str(args.get("name") or ("%s轨" % kind))
+    aid = args.get("act") or getattr(wb, "_cur_aid", None)
+    ok, msg, tid = V.add_track(wb.proj, kind, name, aid=aid)
+    if not ok:
+        return False, msg, None
+    wb.push_history()
+    wb._after_edit()
+    return True, "已建轨 %s（%s）" % (name, tid), {"track_id": tid, "name": name}
+
+
+def _cmd_track_list(wb, args):
+    """列出当前幕的轨道与 clip（AI 编排前先查）。"""
+    V = _vm()
+    aid = getattr(wb, "_cur_aid", None)
+    out = []
+    for tr in V._tracks_of(wb.proj, aid):
+        if not isinstance(tr, dict):
+            continue
+        clips = []
+        for c in (tr.get("clips") or []):
+            if not isinstance(c, dict):
+                continue
+            src = c.get("source") or {}
+            clips.append({
+                "id": c.get("id"), "start": c.get("start"),
+                "dur": c.get("dur"), "src_in": c.get("src_in"),
+                "kind": src.get("kind"),
+                "path": src.get("path"),
+                "motion": c.get("motion"),
+                "expression": c.get("expression"),
+                "filter": c.get("filter"),
+                "layout": c.get("layout"),
+            })
+        out.append({"id": tr.get("id"), "name": tr.get("name"),
+                    "kind": tr.get("kind"), "hidden": tr.get("hidden"),
+                    "clips": clips})
+    return True, "共 %d 条轨道" % len(out), {"tracks": out,
+                                        "duration": V.project_duration(wb.proj)}
+
+
+def _cmd_clip_add(wb, args):
+    """往轨道加 clip。
+
+    args: track(name 或 id)、path、start、dur、src_in、kind(image/video/audio/puppet)
+    不传 track 时按素材类型自动选（image/video -> 视频轨，audio -> 音频轨）。
+    """
+    V = _vm()
+    import os as _os
+    path = str(args.get("path") or "")
+    if not path or not _os.path.exists(path):
+        return False, "素材不存在: %s" % path, None
+    kind = str(args.get("kind") or "")
+    if not kind:
+        ext = _os.path.splitext(path)[1].lower()
+        if ext in (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac"):
+            kind = "audio"
+        elif ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+            kind = "video"
+        elif _os.path.isdir(path):
+            kind = "puppet"
+        else:
+            kind = "image"
+    aid = getattr(wb, "_cur_aid", None)
+    want = str(args.get("track") or "")
+    tr = None
+    for t in V._tracks_of(wb.proj, aid):
+        if not isinstance(t, dict):
+            continue
+        if want and (str(t.get("id")) == want or str(t.get("name")) == want):
+            tr = t
+            break
+    if tr is None and want:
+        return False, "找不到轨道: %s" % want, None
+    if tr is None:
+        # 自动选：音频找 audio 轨，其余找第一条 video 轨，都没有就建
+        need_kind = "audio" if kind == "audio" else "video"
+        for t in V._tracks_of(wb.proj, aid):
+            if isinstance(t, dict) and t.get("kind") == need_kind:
+                tr = t
+                break
+        if tr is None:
+            ok, msg, tid = V.add_track(wb.proj, need_kind,
+                                       "%s轨" % ("音频" if need_kind == "audio"
+                                                else "视频"), aid=aid)
+            if not ok:
+                return False, "建轨失败: %s" % msg, None
+            for t in V._tracks_of(wb.proj, aid):
+                if isinstance(t, dict) and str(t.get("id")) == str(tid):
+                    tr = t
+                    break
+    if tr is None:
+        return False, "无法确定目标轨道", None
+    try:
+        src = V.new_source(kind, path)
+        start = float(args.get("start") or 0.0)
+        dur = args.get("dur")
+        if dur is None:
+            dur = float(src.get("src_dur") or 0.0) or 5.0
+        dur = float(dur)
+        c = V.new_clip(src, start, dur, src_in=float(args.get("src_in") or 0.0))
+        # 可选 layout
+        lay = args.get("layout")
+        if isinstance(lay, dict):
+            c["layout"] = dict(c.get("layout") or {}, **lay)
+        elif args.get("x") is not None or args.get("y") is not None:
+            c["layout"] = dict(c.get("layout") or {})
+            if args.get("x") is not None:
+                c["layout"]["x"] = float(args["x"])
+            if args.get("y") is not None:
+                c["layout"]["y"] = float(args["y"])
+            if args.get("scale") is not None:
+                c["layout"]["scale"] = float(args["scale"])
+        tr.setdefault("clips", []).append(c)
+    except Exception as e:
+        return False, "添加 clip 失败: %s: %s" % (type(e).__name__, e), None
+    wb.push_history()
+    wb._after_edit()
+    return True, "已加 clip（%s %.2f~%.2fs）" % (kind, start, start + dur), {
+        "clip_id": c.get("id"), "track": tr.get("name"),
+        "start": start, "dur": dur,
+    }
+
+
+def _find_clip_checked(wb, cid, track_hint=None):
+    """按 id 找 clip；找不到或有歧义时给出可行动的提示。
+
+    **为什么要 track_hint**：clip id 只在「应该」全工程唯一，但导入的旧
+    工程/手写的工程常有重复（batch fix_ids 就是修这个的）。重复时
+    find_clip 只返回第一个，改到错误的轨上会静默失效——测试 B7/B8
+    就是这么暴露的：move/trim 都报成功，但目标 clip 没变。
+    传 track（名字或 id）可消歧。
+    """
+    V = _vm()
+    aid = getattr(wb, "_cur_aid", None)
+    hits = []
+    for tr in V._tracks_of(wb.proj, aid):
+        if not isinstance(tr, dict):
+            continue
+        for c in (tr.get("clips") or []):
+            if isinstance(c, dict) and str(c.get("id")) == str(cid):
+                hits.append((tr, c))
+    if not hits:
+        return None, None, "找不到 clip: %s" % cid
+    if track_hint:
+        want = str(track_hint)
+        hits = [(t, c) for t, c in hits
+                if str(t.get("id")) == want or str(t.get("name")) == want]
+        if not hits:
+            return None, None, "在轨道 %s 上找不到 clip %s" % (track_hint, cid)
+    if len(hits) > 1:
+        names = [t.get("name") for t, _ in hits]
+        return None, None, ("clip id %s 在多个轨道重复（%s）——"
+                            "请用 track 参数指定，或先跑 batch.run "
+                            "action=fix_ids" % (cid, "、".join(str(n) for n in names)))
+    return hits[0][0], hits[0][1], ""
+
+
+def _cmd_clip_move(wb, args):
+    """移动 clip。args: id, start（可选 delta 秒）, track（消歧）。"""
+    cid = str(args.get("id") or "")
+    if not cid:
+        return False, "缺少 id", None
+    tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
+    if c is None:
+        return False, err, None
+    if args.get("start") is not None:
+        c["start"] = max(0.0, float(args["start"]))
+    elif args.get("delta") is not None:
+        c["start"] = max(0.0, float(c.get("start") or 0) + float(args["delta"]))
+    else:
+        return False, "需要 start 或 delta", None
+    wb.push_history()
+    wb._after_edit()
+    return True, "已移动 clip 到 %.2fs（轨 %s）" % (c["start"], tr.get("name")), {
+        "start": c["start"], "track": tr.get("name")}
+
+
+def _cmd_clip_trim(wb, args):
+    """裁剪 clip。args: id, dur / src_in, track（消歧）。"""
+    cid = str(args.get("id") or "")
+    tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
+    if c is None:
+        return False, err, None
+    if args.get("dur") is not None:
+        d = float(args["dur"])
+        if d <= 0:
+            return False, "dur 必须 > 0", None
+        c["dur"] = d
+    if args.get("src_in") is not None:
+        c["src_in"] = max(0.0, float(args["src_in"]))
+    wb.push_history()
+    wb._after_edit()
+    return True, "已调整 clip（dur=%.2f src_in=%.2f，轨 %s）" % (
+        c.get("dur") or 0, c.get("src_in") or 0, tr.get("name")), {
+            "dur": c.get("dur"), "src_in": c.get("src_in"),
+            "track": tr.get("name")}
+
+
+def _cmd_clip_remove(wb, args):
+    """删除 clip。args: id, track（消歧）。"""
+    cid = str(args.get("id") or "")
+    tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
+    if c is None:
+        return False, err, None
+    try:
+        tr["clips"].remove(c)
+    except ValueError:
+        return False, "删除失败（不在该轨）", None
+    wb.push_history()
+    wb._after_edit()
+    return True, "已删除 clip %s（轨 %s）" % (cid, tr.get("name")), {"id": cid}
+
+
+def _cmd_clip_split(wb, args):
+    """在 t 处切分 clip。args: id, t, track（消歧）。"""
+    cid = str(args.get("id") or "")
+    tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
+    if c is None:
+        return False, err, None
+    t = float(args.get("t") or 0.0)
+    s0 = float(c.get("start") or 0)
+    d0 = float(c.get("dur") or 0)
+    tr_name = str(tr.get("name") or "")
+    if not (s0 + 0.05 < t < s0 + d0 - 0.05):
+        return False, "切点不在 clip 内部（%.2f 不在 %.2f~%.2f）" % (
+            t, s0, s0 + d0), None
+    V = _vm()
+    # **split_clip 内部自己调 find_clip(proj, id)**，会绕过本层的 track
+    # 消歧——重复 id 时切的是别的轨上那个。所以：
+    #   ① 先跑 fix_ids 把 id 修唯一（返回新 proj，引用全变）
+    #   ② 用 (轨名, start) 在新 proj 里重新定位目标 clip
+    # 否则会出现「报成功但目标 clip 没变」（测试 B9 踩到）。
+    try:
+        import batch_ops as _BO
+        _newp, _st = _BO.fix_ids(wb.proj)
+        if any((_st or {}).values()):
+            wb.proj = _newp
+            tr = c = None
+            for _t in V._tracks_of(wb.proj, getattr(wb, "_cur_aid", None)):
+                if not isinstance(_t, dict) or \
+                        str(_t.get("name")) != str(tr_name):
+                    continue
+                for _c in (_t.get("clips") or []):
+                    if isinstance(_c, dict) and \
+                            abs(float(_c.get("start") or 0) - s0) < 1e-6:
+                        tr, c = _t, _c
+                        break
+                if c is not None:
+                    break
+    except Exception:
+        pass
+    if c is None:
+        return False, "切分前重新定位失败（工程结构已变）", None
+    cid2 = str(c.get("id"))
+    try:
+        # split_clip 返回 (ok, msg, 右段id) —— 3 元组，不是 2 元组
+        r = V.split_clip(wb.proj, cid2, t)
+        if isinstance(r, tuple) and len(r) >= 3:
+            ok, msg = r[0], r[1]
+        elif isinstance(r, tuple) and len(r) == 2:
+            ok, msg = r
+        else:
+            ok, msg = bool(r), "已切分"
+    except Exception as e:
+        return False, "切分失败: %s: %s" % (type(e).__name__, e), None
+    if not ok:
+        return False, msg, None
+    wb.push_history()
+    wb._after_edit()
+    return True, "已在 %.2fs 切分" % t, {"t": t, "detail": str(msg)}
+
+
+def _cmd_film_filter(wb, args):
+    """套电影感滤镜。args: name（预设名）/ list=true 列出全部。"""
+    import film_filters as FF
+    if args.get("list"):
+        return True, "共 %d 个电影感滤镜" % len(FF.FILM_FILTERS), {
+            "filters": [{"name": f["name"], "desc": f.get("desc")}
+                        for f in FF.FILM_FILTERS]}
+    name = str(args.get("name") or "")
+    if not name:
+        return False, "需要 name（传 list=true 可查看全部）", None
+    if FF.by_name(name) is None:
+        return False, "未知滤镜: %s" % name, None
+    wb._apply_film_filter(name)
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    return True, "已套用「%s」" % name, {"name": name,
+                                     "preset": getattr(wb, "_cur_filter_preset",
+                                                       None)}
+
+
+def _cmd_stage_effect(wb, args):
+    """插入舞台特效（206 个演出特效之一）。args: name 或 code。"""
+    import stage_effects as SE
+    if args.get("list"):
+        cats = [{"category": c, "count": len(SE.by_category(c))}
+                for c, _n in SE.CATEGORIES]
+        return True, "共 %d 个特效 / %d 个分类" % (
+            len(SE.STAGE_EFFECTS), len(SE.CATEGORIES)), {
+                "categories": cats, "count": len(SE.STAGE_EFFECTS)}
+    name = str(args.get("name") or "")
+    code = args.get("code")
+    eff = None
+    if name:
+        eff = SE.by_name(name)
+        if eff is None:
+            return False, "未知特效: %s（传 list=true 查看分类）" % name, None
+    elif code:
+        eff = {"name": "自定义", "code": [str(code)]}
+    else:
+        return False, "需要 name 或 code（传 list=true 查看分类）", None
+    wb._apply_stage_effect(eff)
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    return True, "已插入特效「%s」" % eff.get("name"), {"name": eff.get("name")}
+
+
+def _cmd_transition_set(wb, args):
+    """设全片转场。args: name（预设名）/ list=true 列出。"""
+    import transitions as TR
+    if args.get("list"):
+        return True, "共 %d 个转场" % len(TR.catalog()), {
+            "transitions": TR.catalog()}
+    name = str(args.get("name") or "")
+    if not name:
+        return False, "需要 name（传 list=true 可查看）", None
+    wb._apply_transition(name)
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    return True, "已设转场「%s」" % name, {"name": name}
+
+
+def _cmd_export_run(wb, args):
+    """导出。args: kind=video|audio|srt, path（可选）。
+    video 会起后台线程；audio/srt 同步完成。
+    """
+    import os as _os
+    kind = str(args.get("kind") or "video")
+    base = getattr(wb, "proj_dir", None) or _os.path.expanduser("~")
+    stem = _os.path.splitext(_os.path.basename(str(base)))[0] or "export"
+    path = str(args.get("path") or "")
+    if not path:
+        ext = {"video": ".mp4", "audio": ".wav", "srt": ".srt"}.get(kind, ".mp4")
+        path = _os.path.join(base, stem + ext)
+    if kind == "video":
+        try:
+            wb._start_export(path, 1.0, None, None, None)
+        except Exception as e:
+            return False, "启动导出失败: %s" % e, None
+        return True, "已启动视频导出 -> %s" % path, {"path": path,
+                                                 "async": True}
+    if kind in ("audio", "srt"):
+        try:
+            wb._export_sidecar(kind, path)
+        except Exception as e:
+            return False, "导出失败: %s" % e, None
+        # 找到实际产出（可能降级成 .wav）
+        real = path
+        if not _os.path.isfile(real):
+            alt = _os.path.splitext(path)[0] + ".wav"
+            if _os.path.isfile(alt):
+                real = alt
+        return True, "已导出 %s -> %s" % (kind, real), {"path": real,
+                                                    "exists": _os.path.isfile(real)}
+    return False, "kind 只能是 video/audio/srt", None
+
+
+def _cmd_project_save(wb, args):
+    """保存工程。args: path（可选，另存为）。"""
+    try:
+        if args.get("path"):
+            wb.save_as(str(args["path"]))
+        else:
+            wb.save_project()
+    except Exception as e:
+        return False, "保存失败: %s" % e, None
+    return True, "已保存", {"dir": getattr(wb, "proj_dir", None)}
+
+
+def _cmd_history(wb, args):
+    """撤销/重做。args: action=undo|redo。"""
+    a = str(args.get("action") or "undo")
+    try:
+        (wb.undo if a == "undo" else wb.redo)()
+    except Exception as e:
+        return False, "%s 失败: %s" % (a, e), None
+    return True, "已%s" % ("撤销" if a == "undo" else "重做"), {"action": a}
+
+
+def _cmd_timeline_play(wb, args):
+    """播放控制。args: action=play|pause|stop|toggle, t（seek 用）。"""
+    a = str(args.get("action") or "toggle")
+    try:
+        if args.get("t") is not None:
+            wb.seek(float(args["t"]))
+            return True, "已跳到 %.2fs" % float(args["t"]), {"t": wb._t}
+        if a == "play":
+            if not getattr(wb, "_playing", False):
+                wb.toggle_play()
+        elif a in ("pause", "stop"):
+            if getattr(wb, "_playing", False):
+                wb.toggle_play()
+        else:
+            wb.toggle_play()
+    except Exception as e:
+        return False, "播放控制失败: %s" % e, None
+    return True, "已执行 %s" % a, {"playing": getattr(wb, "_playing", False),
+                                "t": getattr(wb, "_t", 0.0)}
+
+
 _HANDLERS = {
     "project.new": _cmd_project_new,
     "scene.set_bg": _cmd_scene_set_bg,
@@ -1211,6 +1963,28 @@ _HANDLERS = {
     "jump.remove": _cmd_jump_remove,
     "var.set": _cmd_var_set,
     "var.list": _cmd_var_list,
+    # ---- v3.6.2：运镜 / 光效 / 投影 / 批量操作 ----
+    "camera.apply": _cmd_camera_apply,
+    "light.apply": _cmd_light_apply,
+    "light.list": _cmd_light_list,
+    "shadow.add": _cmd_shadow_add,
+    "shadow.remove": _cmd_shadow_remove,
+    "batch.run": _cmd_batch_run,
+    # ---- v3.6.2 第二批：轨道/剪辑/滤镜/特效/转场/导出/存档/历史/播放 ----
+    "track.add": _cmd_track_add,
+    "track.list": _cmd_track_list,
+    "clip.add": _cmd_clip_add,
+    "clip.move": _cmd_clip_move,
+    "clip.trim": _cmd_clip_trim,
+    "clip.remove": _cmd_clip_remove,
+    "clip.split": _cmd_clip_split,
+    "film.filter": _cmd_film_filter,
+    "stage.effect": _cmd_stage_effect,
+    "transition.set": _cmd_transition_set,
+    "export.run": _cmd_export_run,
+    "project.save": _cmd_project_save,
+    "history.do": _cmd_history,
+    "timeline.play": _cmd_timeline_play,
 }
 
 
