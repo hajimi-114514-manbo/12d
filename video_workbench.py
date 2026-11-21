@@ -1075,6 +1075,19 @@ class VideoWorkbench(QWidget):
         self.btn_add_file = None
         self.btn_add_puppet = None
         self.asset_scroll = ScrollArea(left)
+        # v3.6.2：运镜编辑器常驻在特效页左栏顶部（整宽，不流动布局）。
+        # 放在 ScrollArea 之前，避免被 FlowLayout 当卡片挤扁；
+        # 只在特效页可见，其他页隐藏（_switch_asset_page 里控制）。
+        try:
+            import camera_editor as CE
+            self._cam_panel = CE.CameraPathPanel(left)
+            self._cam_panel.applied.connect(self._apply_camera_path)
+            self._cam_panel.preview_sampled.connect(self._on_camera_preview)
+            self._cam_panel.preview_reset.connect(self._on_camera_reset)
+            self._cam_panel.setVisible(False)     # 默认不在特效页
+            ll.addWidget(self._cam_panel)
+        except Exception:
+            self._cam_panel = None
         self.asset_scroll.setWidgetResizable(True)
         self.asset_host = QWidget()
         # v3.4.7：viewport 默认浅底，深色面板中间露一整块白（属性面板
@@ -1870,6 +1883,12 @@ class VideoWorkbench(QWidget):
             if isinstance(wi, QWidget):
                 wi.deleteLater()
         filt = self._asset_tab
+        # v3.6.2：运镜编辑器只在特效页出现（其他页它没意义，还占掉半屏）
+        try:
+            if getattr(self, "_cam_panel", None) is not None:
+                self._cam_panel.setVisible(filt == "template")
+        except Exception:
+            pass
         if filt == "text":
             # F1：文本页 = 剧情编辑器
             self._show_script_editor(True)
@@ -2833,6 +2852,9 @@ class VideoWorkbench(QWidget):
         """
         import stage_effects as SE
         cur_aid = getattr(self, "_cur_aid", None)
+        # v3.6.2：运镜编辑器是左栏顶部的常驻面板（构建期插入，见 _build），
+        # 这里只管下面的现成特效库。编辑器不入流动布局——FlowLayout 会把
+        # 整宽面板挤成卡片大小。
         # 分类折叠状态（默认全收起：206 张卡全展开太慢）
         opened = getattr(self, "_fx_open", None)
         if opened is None:
@@ -2888,6 +2910,75 @@ class VideoWorkbench(QWidget):
             "%s（%.2fs，%d 条指令）" % (eff.get("name") or "特效", t,
                                      len(codes)),
             parent=self, position=InfoBarPosition.TOP, duration=2200)
+
+    # ---------- v3.6.2：多段路径运镜 ----------
+    def _apply_camera_path(self, payload):
+        """把运镜编辑器生成的多段路径落到当前时刻。
+
+        payload = {"paths": [{"level": "stage"/"fig", "cmd": "setTempAnimation:..."}]}
+        背景与立绘各一条 → 这就是对方的「独立构图」：两层用各自的 keyframes，
+        引擎按 -target 分别作用，互不干扰。
+        """
+        paths = (payload or {}).get("paths") or []
+        if not paths:
+            return
+        t = float(getattr(self, "_t", 0.0) or 0.0)
+        effs = self.proj.get("effects")
+        if not isinstance(effs, list):
+            effs = self.proj["effects"] = []
+        n = 0
+        for p in paths:
+            cmd = str(p.get("cmd") or "").strip()
+            if not cmd.startswith("setTempAnimation"):
+                continue
+            effs.append({"t": round(t, 3),
+                         "cmd": cmd if cmd.endswith(";") else cmd + ";"})
+            n += 1
+        if not n:
+            return
+        try:
+            effs.sort(key=lambda x: float(x.get("t") or 0.0))
+        except Exception:
+            pass
+        self.push_history()
+        self._after_edit()
+        InfoBar.success(
+            "运镜已应用",
+            "%.2fs · %d 条路径（%s）" % (
+                t, n, "背景+立绘独立构图" if n > 1 else "单层"),
+            parent=self, position=InfoBarPosition.TOP, duration=2600)
+
+    def _on_camera_preview(self, data):
+        """运镜编辑器预览：把采样结果作用到实时预览的舞台上。
+
+        走同一条 setCamera 通道（页面里用 CSS transform 作用在 #stagebox），
+        所以编辑器看到的 = 预览页看到的 = 导出后引擎跑的（口径同源）。
+        """
+        if not getattr(self, "_preview_real", False):
+            return
+        wv = getattr(self, "_webview", None)
+        if wv is None:
+            return
+        st = (data or {}).get("stage") or {}
+        sc = st.get("scale") or {}
+        po = st.get("position") or {}
+        cam = {"active": True, "p": float(st.get("_p") or 0),
+               "scaleX": float(sc.get("x", 1.0) or 1.0),
+               "scaleY": float(sc.get("y", 1.0) or 1.0),
+               "x": float(po.get("x", 0.0) or 0.0) / 1280.0 * 100.0,
+               "y": float(po.get("y", 0.0) or 0.0) / 720.0 * 100.0}
+        try:
+            wv._send("setCamera", cam)
+        except Exception:
+            pass
+
+    def _on_camera_reset(self):
+        wv = getattr(self, "_webview", None)
+        if wv is not None:
+            try:
+                wv._send("setCamera", {"active": False})
+            except Exception:
+                pass
     def _rebuild_transition_cards(self):
         """转场页：列出引擎真实支持的转场预设（点卡片=设为全片转场）。
 
