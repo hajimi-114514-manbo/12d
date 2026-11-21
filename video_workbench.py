@@ -4179,6 +4179,11 @@ class VideoWorkbench(QWidget):
     def _open_export_dialog(self):
         dlg = _ExportDialog(self, self.proj)
         if dlg.exec():
+            kind = dlg.export_kind()
+            # 仅音轨 / SRT：不做视频合成，也不需要帧率校验与立绘预渲染
+            if kind in ("audio", "srt"):
+                self._export_sidecar(kind, dlg.sidecar_path())
+                return
             # v3.5.8：自定义帧率非法时阻止导出
             if not dlg._fps_valid():
                 InfoBar.warning("帧率无效", "帧率需为 1-120 的整数，请修正后再导出",
@@ -4187,6 +4192,44 @@ class VideoWorkbench(QWidget):
                 return
             path, scale, fps, workers, animate = dlg.result_values()
             self._start_export(path, scale, fps, workers, animate)
+
+    def _export_sidecar(self, kind, path):
+        """导出附属产物：仅音轨 / SRT 字幕（v3.6.2）。
+
+        两者都不走 VideoExportWorker——没有逐帧合成，混音/写字幕都是
+        秒级操作，直接在主线程做完并如实汇报结果（含降级说明）。
+        """
+        import video_export as VE
+        if not path:
+            InfoBar.warning("路径为空", "请先填写保存路径",
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=3000)
+            return
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        except Exception:
+            pass
+        aid = getattr(self, "_cur_aid", None)
+        try:
+            if kind == "srt":
+                ok, msg, n = VE.export_srt(self.proj, path, aid=aid)
+            else:
+                ok, msg, real = VE.export_audio_only(self.proj, path)
+                path = real
+        except Exception as e:
+            ok, msg = False, "导出失败：%s" % e
+        if ok:
+            InfoBar.success("导出完成", "%s\n%s" % (msg, path),
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=5000)
+            try:
+                os.startfile(os.path.dirname(os.path.abspath(path)))
+            except Exception:
+                pass
+        else:
+            InfoBar.warning("未导出", msg,
+                            parent=self, position=InfoBarPosition.TOP,
+                            duration=5000)
 
     def _start_export(self, path, scale, fps=None, workers=None, animate=None):
         self.stop_play()
@@ -4327,17 +4370,38 @@ class _ExportDialog(MessageBoxBase):
     def __init__(self, parent, proj):
         super().__init__(parent)
         self.proj = proj
-        self.viewLayout.addWidget(StrongBodyLabel("导出视频"))
+        self.viewLayout.addWidget(StrongBodyLabel("导出"))
+
+        # v3.6.2：导出内容（视频 / 仅音轨 / SRT 字幕）。
+        # 放在最前面——它决定下面哪些参数有意义，也决定默认扩展名。
+        rk = QHBoxLayout()
+        rk.addWidget(CaptionLabel("导出内容"))
+        self.cmb_kind = ComboBox()
+        self.cmb_kind.addItems(["视频（MP4）", "仅音轨（WAV/M4A）",
+                                "字幕（SRT）"])
+        rk.addWidget(self.cmb_kind, 1)
+        self.viewLayout.addLayout(rk)
+
         r = QHBoxLayout()
         r.addWidget(CaptionLabel("保存路径"))
         default = os.path.join(
             PROJ_BASE, (os.path.basename(parent.proj_dir)
                         if getattr(parent, "proj_dir", None)
                         else unique_video_name()) + ".mp4")
+        self._default_stem = os.path.splitext(default)[0]
         self.ed_path = LineEdit()
         self.ed_path.setText(default)
         r.addWidget(self.ed_path, 1)
         self.viewLayout.addLayout(r)
+
+        # v3.6.2：视频专属参数装进一个容器，选「仅音轨/字幕」时整块隐藏
+        # （而不是逐个控件 setVisible —— 它们挂在 QHBoxLayout 上，没有
+        #  可整体隐藏的 widget，逐个藏会留下空行和标签）
+        self.video_box = QWidget(self)
+        _vb = QVBoxLayout(self.video_box)
+        _vb.setContentsMargins(0, 0, 0, 0)
+        _vb.setSpacing(8)
+        self.viewLayout.addWidget(self.video_box)
 
         pw = int(proj.get("width", 1920))
         ph = int(proj.get("height", 1080))
@@ -4355,7 +4419,7 @@ class _ExportDialog(MessageBoxBase):
         self.cmb_out = ComboBox()
         self.cmb_out.addItems(res_labels)
         r2.addWidget(self.cmb_out, 1)
-        self.viewLayout.addLayout(r2)
+        _vb.addLayout(r2)
 
         # 帧率：第一项显示工程实际 fps，末项「自定义…」配数字输入（1-120）
         pfps = float(proj.get("fps", 30) or 30)
@@ -4378,7 +4442,7 @@ class _ExportDialog(MessageBoxBase):
         self.ed_fps.editingFinished.connect(self._validate_fps)
         r3.addWidget(self.ed_fps)
         self.ed_fps.setVisible(False)
-        self.viewLayout.addLayout(r3)
+        _vb.addLayout(r3)
 
         # 并行线程：1..upper_w，default_w 项标「（推荐）」；选项取自
         # video_export.export_worker_limits()，不自己猜核数。
@@ -4399,7 +4463,7 @@ class _ExportDialog(MessageBoxBase):
         self.cmb_workers.addItems(w_labels)
         self.cmb_workers.setCurrentIndex(max(0, dw - 1))
         r4.addWidget(self.cmb_workers, 1)
-        self.viewLayout.addLayout(r4)
+        _vb.addLayout(r4)
         cpu = max(1, int(os.cpu_count() or 1))
         self.workers_hint = CaptionLabel(
             "线程越多越快，但受内存带宽限制，超过甜点反而变慢；"
@@ -4407,7 +4471,7 @@ class _ExportDialog(MessageBoxBase):
         self.workers_hint.setWordWrap(True)
         self.workers_hint.setStyleSheet("color:%s; font-size:11px;"
                                         % TH.t("text_dim"))
-        self.viewLayout.addWidget(self.workers_hint)
+        _vb.addWidget(self.workers_hint)
 
         # 立绘动画：逐帧（方案 A，主线程渲染泵）/ 定格（方案 B，预渲染图）。
         # 默认逐帧——用户明确要动画优先；代价写在提示里，别让人事后惊讶。
@@ -4418,7 +4482,7 @@ class _ExportDialog(MessageBoxBase):
                                 "定格（快，人物不动）"])
         self.cmb_anim.setCurrentIndex(0)
         r5.addWidget(self.cmb_anim, 1)
-        self.viewLayout.addLayout(r5)
+        _vb.addLayout(r5)
         self.anim_hint = CaptionLabel(
             "逐帧：人物呼吸眨眼真的在动。开销随工程而变——合成越重的工程"
             "（视频轨/滤镜）越能被并行隐藏，实测只慢 10% 上下；素材简单的"
@@ -4426,7 +4490,7 @@ class _ExportDialog(MessageBoxBase):
         self.anim_hint.setWordWrap(True)
         self.anim_hint.setStyleSheet("color:%s; font-size:11px;"
                                      % TH.t("text_dim"))
-        self.viewLayout.addWidget(self.anim_hint)
+        _vb.addWidget(self.anim_hint)
 
         # 耗时预估（CaptionLabel，随任一下拉变化刷新）
         self.est_lbl = CaptionLabel("耗时预估：—", self)
@@ -4439,11 +4503,63 @@ class _ExportDialog(MessageBoxBase):
         self.cmb_fps.currentIndexChanged.connect(self._on_fps_changed)
         self.cmb_workers.currentIndexChanged.connect(self._refresh_estimate)
         self.cmb_anim.currentIndexChanged.connect(self._refresh_estimate)
+        self.cmb_kind.currentIndexChanged.connect(self._on_kind_changed)
         self._refresh_estimate()
 
         self.yesButton.setText("开始导出")
         self.cancelButton.setText("取消")
         self.widget.setMinimumWidth(480)
+
+    # ---- v3.6.2：导出内容（视频 / 仅音轨 / SRT） ----
+    _KINDS = ("video", "audio", "srt")
+    _KIND_EXT = {"video": ".mp4", "audio": ".wav", "srt": ".srt"}
+
+    def export_kind(self):
+        try:
+            return self._KINDS[max(0, min(2, self.cmb_kind.currentIndex()))]
+        except Exception:
+            return "video"
+
+    def sidecar_path(self):
+        """仅音轨 / SRT 的保存路径（自动补对应扩展名）。
+
+        空输入必须返回空串——normpath("") 会得到 "."，拼上扩展名就成了
+        "..wav" 这种会在当前目录落怪文件的路径（UI 测试 19 抓到）。
+        """
+        raw = (self.ed_path.text() or "").strip()
+        if not raw:
+            return ""
+        p = os.path.normpath(raw)
+        want = self._KIND_EXT[self.export_kind()]
+        if os.path.splitext(p)[1].lower() != want:
+            p = os.path.splitext(p)[0] + want
+        return p
+
+    def _on_kind_changed(self):
+        kind = self.export_kind()
+        is_video = (kind == "video")
+        # 视频专属参数整块显隐（分辨率/帧率/线程/立绘动画）
+        self.video_box.setVisible(is_video)
+        # 扩展名跟着换，但保留用户已改过的目录与文件名主体。
+        # 空输入不动——否则 splitext("")[0] + ext 会凭空造出 ".wav"
+        cur = (self.ed_path.text() or "").strip()
+        if cur:
+            stem = os.path.splitext(cur)[0]
+            if stem:                      # 只有 ".mp4" 这种纯扩展名也别造空主体
+                self.ed_path.setText(stem + self._KIND_EXT[kind])
+        if is_video:
+            self._refresh_estimate()
+        elif kind == "audio":
+            self.est_lbl.setText(
+                "只导出整工程混音，不做画面合成（秒级完成）。"
+                "与「导出视频」里的音轨逐样本一致；隐藏轨不参与。"
+                "改扩展名为 .m4a 可走 ffmpeg 编码，不可用时自动回落 WAV。")
+        else:
+            self.est_lbl.setText(
+                "导出 SRT 字幕（UTF-8 BOM）。时间口径与画面烧录一致："
+                "多条台词重叠时取后一条，相邻同内容自动合并；"
+                "角色名作前缀，旁白不加。")
+        self.yesButton.setText("开始导出" if is_video else "导出")
 
     def _fps_custom(self):
         return self.cmb_fps.currentIndex() >= len(self._FPS_VALS)

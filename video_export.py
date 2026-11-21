@@ -1979,6 +1979,152 @@ def write_wav(path, samples, sr=44100):
         wf.writeframes(samples.tobytes())
 
 
+# ---------------- 仅音轨导出 / SRT 字幕导出（v3.6.2） ----------------
+def export_audio_only(proj, path, sr=44100, fmt=None):
+    """只导出整工程混音，不做任何视频合成。
+
+    复用 mix_audio()（已按 clip 语义切片、修过 BGM 串音），所以产物与
+    「导出视频」里的音轨**逐样本一致**——不是另写一套混音。
+
+    fmt=None 时按扩展名推断：.wav 直写；其余（.m4a/.aac/.mp3…）先落临时
+    wav 再交 ffmpeg 编码。本机 ffmpeg 是纯音频裁剪版（只有 aac/pcm，
+    无视频编码器），正好够用；找不到 ffmpeg 就降级为同名 .wav 并如实告知。
+
+    返回 (ok, msg, real_path)。无音频轨时 ok=False，不产出空文件。
+    """
+    samples = mix_audio(proj, sr=sr)
+    if samples is None or not len(samples):
+        return False, "工程里没有可用的音频轨（或全部静音）", path
+    ext = os.path.splitext(str(path))[1].lower()
+    want = (fmt or ext.lstrip(".") or "wav").lower()
+    if want in ("wav", ""):
+        try:
+            write_wav(path, samples, sr=sr)
+        except Exception as e:
+            return False, "写入失败：%s" % e, path
+        return True, "已导出音轨（%d 采样 / %.1f 秒）" % (
+            len(samples), len(samples) / float(sr)), path
+
+    ff = ffmpeg_path()
+    if not ff:
+        alt = os.path.splitext(str(path))[0] + ".wav"
+        try:
+            write_wav(alt, samples, sr=sr)
+        except Exception as e:
+            return False, "写入失败：%s" % e, alt
+        return True, "未找到 ffmpeg，已改存 WAV：%s" % os.path.basename(alt), alt
+    tmp = tempfile.mktemp(suffix=".wav")
+    try:
+        write_wav(tmp, samples, sr=sr)
+        codec = {"m4a": "aac", "aac": "aac", "mp3": "libmp3lame",
+                 "ogg": "libvorbis", "flac": "flac"}.get(want, "aac")
+        r = subprocess.run([ff, "-y", "-i", tmp, "-c:a", codec, str(path)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if r.returncode != 0 or not os.path.isfile(path) \
+                or os.path.getsize(path) <= 0:
+            # 编码器不支持（本机裁剪版常见）→ 回落 WAV，绝不产 0 字节假成功
+            alt = os.path.splitext(str(path))[0] + ".wav"
+            write_wav(alt, samples, sr=sr)
+            return True, ("%s 编码不可用，已改存 WAV：%s"
+                          % (codec, os.path.basename(alt))), alt
+        return True, "已导出音轨（%s）" % want, path
+    except Exception as e:
+        return False, "导出失败：%s" % e, path
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _srt_time(sec):
+    """秒 -> SRT 时间戳 HH:MM:SS,mmm（毫秒逗号分隔，SRT 规范）。"""
+    ms = int(round(max(0.0, float(sec)) * 1000.0))
+    h, ms = divmod(ms, 3600000)
+    m, ms = divmod(ms, 60000)
+    s, ms = divmod(ms, 1000)
+    return "%02d:%02d:%02d,%03d" % (h, m, s, ms)
+
+
+def dialogue_events(proj, aid=None):
+    """把台词表折成「不重叠的字幕事件」列表 [(t0, t1, who, text)]。
+
+    **口径必须与画面烧录一致**（_draw_dialogue）：
+      · 活跃判定 t0 - eps <= t < t0 + dur - eps
+      · 多条同时活跃取**最后一条**（后写覆盖）
+    所以这里不能简单按每条台词的 [t, t+dur] 直接输出——那样重叠段会
+    出现两条字幕并存，而画面上只显示后一条。做法：收集所有边界时刻，
+    在每个小区间里问一次「此刻画面显示哪条」，再把相邻同内容的区间合并。
+    """
+    try:
+        dlg = V.act_view(proj, aid).get("dialogue") or []
+    except Exception:
+        dlg = []
+    eps = 1e-6
+    items = []
+    for d in dlg:
+        if not isinstance(d, dict):
+            continue
+        try:
+            t0 = float(d.get("t"))
+            dur = float(d.get("dur"))
+        except (TypeError, ValueError):
+            continue
+        text = str(d.get("text") or "")
+        if dur <= 0 or not text.strip():
+            continue
+        items.append((t0, t0 + dur, str(d.get("who") or ""), text))
+    if not items:
+        return []
+    # 所有边界（含工程末尾），去重排序
+    bounds = sorted({round(x, 6) for it in items for x in (it[0], it[1])})
+    events = []
+    for i in range(len(bounds) - 1):
+        a, b = bounds[i], bounds[i + 1]
+        if b - a <= eps:
+            continue
+        mid = (a + b) / 2.0
+        active = None
+        for t0, t1, who, text in items:      # 顺序遍历 → 后者覆盖前者
+            if t0 - eps <= mid < t1 - eps:
+                active = (who, text)
+        if active is None:
+            continue
+        who, text = active
+        if events and events[-1][2] == who and events[-1][3] == text \
+                and abs(events[-1][1] - a) <= eps:
+            events[-1] = (events[-1][0], b, who, text)   # 合并同内容相邻段
+        else:
+            events.append((a, b, who, text))
+    return events
+
+
+def export_srt(proj, path, aid=None, with_name=True):
+    """导出 SRT 字幕（UTF-8 with BOM，兼容主流播放器/剪辑软件）。
+
+    with_name=True 时把角色名作为前缀「名字：正文」，与画面上的名字牌对应；
+    旁白（who 为空）不加前缀。返回 (ok, msg, n_events)。
+    """
+    evs = dialogue_events(proj, aid=aid)
+    if not evs:
+        return False, "工程里没有台词，未生成字幕", 0
+    lines = []
+    for i, (t0, t1, who, text) in enumerate(evs, 1):
+        body = text.replace("\r\n", "\n").replace("\r", "\n")
+        if with_name and who.strip():
+            body = "%s：%s" % (who.strip(), body)
+        lines.append(str(i))
+        lines.append("%s --> %s" % (_srt_time(t0), _srt_time(t1)))
+        lines.append(body)
+        lines.append("")
+    try:
+        with open(path, "w", encoding="utf-8-sig", newline="\n") as f:
+            f.write("\n".join(lines))
+    except Exception as e:
+        return False, "写入失败：%s" % e, 0
+    return True, "已导出 %d 条字幕" % len(evs), len(evs)
+
+
 # ---------------- 导出并行度（v3.5.8） ----------------
 def export_worker_limits():
     """帧级并行线程的 (默认值, 上限)。UI 下拉与 Worker 归一化共用同一口径。
