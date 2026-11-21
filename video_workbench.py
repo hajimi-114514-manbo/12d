@@ -1114,6 +1114,19 @@ class VideoWorkbench(QWidget):
         self.script_editor = ScriptEditor(self, left)
         ll.addWidget(self.script_editor, 1)
 
+        # v3.6.2：批量操作工具条（对标对方工具的「批量操作」）。
+        # 挂在剧情编辑器**下方**：用户正看着台词表时，一键做批处理。
+        # 做成常驻条而不是对话框——这些操作是「跑完看结果、不满意撤销」
+        # 的模式，多一层确认反而烦；每次执行都 push_history 可回退。
+        try:
+            import batch_bar as BB
+            self._batch_bar = BB.BatchBar(left)
+            self._batch_bar.run_requested.connect(self._run_batch)
+            self._batch_bar.setVisible(False)     # 仅在文本页显示
+            ll.addWidget(self._batch_bar)
+        except Exception:
+            self._batch_bar = None
+
         # ---- v3.6.2：背景页签（用户要求「背景放这个分类里面」）----
         # 和其它素材页签并列（角色/音频/背景/特效），切到「背景」页时
         # 显示这个面板、隐藏素材卡片区。不是独立栏——用户明确要页签。
@@ -2306,6 +2319,15 @@ class VideoWorkbench(QWidget):
         preset = FF.by_name(name)
         if preset is None:
             return
+        # v3.6.2：记下"当前滤镜"，供批量工具条的「批量套当前滤镜」使用。
+        # 存的是合成后的单层参数（bg/fig 在批量时按 clip 类型各自取——这里
+        # 退化成"人物层优先"，因为批量套用最常见的目的就是统一人物观感）。
+        try:
+            self._cur_filter_preset = (preset.get("fig")
+                                       or preset.get("bg") or None)
+            self._cur_filter_name = name
+        except Exception:
+            pass
         cid = getattr(self, "_sel_clip", None)
         targets = []
         want_bg = preset.get("bg")
@@ -2912,6 +2934,64 @@ class VideoWorkbench(QWidget):
             parent=self, position=InfoBarPosition.TOP, duration=2200)
 
     # ---------- v3.6.2：多段路径运镜 ----------
+    # ---------- v3.6.2：批量脚本操作 ----------
+    def _run_batch(self, name, extra=None):
+        """执行一个批处理动作（由 batch_bar 触发）。
+
+        统一流程：算新工程 -> 有改动才替换 + 存档 + 刷新；无改动如实告知。
+        **一定走 push_history()**：批量改一批东西，用户很可能要撤销。
+        """
+        import batch_ops as BO
+        extra = extra or {}
+        aid = getattr(self, "_cur_aid", None)
+        try:
+            if name == "apply_filter":
+                filt = getattr(self, "_cur_filter_preset", None)
+                if not filt:
+                    self._batch_report("先去「滤镜」页选一个滤镜再批量套用", False)
+                    return
+                scope = int(extra.get("scope") or 0)
+                which = {0: "all", 1: "fig", 2: "bg"}.get(scope, "all")
+                newp, st = BO.apply_filter_batch(self.proj, filt, which=which,
+                                                 aid=aid)
+                msg = "套用滤镜到 %d 个片段（%s）" % (
+                    st["updated"], {0: "全部", 1: "只立绘",
+                                    2: "只背景"}.get(scope, "全部"))
+            elif name == "clear_filter":
+                which = {0: "all", 1: "fig",
+                         2: "bg"}.get(int(extra.get("scope") or 0), "all")
+                newp, st = BO.apply_filter_batch(self.proj, None, which=which,
+                                                 aid=aid)
+                msg = "清除 %d 个片段的滤镜" % st["updated"]
+            else:
+                newp, st, msg = BO.run_preset(self.proj, name, aid=aid)
+        except Exception as e:
+            self._batch_report("批处理失败：%s" % e, False)
+            return
+        if not any((st or {}).values()):
+            self._batch_report("%s —— 没有需要改动的地方" % msg, True)
+            return
+        self.proj = newp
+        self.push_history()
+        try:
+            self.timeline.refresh()
+        except Exception:
+            pass
+        self._after_edit()
+        self._batch_report(msg, True)
+        InfoBar.success("批量操作完成", msg,
+                        parent=self, position=InfoBarPosition.TOP,
+                        duration=2600)
+
+    def _batch_report(self, text, ok=True):
+        bar = getattr(self, "_batch_bar", None)
+        if bar is not None:
+            try:
+                bar.report(text, ok)
+                return
+            except Exception:
+                pass
+
     def _apply_camera_path(self, payload):
         """把运镜编辑器生成的多段路径落到当前时刻。
 
@@ -3287,6 +3367,13 @@ class VideoWorkbench(QWidget):
         if se is None:
             return
         se.setVisible(bool(show))
+        # v3.6.2：批量操作条只在文本页出现（它作用于台词/片段，别的页没意义）
+        try:
+            bb = getattr(self, "_batch_bar", None)
+            if bb is not None:
+                bb.setVisible(bool(show))
+        except Exception:
+            pass
         try:
             self.asset_scroll.setVisible(not show)
             self.asset_empty.setVisible(not show)
