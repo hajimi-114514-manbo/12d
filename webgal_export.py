@@ -1910,9 +1910,10 @@ def _render_scene_lines(view, proj_dir, scene_name, aid_to_scene, act):
         if not isinstance(d, dict):
             continue
         txt = str(d.get("text") or "").replace(";", "；").replace("\n", " ")
-        who = str(d.get("who") or "旁白").replace(":", "").replace(";", "")
+        who = str(d.get("who") or "").replace(":", "").replace(";", "")
         if txt:
-            lines.append("%s:%s;" % (who or "旁白", txt))
+            # 空 who = 无名台词，输出 `:内容;`（引擎不画名牌）
+            lines.append("%s:%s;" % (who, txt))
     if act:
         ctx = {"aid": str(act.get("aid") or ""), "aid_to_scene": aid_to_scene,
                "scene_of_self": scene_name,
@@ -2517,7 +2518,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     dialogue_prev_action[slot] = key        # v3.5：台词正文里的「空格+减号」要转义——引擎用 / -/ 切参数，
         # 不转义的话 "A - B" 会被误切，B 段整段消失（实测真 bug）。
         events.append((t, 4, seq,
-                       ["%s:%s;" % (who or "旁白", _escape_say_body(text))]))
+                       ["%s:%s;" % (who, _escape_say_body(text))]))
         seq += 1
 
     # K1（task-69）：同屏人数上限撤销——原 I1 >3 警告扫描整体移除。

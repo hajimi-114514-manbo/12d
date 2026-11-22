@@ -42,3 +42,7 @@ templates/**/live2dcubismcore.min.js
 # èµ„äº§åº“ï¼ˆ1.1GB ç´ æï¼Œæœ¬åœ°ç‰©ï¼‰
 /asset_library/
 dist/MuppetStudio-Update-v*.zip
+
+# PyInstaller ÖĞ¼ä²úÎï£¨Æô¶¯Æ÷±àÒë£©
+build_launcher_dist/
+build_launcher_work/

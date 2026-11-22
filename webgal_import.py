@@ -1008,7 +1008,9 @@ class _Builder:
         dur = max(2.5, 0.4 * len(text))
         self.proj["dialogue"].append(
             {"t": round(self.t, 3), "dur": round(dur, 3),
-             "who": who or "旁白", "text": text})
+             # 空名字 = 无名台词（引擎不画名牌）。原样保留，不要回填「旁白」，
+             # 否则导出会写出「旁白:…」，引擎就会画出蓝色「旁白」名牌。
+             "who": who or "", "text": text})
         self.t += dur
 
     # ---- 主循环 ----
