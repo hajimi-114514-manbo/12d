@@ -14,7 +14,7 @@
 
 编辑器 widget 常驻（tab 切换只 show/hide + refresh），表单内容不丢。
 """
-from PySide6.QtCore import Qt, QStringListModel
+from PySide6.QtCore import Qt, QStringListModel, QThread, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                                QTableWidget, QTableWidgetItem,
@@ -83,8 +83,10 @@ _refresh_colors()
 
 _COL_T, _COL_WHO, _COL_TEXT, _COL_DUR = 0, 1, 2, 3
 _COL_MOTION, _COL_EXPR = 4, 5
-_NCOL = 6
-_HEADERS = ("时刻(s)", "名字", "内容", "时长(s)", "动作", "表情")
+# v3.6.2：语音列（与台词行一一对齐，需求「语音轴与角色台词轴相对齐」）
+_COL_VOICE = 6
+_NCOL = 7
+_HEADERS = ("时刻(s)", "名字", "内容", "时长(s)", "动作", "表情", "语音")
 
 
 def _fluent_font(w, px=13):
@@ -92,6 +94,22 @@ def _fluent_font(w, px=13):
     f = w.font()
     f.setPixelSize(px)
     return f
+
+
+def _voice_cell_text(r):
+    """语音列的显示文本。
+
+    有语音 -> 「1.9s」；没有 -> 「—」。
+    音色名太长了会挤表格，所以只显示时长（音色在详情里看）。
+    """
+    v = (r or {}).get("voice")
+    if not isinstance(v, dict):
+        return "—"
+    try:
+        dur = float(v.get("dur") or 0.0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    return "%.1fs" % dur if dur > 0 else "有"
 
 
 class ScriptEditor(QWidget):
@@ -124,6 +142,7 @@ class ScriptEditor(QWidget):
         hh.setSectionResizeMode(_COL_DUR, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(_COL_MOTION, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(_COL_EXPR, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(_COL_VOICE, QHeaderView.ResizeToContents)
         self.table.cellClicked.connect(self._on_click)
         self.table.cellDoubleClicked.connect(self._on_double_click)
         lay.addWidget(self.table, 1)
@@ -287,6 +306,9 @@ class ScriptEditor(QWidget):
                                QTableWidgetItem(str(r.get("motion") or "—")))
             self.table.setItem(i, _COL_EXPR,
                                QTableWidgetItem(str(r.get("expression") or "—")))
+            # 语音列：与台词行一一对齐。有语音显示时长，无则显示「—」
+            self.table.setItem(i, _COL_VOICE,
+                               QTableWidgetItem(_voice_cell_text(r)))
         # who 候选 = 现有 who 去重（自由输入不受影响）
         names = sorted({str(r.get("who")) for r in rows if r.get("who")})
         self.cpl_who.setModel(QStringListModel(names, self.cpl_who))
@@ -329,16 +351,104 @@ class ScriptEditor(QWidget):
         rs = self.table.selectedRows()
         return rs[0].row() if rs else -1
 
-    def _on_click(self, row, _col):
-        self._seek_row(row)
-
     def _seek_row(self, row):
+        """跳到该行的时刻（预览联动）。"""
         obj = self._row_obj(row)
         if obj is not None:
             with contextlib.suppress(Exception): self.wb.seek(float(obj["t"]))
 
-    def _on_double_click(self, row, _col):
+    def _on_click(self, row, col):
+        # 点语音列 -> 试听（不跳播放头，避免误触就打断预览）
+        if col == _COL_VOICE:
+            self._voice_preview(row)
+            return
+        self._seek_row(row)
+
+    def _voice_preview(self, row):
+        """试听该行的语音。没有语音就提示一句，不报错。"""
+        obj = self._row_obj(row)
+        if obj is None:
+            return
+        try:
+            import voice_synth as VS
+            p = VS.voice_path_of(getattr(self.wb, "proj_dir", ""), obj)
+        except Exception as e:
+            TOAST.toast_warn(self, "试听失败", str(e)[:120], duration=3000)
+            return
+        if not p:
+            TOAST.toast_info(self, "没有语音", "这行台词还没合成语音", duration=2500)
+            return
+        try:
+            import voice_synth as VS
+            ok = VS.play(p)
+        except Exception:
+            ok = False
+        if not ok:
+            TOAST.toast_warn(self, "试听失败", "无法播放音频", duration=3000)
+
+    def _on_double_click(self, row, col):
+        # 双击语音列 -> 合成这一句
+        if col == _COL_VOICE:
+            self._voice_synth_row(row)
+            return
         self._begin_edit(row)
+
+    def _voice_synth_row(self, row):
+        """合成该行的语音（后台线程，不卡 UI）。
+
+        合成要发 HTTP 到语音服务，通常几秒，放主线程会把界面冻住。
+        """
+        obj = self._row_obj(row)
+        if obj is None:
+            return
+        try:
+            import voice_synth as VS
+            import voice_probe as VP
+        except Exception as e:
+            TOAST.toast_warn(self, "合成失败", "模块缺失：%s" % e, duration=3000)
+            return
+        # 先探活：服务不通就别白等
+        pr = VP.probe_local(timeout=1.0)
+        if not (pr.get("service") or {}).get("ok"):
+            TOAST.toast_warn(self, "语音服务未就绪",
+                             "请先在资产管理→语音服务检测里确认服务可用",
+                             duration=4000)
+            return
+        who = str(obj.get("who") or "")
+        text = str(obj.get("text") or "")
+        act = getattr(self.wb, "_cur_aid", None) or "a0"
+        proj_dir = getattr(self.wb, "proj_dir", "")
+        idx = self._rows.index(obj) if obj in self._rows else row
+
+        class _Th(QThread):
+            done = Signal(bool, str, object)
+
+            def run(self):
+                try:
+                    ok, msg, info = VS.synth_line(proj_dir, act, idx, who,
+                                                 text)
+                except Exception as e:
+                    ok, msg, info = False, "合成异常：%s" % e, None
+                self.done.emit(ok, msg, info)
+
+        th = _Th(self)
+        th.done.connect(lambda o, m, i: self._voice_synth_done(obj, o, m, i))
+        self._voice_thread = th
+        TOAST.toast_info(self, "正在合成", "「%s」" % (text[:18] or "…"),
+                         duration=2000)
+        th.start()
+
+    def _voice_synth_done(self, obj, ok, msg, info):
+        if not ok:
+            TOAST.toast_err(self, "合成失败", msg, duration=5000)
+            return
+        obj["voice"] = {"path": info["path"], "dur": info["dur"],
+                        "text": str(obj.get("text") or "")}
+        with contextlib.suppress(Exception):
+            self.wb.push_history()
+        self.refresh()
+        TOAST.toast_ok(self, "合成完成", "%s（%.2fs）"
+                       % (msg, info["dur"]), duration=3000)
 
     def _begin_add(self):
         self._editing_obj = None

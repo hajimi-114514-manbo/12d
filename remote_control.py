@@ -1766,7 +1766,26 @@ _HANDLERS = {
     "project.save": _cmd_project_save,
     "history.do": _cmd_history,
     "timeline.play": _cmd_timeline_play,
+    # ---- 语音（v3.6.2 后）：转发到 voice_commands ----
+    # 正常走 HTTP 线程直跑（见 _handle 的 voice.* 分支）；这里注册是为了
+    # run_command 直调也能用（D2 面板 / 自动化脚本场景）。
+    "voice.status": lambda wb, args: _voice_dispatch("voice.status", args),
+    "voice.probe": lambda wb, args: _voice_dispatch("voice.probe", args),
+    "voice.list": lambda wb, args: _voice_dispatch("voice.list", args),
+    "voice.stats": lambda wb, args: _voice_dispatch("voice.stats", args),
+    "voice.validate": lambda wb, args: _voice_dispatch("voice.validate", args),
+    "voice.import": lambda wb, args: _voice_dispatch("voice.import", args),
+    "voice.remove": lambda wb, args: _voice_dispatch("voice.remove", args),
 }
+
+
+def _voice_dispatch(cmd, args):
+    """语音命令转调（voice_commands 独立模块，见其 docstring）。
+
+    返回 (ok, msg, data)。这些命令全是纯文件系统 / 网络 I/O，不碰 Qt。
+    """
+    import voice_commands as VC
+    return VC.run(cmd, args)
 
 
 def run_command(wb, cmd, args):
@@ -1830,6 +1849,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(503, {"ok": False, "msg": "未绑定工作台"})
             return
         reply = queue.Queue()
+        # 语音命令（voice_commands）：全部是纯文件系统 / 网络 I/O，**不碰 Qt**，
+        # 且 voice.probe 要等 TCP 超时（最长 4s）—— 进主线程队列会把 UI 卡住。
+        # 与 assets.query / runtime.import 同款处理：HTTP 线程直跑、直接回包。
+        if str(cmd or "").startswith("voice."):
+            try:
+                ok, msg, data = _voice_dispatch(cmd, args)
+            except Exception as e:
+                ok, msg, data = False, "语音命令异常: %s" % e, None
+            self._send(200, {"ok": ok, "msg": msg, "data": data})
+            return
         # task-41/G4：assets.query 在 HTTP 线程纯 py 读索引过滤（不碰 Qt、
         # 不进主线程队列——高频查询别排队长）
         if cmd == "assets.query":

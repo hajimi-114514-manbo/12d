@@ -862,6 +862,34 @@ def _sanitize_comments(raw):
     return out
 
 
+def _sanitize_voice(raw):
+    """台词级语音引用透传校验。
+
+    形态（v3.6.2 后，需求「语音轴与角色台词轴相对齐」）：
+        voice = {"path": "vocal/xxx.wav",      # 相对工程目录
+                 "dur": 1.94,                  # 实测音频时长（秒）
+                 "voice": "MyGO_千早爱音_v2pp", # 用的音色（可空）
+                 "text": "你好"}                # 合成时的文本（可空）
+
+    只强制 path 与非负 dur —— 其余是**元信息**，缺失不该让整条台词被拒。
+    脏值只丢字段不丢台词（与 motion/expression 同款）。
+    """
+    if not isinstance(raw, dict):
+        return None
+    path = raw.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return None
+    out = {"path": path.strip()}
+    dur = _num(raw.get("dur"), -1.0)
+    if dur >= 0:
+        out["dur"] = round(dur, 3)
+    for k in ("voice", "text"):
+        v = raw.get(k)
+        if isinstance(v, str) and v.strip():
+            out[k] = v
+    return out
+
+
 def _sanitize_dialogue(raw):
     """台词表 dialogue：逐项校验 t/dur 浮点 >=0、who/text 字符串；脏项丢弃。
 
@@ -887,6 +915,8 @@ def _sanitize_dialogue(raw):
                               lambda: _MT.expression_ids())
         if mv: ent["motion"] = mv
         if ex: ent["expression"] = ex
+        vc = _sanitize_voice(it.get("voice"))
+        if vc: ent["voice"] = vc
         out.append(ent)
     return out
 
