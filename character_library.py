@@ -16,11 +16,23 @@
     thumb_path(m)              -> str     缩略图绝对路径（可能不存在）
     display_name(m)            -> str     「服装名（作者）」
     refresh(force=False)       -> None
+
+导入 API（v3.6.3，用户要的「导入模型」按钮）：
+    register_role(cn)          -> slug    新建角色分类，返回 slug
+    custom_roles()             -> [{"slug","cn"}]   用户自建的分类
+    add_model(...)             -> (ok, msg, entry)  复制进素材库 + 写索引 + 刷新
+
+**导入落盘规则（用户明确：「导入就直接复制存入木偶内部」）**：
+    源目录整份复制到 <素材库>/figure/<角色>/<目录名>/，再往 asset_index.json
+    追加一条 model 条目。复制而不是引用——这样素材库自包含，用户把库目录
+    拷走/换机器都能用，不依赖源目录还在不在。
 """
+import contextlib
 import io
 import json
 import os
 import re
+import shutil
 import threading
 
 import asset_paths as AP
@@ -44,6 +56,131 @@ _ROLE_NAME = dict(ROLE_INFO)
 _ROLE_ORDER = {s: i for i, (s, _) in enumerate(ROLE_INFO)}
 # 「其他」永远排最后（模型数可能很多，但优先级最低）
 if "lib" in _ROLE_ORDER: _ROLE_ORDER["lib"] = 999
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_CUSTOM_ROLES_FILE = os.path.join(_HERE, ".runtime", "custom_roles.json")
+
+# Windows 目录名禁区：这些名字建出来的目录会各种解析错乱（CON/NUL/COM1…）
+_WIN_RESERVED = (
+    {"con", "prn", "aux", "nul"}
+    | {"com%d" % i for i in range(1, 10)}
+    | {"lpt%d" % i for i in range(1, 10)}
+)
+_SLUG_BAD = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _slug_of(s):
+    """把任意名字变成可作目录名的 slug：去 Windows 非法字符、去首尾点和空白。
+
+    保留汉字——素材库目录名本来就有中文（Harmony_Parade_爱音），中文 slug
+    在磁盘和索引里都没问题，比生成 role_a3f9 这种天书可读。
+    """
+    s = _SLUG_BAD.sub("", str(s or ""))
+    s = s.strip().strip(".")
+    s = re.sub(r"\s+", "_", s)
+    if s.lower() in _WIN_RESERVED:
+        s = "_" + s
+    return s or "model"
+
+
+# ---- 自定义角色分类（用户「新建分类」）-------------------------------------
+def _custom_roles_path():
+    """分类登记文件路径。
+
+    放程序目录的 .runtime，不放素材库：素材库是**素材数据**，分类登记是
+    应用的**用户数据**，两者不该混（用户清素材库不该把分类登记带走）。
+
+    **只读目录兜底**：装到 Program Files 时程序目录不可写，.runtime 建不出来
+    -> 退回用户数据目录（APPDATA/MuppetStudio）。同 l2d_rig_qt._runtime_file
+    的处理，不兜底的话「新建分类」在只读安装下会直接失败。
+
+    可用 env MUPPET_CUSTOM_ROLES 覆盖（测试用，避免污染真实环境）。
+    """
+    env = os.environ.get("MUPPET_CUSTOM_ROLES", "").strip()
+    if env: return env
+    d = os.path.dirname(_CUSTOM_ROLES_FILE)
+    try:
+        os.makedirs(d, exist_ok=True)
+        if os.access(d, os.W_OK):
+            return _CUSTOM_ROLES_FILE
+    except Exception:
+        pass
+    base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
+    if base:
+        alt = os.path.join(base, "MuppetStudio", "custom_roles.json")
+        try:
+            os.makedirs(os.path.dirname(alt), exist_ok=True)
+            return alt
+        except Exception:
+            pass
+    return _CUSTOM_ROLES_FILE
+
+
+def _load_custom_roles():
+    try:
+        raw = json.load(io.open(_custom_roles_path(), encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(raw, list): return []
+    out = []
+    for it in raw:
+        if not isinstance(it, dict): continue
+        slug = str(it.get("slug") or "").strip()
+        if not slug: continue
+        out.append({"slug": slug, "cn": str(it.get("cn") or slug)})
+    return out
+
+
+def _save_custom_roles(items):
+    try:
+        d = os.path.dirname(_custom_roles_path())
+        os.makedirs(d, exist_ok=True)
+        with io.open(_custom_roles_path(), "w", encoding="utf-8") as f:
+            json.dump(items, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def custom_roles():
+    """用户自建的分类 [{"slug","cn"}]（不含内置 ROLE_INFO）。"""
+    return _load_custom_roles()
+
+
+def _sync_role_tables():
+    """把自定义分类并进 _ROLE_NAME / _ROLE_ORDER（注册后调用）。
+
+    自定义分类排在内置之后，保证内置角色（MyGO 五人等）的展示顺序稳定。
+    """
+    global _ROLE_NAME, _ROLE_ORDER
+    _ROLE_NAME = dict(ROLE_INFO)
+    order = [s for s, _ in ROLE_INFO]
+    for it in _load_custom_roles():
+        _ROLE_NAME.setdefault(it["slug"], it["cn"])
+        order.append(it["slug"])
+    _ROLE_ORDER = {s: i for i, s in enumerate(order)}
+    if "lib" in _ROLE_ORDER: _ROLE_ORDER["lib"] = 999
+
+
+def register_role(cn):
+    """新建角色分类，返回它的 slug（同名已存在则直接复用）。
+
+    slug 由分类名生成（保留汉字）。撞内置 slug 或已注册 slug 时加序号。
+    """
+    cn = str(cn or "").strip()
+    if not cn: raise ValueError("分类名不能为空")
+    items = _load_custom_roles()
+    for it in items:
+        if it["cn"] == cn: return it["slug"]
+    base = _slug_of(cn)
+    slug, n = base, 2
+    while slug in _ROLE_NAME or any(it["slug"] == slug for it in items):
+        slug = "%s_%d" % (base, n); n += 1
+    items.append({"slug": slug, "cn": cn})
+    if not _save_custom_roles(items):
+        raise IOError("自定义分类写入失败：%s" % _custom_roles_path())
+    _sync_role_tables()
+    return slug
 
 # ---- 改模作者登记 ----------------------------------------------------------
 # 键 = 模型目录名（figure/<角色>/ 下那一层），值 = 作者名。
@@ -253,15 +390,20 @@ def _enrich(cache):
         m["_dir_abs"] = d
 
 
+def _role_info_all():
+    """内置 + 自定义分类，按展示顺序（自定义排内置之后）。"""
+    return list(ROLE_INFO) + [(it["slug"], it["cn"]) for it in _load_custom_roles()]
+
+
 def roles():
-    """角色列表（按 ROLE_INFO 顺序，只保留真的有模型的）。"""
+    """角色列表（按 _role_info_all 顺序，只保留真的有模型的）。"""
     all_ = items()
     seen = {}
     for m in all_:
         seen.setdefault(m["slug"], 0)
         seen[m["slug"]] += 1
     out = []
-    for slug, cn in ROLE_INFO:
+    for slug, cn in _role_info_all():
         if slug in seen: out.append({"slug": slug, "cn": cn, "count": seen[slug]})
     # 未登记的角色兜底排在后面
     for slug, n in seen.items():
@@ -473,3 +615,193 @@ def needs_render(m):
 def renderable_models():
     """真正可渲染的模型（有 model.json 且缺合成图）。"""
     return [m for m in items() if needs_render(m)]
+
+
+# ============================ 导入模型（v3.6.3）============================
+def _load_index_items():
+    """读素材库索引（完整列表）。索引缺失/损坏抛异常，由调用方转成人话。"""
+    p = _index_path()
+    if not p: raise IOError("素材库索引不存在")
+    with io.open(p, encoding="utf-8-sig") as f:
+        j = json.load(f)
+    if not isinstance(j, list): raise ValueError("索引顶层不是数组")
+    return j
+
+
+def _index_model_dirs(items):
+    """索引里已有的 model 相对目录集合（用于目标目录撞名判断）。"""
+    out = set()
+    for e in items:
+        if not isinstance(e, dict) or e.get("kind") != "model": continue
+        rel = str(e.get("file_rel") or e.get("file") or "").replace("\\", "/")
+        if rel: out.add(rel)
+    return out
+
+
+def _next_model_id(items):
+    """接续现有 model_xxxx 编号，避免 id 撞车。"""
+    mx = 0
+    for e in items:
+        m = re.match(r"^model_(\d+)_", str((e or {}).get("id") or ""))
+        if m: mx = max(mx, int(m.group(1)))
+    return mx + 1
+
+
+def _parse_meta(model_dir):
+    """读 model.json 的 motions/expressions 填进索引 meta。
+
+    复用 webgal_export 的解析（导出和索引必须同一口径，别各写一套）。
+    **懒导入**：只在导入动作时跑一次，不把重依赖拉进本模块的加载路径。
+    """
+    try:
+        import webgal_export as WE
+        p = os.path.join(model_dir, "model.json")
+        if os.path.isfile(p):
+            return WE._parse_cubism2_json(p) or {}
+    except Exception:
+        pass
+    return {}
+
+
+def _append_index_entry(entry):
+    """把一条条目拼接进 asset_index.json 末尾。
+
+    **原文拼接而非整份重写**：现有索引 3.5MB，整份重写会因格式化细节差异
+    产生巨大且无意义的 diff（实测 indent 猜错就差 10 万字节）。拼接保证
+    其余部分逐字节不动，只在末尾多出新条目。
+
+    写前解析校验、写后回读比对，不一致就抛——调用方负责清理已复制的目录。
+    """
+    p = _index_path()
+    if not p: raise IOError("素材库索引不存在")
+    text = io.open(p, "rb").read().decode("utf-8")
+    prev = json.loads(text)
+    if not isinstance(prev, list): raise ValueError("索引顶层不是数组")
+
+    # 与现有条目同风格：json.dumps(indent=2)，整体再缩进 1 格放进数组
+    body = json.dumps(entry, ensure_ascii=False, indent=2)
+    piece = "\r\n".join(" " + ln for ln in body.split("\n"))
+
+    close = text.rfind("]")
+    if close < 0: raise ValueError("索引结尾没有 ]")
+    head = text[:close].rstrip()
+    if head == "[":
+        new_text = "[\r\n" + piece + "\r\n]"
+    else:
+        new_text = head + ",\r\n" + piece + "\r\n]"
+
+    if json.loads(new_text) != prev + [entry]:
+        raise ValueError("索引写回校验失败：回读内容与预期不符")
+    with io.open(p, "wb") as f:
+        f.write(new_text.encode("utf-8"))
+
+
+def add_model(src_dir, role_slug, author, costume, thumb_mode="none",
+              thumb_src=""):
+    """导入一个模型：整份复制进素材库 + 写索引 + 刷新缓存。
+
+    用户要求「导入就直接复制存入木偶内部」——**复制**而非引用，素材库
+    自包含：用户把库目录拷走或换机器都能用，不依赖源目录还在不在。
+
+    参数
+      src_dir     源模型目录（必须含 model.json，否则不是有效模型）
+      role_slug   目标角色分类 slug（内置 ROLE_INFO 或 register_role 建的）
+      author      改模人（空串 = 未署名）
+      costume     服装名（界面上的「命名」；索引 name 存「角色·服装名」）
+      thumb_mode  "none" 不处理 | "pick" 用用户选的图 | "render" 稍后渲染
+      thumb_src   thumb_mode=="pick" 时用户选的图片路径
+
+    返回 (ok, msg, entry)。失败 ok=False、msg 是人话、entry=None。
+    **不抛异常**——UI 要的是能直接显示的失败信息，不是栈。
+    """
+    src_dir = os.path.abspath(str(src_dir or ""))
+    # ---- 校验源目录 ----
+    if not src_dir or not os.path.isdir(src_dir):
+        return False, "源目录不存在或不是目录：%s" % src_dir, None
+    if not os.path.isfile(os.path.join(src_dir, "model.json")):
+        return False, "源目录里没有 model.json，不是有效的模型目录", None
+
+    # ---- 素材库 ----
+    try:
+        root = AP.ensure_library(scan=False)
+    except Exception:
+        root = None
+    if not root or not os.path.isdir(root):
+        return False, "素材库未找到，请先在资产管理里确认素材库位置", None
+
+    slug = str(role_slug or "").strip()
+    if not slug: return False, "请选择角色分类", None
+    if slug not in _ROLE_NAME: return False, "未知角色分类：%s" % slug, None
+
+    author = str(author or "").strip()
+    costume = _slug_of(costume) if str(costume or "").strip() \
+        else _slug_of(os.path.basename(src_dir))
+
+    # ---- 目标目录名（撞名加序号）----
+    try:
+        items = _load_index_items()
+    except Exception as e:
+        return False, "素材库索引读取失败：%s" % e, None
+    taken = _index_model_dirs(items)
+    role_dir = os.path.join(root, "figure", slug)
+    base = _slug_of(os.path.basename(os.path.normpath(src_dir)))
+    name, n = base, 2
+    while ("%s/%s" % (slug, name)) in taken or os.path.isdir(
+            os.path.join(role_dir, name)):
+        name = "%s_%d" % (base, n); n += 1
+    rel = "figure/%s/%s" % (slug, name)
+    dst = os.path.join(root, rel.replace("/", os.sep))
+
+    # ---- 复制 ----
+    try:
+        if os.path.exists(dst):
+            return False, "目标已存在，未写入：%s" % rel, None
+        shutil.copytree(src_dir, dst)
+    except Exception as e:
+        return False, "复制失败：%s" % e, None
+
+    # ---- 作者署名 ----
+    # 写进目录，`_author_from_dir` 自然认到——不用改索引 schema，
+    # 也不用在 _enrich 里加一条特判。
+    if author:
+        try:
+            with io.open(os.path.join(dst, "改模作者：%s.txt" % author),
+                         "w", encoding="utf-8") as f:
+                f.write("改模作者：%s\n（由木偶工作室导入时写入）\n" % author)
+        except Exception:
+            pass                      # 署名写不进去不影响导入
+
+    # ---- 缩略图：渠道② 用户自己选图 ----
+    if thumb_mode == "pick" and thumb_src and os.path.isfile(thumb_src):
+        try:
+            import model_thumb as MT
+            MT.save_image_file(thumb_src, dst)
+        except Exception:
+            pass                      # 缩略图失败不阻断导入
+
+    # ---- 索引条目 ----
+    entry = {
+        "id": "model_%04d_%s_%s" % (_next_model_id(items), slug, name),
+        "kind": "model",
+        "file": rel,
+        "file_rel": rel,
+        "copied": True,
+        "name": "%s·%s" % (_ROLE_NAME.get(slug, slug), costume),
+        "tags": [slug] + ([author] if author else []),
+        "meta": _parse_meta(dst),
+    }
+
+    # ---- 写回索引 ----
+    try:
+        _append_index_entry(entry)
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            shutil.rmtree(dst)      # 索引没写成就不留半成品目录
+        return False, "索引写入失败：%s" % e, None
+
+    refresh(force=True)
+    return True, "已导入：%s" % rel, entry
+
+
+# 启动时把已登记的自定义分类并进角色表（用户上次建的分类不能丢）
+_sync_role_tables()

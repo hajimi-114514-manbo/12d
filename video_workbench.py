@@ -25,7 +25,7 @@ import time
 
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer, QSize, QSettings, QEvent
+from PySide6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QThread
 from PySide6.QtGui import (QImage, QPixmap, QIcon, QKeySequence, QShortcut,
                            QPainter)
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -1087,6 +1087,13 @@ class VideoWorkbench(QWidget):
         self.asset_header = StrongBodyLabel("素材库", left)
         lh.addWidget(self.asset_header)
         lh.addStretch(1)
+        # 角色页专用「导入模型」按钮：只在这一页出现（其余页签导模型没意义）。
+        # 挂在标题行右侧，和「素材库」同一行，不额外占高度。
+        self.btn_import_model = PushButton("导入模型", left)
+        self.btn_import_model.setToolTip("把模型复制进素材库（分类 / 改模人 / 缩略图）")
+        self.btn_import_model.clicked.connect(self._import_model)
+        self.btn_import_model.setVisible(False)
+        lh.addWidget(self.btn_import_model)
         ll.addLayout(lh)
         # v3.6.1：左栏不再放「添加素材文件 / 导入木偶工程」按钮
         # （用户要求去掉）。功能入口移到「文件」菜单，见
@@ -1909,6 +1916,12 @@ class VideoWorkbench(QWidget):
             if isinstance(wi, QWidget):
                 wi.deleteLater()
         filt = self._asset_tab
+        # 「导入模型」只在角色页可见：统一在这里判定，避免每个 return 分支
+        # 各写一遍（漏一个就会出现「音频页也能导入模型」这种怪状态）。
+        # **必须在 roles() 判空之前设**：空素材库正是最需要导入入口的时点，
+        # 早退分支若跳过了它，用户会对着「没有模型」的提示找不到按钮。
+        with contextlib.suppress(Exception):
+            self.btn_import_model.setVisible(filt == "media")
         # v3.6.2：运镜编辑器只在特效页出现（其他页它没意义，还占掉半屏）
         with contextlib.suppress(Exception):
             if getattr(self, "_cam_panel", None) is not None:
@@ -1976,7 +1989,7 @@ class VideoWorkbench(QWidget):
         roles = CL.roles()
         if not roles:
             self.asset_empty.setText(
-                "素材库里没有模型\n（确认素材库位置：资产管理里可见）")
+                "素材库里没有模型\n（确认素材库位置：资产管理里可见；也可以直接点右上角「导入模型」）")
             self.asset_empty.setVisible(True)
             return
         opened = self._role_open
@@ -2015,6 +2028,131 @@ class VideoWorkbench(QWidget):
                                       parent=self.asset_host)
                     self.asset_flow.addWidget(card)
         self.asset_empty.setVisible(False)
+
+    # ---------- 导入模型（用户需求：命名 / 分类 / 改模人 / 缩略图）----------
+    def _import_model(self):
+        """打开导入对话框，把模型复制进素材库后刷新角色页。"""
+        presets = getattr(self, "_role_open", "") or ""
+        dlg = _ImportModelDialog(self, preset_role=presets)
+        if not dlg.exec():
+            return
+        src, slug, author, costume, tmode, tsrc = dlg.values()
+        # 名字含 Windows 非法字符时先挡下来（目录名建出来就删不掉）
+        if not CL._slug_of(costume):
+            TOAST.toast_warn(self, "命名不合法", "命名里没有可用字符，换一个")
+            return
+        ok, msg, entry = CL.add_model(src, slug, author, costume,
+                                      thumb_mode=tmode, thumb_src=tsrc)
+        if not ok:
+            TOAST.toast_err(self, "导入失败", msg, duration=5000)
+            return
+        # 缓存里旧缩略图作废（新目录可能已有 _thumb.png）
+        with contextlib.suppress(Exception):
+            self._thumb_cache = {}
+        # 导入后自动展开到该角色、该作者，让用户立刻看到新模型
+        with contextlib.suppress(Exception):
+            self._role_open = slug
+            self._author_open = {author} if author else {""}
+            self._author_open_role = slug
+        self._rebuild_asset_cards()
+        TOAST.toast_ok(self, "导入完成", msg, duration=3000)
+        # 缩略图渠道①「导入后渲染」：这里只负责如实告知，不假装成功
+        if tmode == "render":
+            self._render_imported_thumb(entry)
+
+    def _render_imported_thumb(self, entry):
+        """导入后渲染缩略图（渠道①）。
+
+        渲染需要 WebEngine + WebGAL 运行时 + Cubism SDK 三者齐全。缺任何
+        一样都**如实告知**并保留占位，不谎报成功——用户看到空图比看到
+        「已渲染」的假提示要好。
+        """
+        try:
+            import webgal_preview as WP
+        except Exception as e:
+            TOAST.toast_warn(self, "无法渲染缩略图",
+                             "WebEngine 不可用：%s" % e, duration=4000)
+            return
+        if not getattr(WP, "HAS_WEBENGINE", False) or not WP.WebPreviewView:
+            TOAST.toast_warn(self, "无法渲染缩略图",
+                             "实时预览能力包未安装，可稍后在资产管理里装，"
+                             "或导入时直接选一张图", duration=5000)
+            return
+        try:
+            info = entry or {}
+            d = CL.model_path(info)
+            if not d or not os.path.isdir(d):
+                TOAST.toast_warn(self, "无法渲染缩略图", "模型目录不存在")
+                return
+            # 渲染链路（离屏视图 -> register_model_dir -> grab_shot）属于
+            # 预览链，这里是**单帧抓图**，与 video_workbench 的实时预览共用
+            # 同一套宿主页与 muppet:// 服务，不另造轮子。
+            ok = self._grab_model_thumb(d)
+            if ok:
+                TOAST.toast_ok(self, "缩略图已生成", "渲染完成", duration=2000)
+            else:
+                TOAST.toast_warn(self, "渲染未成功",
+                                 "抓图失败，可稍后重试或直接选一张图",
+                                 duration=4000)
+        except Exception as e:
+            TOAST.toast_warn(self, "渲染失败", str(e)[:120], duration=4000)
+
+    def _grab_model_thumb(self, model_dir):
+        """用离屏 WebPreviewView 渲染单帧存成 _thumb.png。
+
+        返回 True/False。渲染器是进程级单例（webgal_preview 的约束：
+        一个进程只能有一个 QWebEngineView 在跑渲染），所以这里拿的是
+        工作台已有的那个，没有才新建。
+        """
+        try:
+            v = self._ensure_thumb_view()
+            if v is None:
+                return False
+            ref = v.register_model_dir(model_dir)
+            v._send("loadModel", {"modelRef": ref, "modelId": "thumb"})
+            v._send("setTransform", {"modelId": "thumb", "x": 0.5, "y": 0.42,
+                                     "scale": 1.0, "rot": 0.0})
+            # 等页面把模型真正加载出来（ready 事件）；抓早了是空白帧
+            deadline = 60
+            while deadline > 0 and not v.events_of("ready"):
+                QApplication.processEvents()
+                QThread.msleep(50)
+                deadline -= 1
+            if not v.events_of("ready"):
+                return False
+            tmp = os.path.join(model_dir, "_grab_tmp.png")
+            if not v.grab_shot(tmp):
+                return False
+            import model_thumb as _MT
+            with open(tmp, "rb") as f:
+                raw = f.read()
+            with contextlib.suppress(Exception):
+                os.remove(tmp)
+            if not raw:
+                return False
+            with open(_MT.thumb_file(model_dir), "wb") as f:
+                f.write(_MT.crop_png_bytes(raw))
+            return os.path.isfile(_MT.thumb_file(model_dir))
+        except Exception:
+            return False
+
+    def _ensure_thumb_view(self):
+        self_v = getattr(self, "_thumb_view", None)
+        if self_v is not None:
+            return self_v
+        with contextlib.suppress(Exception):
+            import webgal_preview as WP
+            v = WP.WebPreviewView(parent=self)
+            v.view.hide()
+            v.start()
+            for _ in range(100):
+                QApplication.processEvents()
+                if v.events_of("boot"):
+                    break
+                QThread.msleep(30)
+            self._thumb_view = v
+            return v
+        return None
 
     def _toggle_role(self, slug):
         """展开/收起某角色（同一时刻只展开一个）。
@@ -4809,6 +4947,254 @@ class _ExportDialog(MessageBoxBase):
         workers = self._workers_value()
         return (os.path.normpath(self.ed_path.text().strip()), scale, fps,
                 workers, self._animate_value())
+
+class _ImportModelDialog(MessageBoxBase):
+    """导入模型对话框（用户需求：命名 + 一级分类 + 二级改模人 + 缩略图）。
+
+    四个字段的顺序就是用户填写的顺序，从上到下一条直线，不用来回跳：
+      ① 源目录（选一个含 model.json 的目录）
+      ② 命名（服装名，索引里存「角色·服装名」）
+      ③ 一级：角色分类（可新建）
+      ④ 二级：改模人（可新建）
+      ⑤ 缩略图：两个渠道（自己选图 / 导入后渲染）
+    """
+
+    THUMB_PICK, THUMB_RENDER = 0, 1
+    THUMB_NONE = 2
+
+    def __init__(self, parent, preset_role=""):
+        super().__init__(parent)
+        # 这个版本的 MessageBoxBase 只有 yesButton/cancelButton，
+        # **没有** titleLabel/contentLabel —— 标题自己加。
+        self.viewLayout.addWidget(StrongBodyLabel("导入模型", self))
+        _sub = CaptionLabel("把模型复制进木偶素材库（复制后与源目录无关）", self)
+        _sub.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        self.viewLayout.addWidget(_sub)
+        self._src_dir = ""
+        self.yesButton.setText("导入")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(520)
+
+        # ① 源目录
+        r = QHBoxLayout()
+        r.addWidget(CaptionLabel("模型目录"))
+        self.ed_src = LineEdit(self)
+        self.ed_src.setPlaceholderText("选一个含 model.json 的模型目录")
+        self.ed_src.setReadOnly(True)
+        r.addWidget(self.ed_src, 1)
+        self.btn_src = PushButton("浏览…", self)
+        self.btn_src.clicked.connect(self._pick_src)
+        r.addWidget(self.btn_src)
+        self.viewLayout.addLayout(r)
+
+        # ② 命名
+        r = QHBoxLayout()
+        r.addWidget(CaptionLabel("命名"))
+        self.ed_name = LineEdit(self)
+        self.ed_name.setPlaceholderText("服装名，例如：月之森JK")
+        r.addWidget(self.ed_name, 1)
+        self.viewLayout.addLayout(r)
+
+        # ③ 一级：角色分类
+        r = QHBoxLayout()
+        r.addWidget(CaptionLabel("角色分类"))
+        self.cmb_role = ComboBox(self)
+        self._reload_roles(preset_role)
+        r.addWidget(self.cmb_role, 1)
+        self.btn_new_role = PushButton("新建…", self)
+        self.btn_new_role.clicked.connect(self._new_role)
+        r.addWidget(self.btn_new_role)
+        self.viewLayout.addLayout(r)
+
+        # ④ 二级：改模人
+        # qfluentwidgets 的 ComboBox 不支持 setEditable（不是 QComboBox），
+        # 所以「新建改模人」用一个输入框 + 按钮，而不是可编辑下拉。
+        r = QHBoxLayout()
+        r.addWidget(CaptionLabel("改模人"))
+        self.cmb_author = ComboBox(self)
+        self.cmb_author.addItem("（未署名）")
+        for a in self._known_authors():
+            self.cmb_author.addItem(a)
+        r.addWidget(self.cmb_author, 1)
+        self.btn_new_author = PushButton("新建…", self)
+        self.btn_new_author.clicked.connect(self._new_author)
+        r.addWidget(self.btn_new_author)
+        self.viewLayout.addLayout(r)
+
+        # ⑤ 缩略图：两个渠道
+        self.viewLayout.addWidget(CaptionLabel("缩略图"))
+        r = QHBoxLayout()
+        self.cmb_thumb = ComboBox(self)
+        self.cmb_thumb.addItems(["自己选一张图", "导入后渲染生成", "先不要"])
+        r.addWidget(self.cmb_thumb, 1)
+        self.btn_thumb = PushButton("选图…", self)
+        self.btn_thumb.clicked.connect(self._pick_thumb)
+        r.addWidget(self.btn_thumb)
+        self.viewLayout.addLayout(r)
+        self._thumb_path = ""
+        self.lbl_thumb = CaptionLabel("", self)
+        self.lbl_thumb.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        self.viewLayout.addWidget(self.lbl_thumb)
+        self.cmb_thumb.currentIndexChanged.connect(self._on_thumb_mode)
+
+        # 实时校验提示（离开对话框前就该知道能不能导）
+        self.lbl_hint = CaptionLabel("", self)
+        self.lbl_hint.setWordWrap(True)
+        self.lbl_hint.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        self.viewLayout.addWidget(self.lbl_hint)
+        self.ed_src.textChanged.connect(self._refresh_hint)
+        self.ed_name.textChanged.connect(self._refresh_hint)
+        self._on_thumb_mode()
+        self._refresh_hint()
+
+    # ---------- 数据填充 ----------
+    @staticmethod
+    def _known_authors():
+        """素材库里已出现过的改模人（去重、排序），供下拉直接选。"""
+        out = set()
+        try:
+            for m in CL.all_models():
+                a = str(m.get("author") or "").strip()
+                if a: out.add(a)
+        except Exception:
+            pass
+        return sorted(out)
+
+    def _reload_roles(self, preset=""):
+        self.cmb_role.clear()
+        try:
+            rs = CL.roles()
+        except Exception:
+            rs = []
+        names = [r["cn"] for r in rs]
+        self.cmb_role.addItems(names or ["（素材库无分类）"])
+        self._role_slugs = [r["slug"] for r in rs]
+        if preset:
+            for i, r in enumerate(rs):
+                if r["slug"] == preset or r["cn"] == preset:
+                    self.cmb_role.setCurrentIndex(i)
+                    return
+        # 新素材库/空库时 roles() 为空——要能把「内置分类」都列出来才行，
+        # 否则第一次导入根本选不到分类（实测用户第一台机器就是这个状态）。
+        if not rs:
+            self._populate_builtin_roles()
+        elif not self._role_slugs:
+            self._populate_builtin_roles()
+
+    def _populate_builtin_roles(self):
+        """空素材库兜底：列出内置 + 自定义分类（没有模型也该能选）。"""
+        try:
+            all_roles = CL._role_info_all()
+        except Exception:
+            all_roles = []
+        if not all_roles:
+            return
+        self.cmb_role.clear()
+        self.cmb_role.addItems([cn for _s, cn in all_roles])
+        self._role_slugs = [s for s, _cn in all_roles]
+
+    # ---------- 交互 ----------
+    def _pick_src(self):
+        d = QFileDialog.getExistingDirectory(self, "选择模型目录（含 model.json）",
+                                             self._src_dir or "")
+        if not d:
+            return
+        self._src_dir = d
+        self.ed_src.setText(d)
+        # 目录名当默认命名，用户可改
+        if not self.ed_name.text().strip():
+            self.ed_name.setText(os.path.basename(os.path.normpath(d)))
+        self._refresh_hint()
+
+    def _pick_thumb(self):
+        p, _ = QFileDialog.getOpenFileName(
+            self, "选一张缩略图", os.path.expanduser("~"),
+            "图片 (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if not p:
+            return
+        self._thumb_path = p
+        self.lbl_thumb.setText("已选：%s" % os.path.basename(p))
+        # 选了图就切到「自己选一张图」渠道
+        self.cmb_thumb.setCurrentIndex(self.THUMB_PICK)
+
+    def _on_thumb_mode(self, *_):
+        is_pick = self.cmb_thumb.currentIndex() == self.THUMB_PICK
+        self.btn_thumb.setEnabled(is_pick)
+        if not is_pick:
+            self.lbl_thumb.setText("")
+        self._refresh_hint()
+
+    def _new_role(self):
+        """新建一级分类：输入名字 -> 立刻出现在下拉里。"""
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "新建角色分类", "分类名：")
+        if not ok or not str(name).strip():
+            return
+        try:
+            CL.register_role(str(name).strip())
+        except Exception as e:
+            TOAST.toast_err(self, "新建分类失败", str(e))
+            return
+        self._reload_roles(preset=str(name).strip())
+
+    def _new_author(self):
+        """新建二级「改模人」：加进下拉并选中。
+
+        改模人不用持久化登记——它本来就是模型目录里的署名，导入时写进
+        目录即可；这里只是让用户少打一次字。
+        """
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(self, "新建改模人", "改模人名称：")
+        name = str(name or "").strip()
+        if not ok or not name:
+            return
+        for i in range(self.cmb_author.count()):
+            if self.cmb_author.itemText(i) == name:
+                self.cmb_author.setCurrentIndex(i)
+                return
+        self.cmb_author.addItem(name)
+        self.cmb_author.setCurrentIndex(self.cmb_author.count() - 1)
+
+    def _refresh_hint(self, *_):
+        """实时告诉用户「还差什么」，而不是点了导入才报错。"""
+        self.yesButton.setEnabled(self._ready())
+        missing = []
+        if not self._src_dir:
+            missing.append("选模型目录")
+        elif not os.path.isfile(os.path.join(self._src_dir, "model.json")):
+            missing.append("该目录没有 model.json")
+        if not self.ed_name.text().strip():
+            missing.append("填命名")
+        if self.cmb_thumb.currentIndex() == self.THUMB_PICK \
+                and not self._thumb_path:
+            missing.append("选缩略图（或改成别的方式）")
+        self.lbl_hint.setText("还需：%s" % "、".join(missing) if missing else "可以导入")
+
+    def _ready(self):
+        if not self._src_dir:
+            return False
+        if not os.path.isfile(os.path.join(self._src_dir, "model.json")):
+            return False
+        if not self.ed_name.text().strip():
+            return False
+        if self.cmb_thumb.currentIndex() == self.THUMB_PICK \
+                and not self._thumb_path:
+            return False
+        return bool(self._role_slugs)
+
+    # ---------- 结果 ----------
+    def values(self):
+        """-> (src_dir, role_slug, author, costume, thumb_mode, thumb_src)"""
+        idx = self.cmb_role.currentIndex()
+        slug = self._role_slugs[idx] if 0 <= idx < len(self._role_slugs) else ""
+        au = self.cmb_author.currentText().strip()
+        if au in ("（未署名）", ""):
+            au = ""
+        ti = self.cmb_thumb.currentIndex()
+        mode = {0: "pick", 1: "render", 2: "none"}.get(ti, "none")
+        return (self._src_dir, slug, au, self.ed_name.text().strip(),
+                mode, self._thumb_path if mode == "pick" else "")
+
 
 class _ActNameDialog(MessageBoxBase):
     """F2-L5：幕重命名的单行输入对话框。"""

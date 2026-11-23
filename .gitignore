@@ -10,6 +10,9 @@ launcher.log
 recent_projects.json
 import_game_dir.json
 seethrough_out/
+# 运行时目录（v3.6.2 起：最近工程 / 导入目录 / 启动日志都收进这里）
+# 注意用 /.runtime/ 锚定根目录，避免误伤模块内同名目录
+/.runtime/
 
 # 系统/编辑器
 Thumbs.db

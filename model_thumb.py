@@ -213,6 +213,32 @@ def save_data_url(data_url, model_dir, min_bytes=3000):
         return ""
 
 
+def save_image_file(src_path, model_dir):
+    """把用户选的一张图存成 <model_dir>/_thumb.png（导入缩略图渠道②）。
+
+    支持 png/jpg/webp/bmp：统一转 RGBA 再存 PNG，后续的裁剪归一逻辑
+    只认 PNG。裁剪复用 crop_png_bytes（裁透明边 + 补成 3:4 竖幅），
+    这样用户选的横图、竖图、带白边的图都收敛成同一种卡片画幅。
+
+    失败返回 ""（不抛）——缩略图是锦上添花，不该让导入失败。
+    """
+    if not src_path or not model_dir or not os.path.isfile(src_path):
+        return ""
+    try:
+        from PIL import Image
+        im = Image.open(src_path)
+        im = im.convert("RGBA")
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        raw = crop_png_bytes(buf.getvalue())
+        p = thumb_file(model_dir)
+        with open(p, "wb") as f:
+            f.write(raw)
+        return p
+    except Exception:
+        return ""
+
+
 def cmd_load(model_id, model_ref):
     """loadModel 命令（页面用 JSON.parse 收，所以传字符串）。
 
