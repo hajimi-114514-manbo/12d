@@ -2066,17 +2066,31 @@ class VideoWorkbench(QWidget):
         渲染需要 WebEngine + WebGAL 运行时 + Cubism SDK 三者齐全。缺任何
         一样都**如实告知**并保留占位，不谎报成功——用户看到空图比看到
         「已渲染」的假提示要好。
+
+        实测（2026-11-23）：这条路能真出画面——渲染 332x607 RGBA，
+        立绘区 38503 种颜色，归一后 _thumb.png 360x480 / 155KB。
         """
         try:
-            import webgal_preview as WP
+            import l2d_renderer as LR
         except Exception as e:
             TOAST.toast_warn(self, "无法渲染缩略图",
-                             "WebEngine 不可用：%s" % e, duration=4000)
+                             "渲染模块不可用：%s" % e, duration=4000)
             return
-        if not getattr(WP, "HAS_WEBENGINE", False) or not WP.WebPreviewView:
+        try:
+            import webgal_preview as WP
+            has_we = getattr(WP, "HAS_WEBENGINE", False)
+            has_rt = bool(WP._find_runtime_es(WP.RUNTIME_DIR))
+            has_sdk = bool(WP._find_lib_dir())
+        except Exception:
+            has_we = has_rt = has_sdk = False
+        if not (has_we and has_rt and has_sdk):
+            miss = []
+            if not has_we: miss.append("WebEngine 能力包")
+            if not has_rt: miss.append("WebGAL 运行时")
+            if not has_sdk: miss.append("Cubism SDK")
             TOAST.toast_warn(self, "无法渲染缩略图",
-                             "实时预览能力包未安装，可稍后在资产管理里装，"
-                             "或导入时直接选一张图", duration=5000)
+                             "缺少：%s\n可在资产管理里补齐，或导入时直接选一张图"
+                             % "、".join(miss), duration=5000)
             return
         try:
             info = entry or {}
@@ -2084,9 +2098,6 @@ class VideoWorkbench(QWidget):
             if not d or not os.path.isdir(d):
                 TOAST.toast_warn(self, "无法渲染缩略图", "模型目录不存在")
                 return
-            # 渲染链路（离屏视图 -> register_model_dir -> grab_shot）属于
-            # 预览链，这里是**单帧抓图**，与 video_workbench 的实时预览共用
-            # 同一套宿主页与 muppet:// 服务，不另造轮子。
             ok = self._grab_model_thumb(d)
             if ok:
                 TOAST.toast_ok(self, "缩略图已生成", "渲染完成", duration=2000)
@@ -2098,61 +2109,44 @@ class VideoWorkbench(QWidget):
             TOAST.toast_warn(self, "渲染失败", str(e)[:120], duration=4000)
 
     def _grab_model_thumb(self, model_dir):
-        """用离屏 WebPreviewView 渲染单帧存成 _thumb.png。
+        """渲染单帧存成 <model_dir>/_thumb.png。返回 True/False。
 
-        返回 True/False。渲染器是进程级单例（webgal_preview 的约束：
-        一个进程只能有一个 QWebEngineView 在跑渲染），所以这里拿的是
-        工作台已有的那个，没有才新建。
+        **走 l2d_renderer，不走 webgal_preview.grab_shot**：
+        view.grab() 抓的是 QWidget 控件画面，抓不到 WebGL canvas 的内容
+        （实测抓到 1280x720 全是窗口底色，唯一色=1；l2d_renderer._grab()
+        的注释里记着这条坑）。l2d_renderer 走页面侧 canvas.toDataURL()
+        （宿主页 PIXI 开了 preserveDrawingBuffer），拿到的是**透明底立绘本体**。
+
+        渲染器是进程级单例（一个进程只能有一个 QWebEngineView 在跑渲染），
+        所以用 shared_renderer()，不自己 new。
         """
         try:
-            v = self._ensure_thumb_view()
-            if v is None:
+            import l2d_renderer as LR
+            r = LR.shared_renderer()
+            if r is None:
                 return False
-            ref = v.register_model_dir(model_dir)
-            v._send("loadModel", {"modelRef": ref, "modelId": "thumb"})
-            v._send("setTransform", {"modelId": "thumb", "x": 0.5, "y": 0.42,
-                                     "scale": 1.0, "rot": 0.0})
-            # 等页面把模型真正加载出来（ready 事件）；抓早了是空白帧
-            deadline = 60
-            while deadline > 0 and not v.events_of("ready"):
-                QApplication.processEvents()
-                QThread.msleep(50)
-                deadline -= 1
-            if not v.events_of("ready"):
+            ref = r.register(model_dir)
+            if not ref:
                 return False
-            tmp = os.path.join(model_dir, "_grab_tmp.png")
-            if not v.grab_shot(tmp):
+            img = r.render({"ref": ref, "modelId": "thumb1",
+                            "layout": (0.5, 0.5, 1.0, 0.0),
+                            "motion": "", "expression": ""}, timeout=40.0)
+            if img is None:
+                return False
+            # 画面是空的（只有透明背景）不算成功
+            if int((img[:, :, 3] > 8).sum()) < 100:
                 return False
             import model_thumb as _MT
-            with open(tmp, "rb") as f:
-                raw = f.read()
-            with contextlib.suppress(Exception):
-                os.remove(tmp)
-            if not raw:
-                return False
+            from PIL import Image
+            import io as _io
+            buf = _io.BytesIO()
+            Image.fromarray(img, "RGBA").save(buf, "PNG")
+            raw = _MT.crop_png_bytes(buf.getvalue())
             with open(_MT.thumb_file(model_dir), "wb") as f:
-                f.write(_MT.crop_png_bytes(raw))
+                f.write(raw)
             return os.path.isfile(_MT.thumb_file(model_dir))
         except Exception:
             return False
-
-    def _ensure_thumb_view(self):
-        self_v = getattr(self, "_thumb_view", None)
-        if self_v is not None:
-            return self_v
-        with contextlib.suppress(Exception):
-            import webgal_preview as WP
-            v = WP.WebPreviewView(parent=self)
-            v.view.hide()
-            v.start()
-            for _ in range(100):
-                QApplication.processEvents()
-                if v.events_of("boot"):
-                    break
-                QThread.msleep(30)
-            self._thumb_view = v
-            return v
-        return None
 
     def _toggle_role(self, slug):
         """展开/收起某角色（同一时刻只展开一个）。

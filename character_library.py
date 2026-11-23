@@ -618,6 +618,25 @@ def renderable_models():
 
 
 # ============================ 导入模型（v3.6.3）============================
+# 角色根下的共享资源池（动作/表情）。model.json 用 ../.mtn_exp/... 引用它。
+_SHARED_POOL_DIR = ".mtn_exp"
+_POOL_REF_MARK = "../.mtn_exp/"
+
+
+def _references_shared_pool(model_json):
+    """model.json 是否引用了角色根的共享池（../.mtn_exp/...）。
+
+    只看字面引用，不解析 JSON 结构——官方包的引用形式实测就是
+    "../.mtn_exp/motions/..."，字符串里出现即算依赖。
+    """
+    try:
+        with io.open(model_json, encoding="utf-8") as f:
+            s = f.read()
+    except Exception:
+        return False
+    return _POOL_REF_MARK in s
+
+
 def _load_index_items():
     """读素材库索引（完整列表）。索引缺失/损坏抛异常，由调用方转成人话。"""
     p = _index_path()
@@ -759,6 +778,26 @@ def add_model(src_dir, role_slug, author, costume, thumb_mode="none",
         shutil.copytree(src_dir, dst)
     except Exception as e:
         return False, "复制失败：%s" % e, None
+
+    # ---- 共享资源池依赖（关键，漏了就「导入成功但模型加载不出来」）----
+    # 官方/整合包模型的动作与表情**不在模型目录里**，而在角色根的
+    # .mtn_exp/ 下，model.json 里用 ../.mtn_exp/... 引用（实测一个模型
+    # 就有 896 处引用）。只复制模型目录 -> 这些引用全 404 -> 引擎加载
+    # 失败 -> 模型在预览和导出里都是空的。
+    # 所以：源模型引用了 ../.mtn_exp 时，把源角色根的 .mtn_exp 一并复制
+    # 到目标角色根（已存在则跳过，不覆盖别人的）。
+    pool_copied = False
+    try:
+        pool_src = os.path.join(os.path.dirname(src_dir), _SHARED_POOL_DIR)
+        need_pool = os.path.isdir(pool_src) and _references_shared_pool(
+            os.path.join(src_dir, "model.json"))
+        if need_pool:
+            pool_dst = os.path.join(role_dir, _SHARED_POOL_DIR)
+            if not os.path.isdir(pool_dst):
+                shutil.copytree(pool_src, pool_dst)
+                pool_copied = True
+    except Exception:
+        pass                          # 池复制失败不阻断导入（模型至少能被打开）
 
     # ---- 作者署名 ----
     # 写进目录，`_author_from_dir` 自然认到——不用改索引 schema，
