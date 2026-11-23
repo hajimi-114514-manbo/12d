@@ -2191,6 +2191,18 @@ class AssetMenuMixin:
                 Action(FluentIcon.UP, "— 推理加速 —"))
             for a in accel:
                 self._add_asset_action(a, a.get("id") not in miss)
+        # ---- 语音（需求池【语音V1】）：服务检测入口 ----
+        # 语音底模走上面的资产条目；这里放「服务检测」——它不是资产，
+        # 是运行时连通性检查，所以单独一项。
+        self.asset_menu.addSeparator()
+        self.asset_menu.addAction(Action(FluentIcon.MICROPHONE, "— 语音 —"))
+        for a in [x for x in AC.ASSETS
+                  if (x.get("id") or "").startswith("voice_")
+                  and self._asset_visible(x)]:
+            self._add_asset_action(a, a.get("id") not in miss)
+        self.asset_menu.addAction(Action(
+            FluentIcon.SYNC, "语音服务检测…",
+            triggered=self._open_voice_service))
         # task-27 / A4：DSH 联动开关（远程命令通道，两窗口共享）
         self.asset_menu.addSeparator()
         self.asset_menu.addAction(Action(
@@ -2202,6 +2214,19 @@ class AssetMenuMixin:
         self.asset_menu.addAction(Action(
             FluentIcon.SYNC, "刷新状态",
             triggered=self._rebuild_asset_menu))
+
+    def _open_voice_service(self):
+        """打开「语音服务检测」对话框（需求池【语音V1】）。"""
+        try:
+            import voice_service_ui as VSU
+        except Exception as e:
+            TOAST.toast_warn(self, "语音服务", "模块缺失：%s" % e, duration=4000)
+            return
+        try:
+            dlg = VSU.VoiceServiceDialog(self)
+            dlg.exec()
+        except Exception as e:
+            TOAST.toast_warn(self, "语音服务", "打开失败：%s" % e, duration=4000)
 
     def _dsh_link_toggle(self):
         """切换 DSH 联动：开启则接管当前视频窗工作台，关闭则停服务。"""
