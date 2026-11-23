@@ -139,6 +139,107 @@ class ToggleDropDownButton(TransparentDropDownPushButton):
         注意：不影响 RoundMenu 菜单项自己的箭头。"""
         pass
 
+
+# ---------------- qfluentwidgets 菜单左边界修补（v3.6.2） ----------------
+# 现象：「文件」菜单在标题栏最左弹出时，整块菜单向左跑出屏幕，每一项文字
+#       只剩右半截（「新建工程」显示成「建工程」）。
+#
+# 根因（读 qfluentwidgets/components/widgets/menu.py 实测定位）：
+#   顶层菜单的落点算 x = min(pos.x() - margins.left(), rect.right() - w)
+#   —— **只夹右边界，不管左边界**。按钮贴左时 pos.x()=0、左边距=12，
+#   算出来 x=-12，菜单被推出屏幕 12px。库里 4 处这么写
+#   （RoundMenu.adjustPosition L805 + 三个 manager 的 _endPosition L850/927/995），
+#   而子菜单那处（L642）反而写对了：max(..., screenRect.left())。
+#
+# 修法：不改第三方文件（升级即丢、还污染别的环境），改成给这两个入口做
+#   后置夹取——所有菜单弹出都经过它们，一处补丁覆盖全部调用点。
+def _install_menu_edge_fix():
+    """给 qfluentwidgets 的菜单定位补上左/上边界夹取。幂等，重复调用无害。"""
+    try:
+        from qfluentwidgets.components.widgets import menu as _qm
+        from qfluentwidgets.common.screen import getCurrentScreenGeometry as _geom
+    except Exception:
+        return False
+    if getattr(_qm, "_muppet_edge_fixed", False):
+        return True
+
+    def _clamp(menu, pt, w=None, h=None):
+        """把**已经算好的最终落点**夹进当前屏幕。返回修正后的 QPoint。
+
+        重要：这里收到的 pt 已经是库算完 margins 偏移的最终坐标，
+        **不能再动 margins**——否则会把偏移抵消掉，导致菜单整体右移一个
+        左边距（实测 12px，正是这个 bug 的第一版）。只做 max/min 夹取。
+        """
+        try:
+            rect = _geom()
+            lay = menu.layout()
+            m = lay.contentsMargins() if lay else None
+            ml = m.left() if m else 0
+            # 用实际宽度而不是 sizeHint：sizeHint 在动画早期可能偏小；
+            # +5 对齐库里 rect.right() - w 那套留白。
+            ww = (w if w is not None
+                  else max(menu.width(), lay.sizeHint().width() if lay else 0)) + 5
+            hh = h if h is not None else menu.height()
+            # 左边界：库完全没管；右边界：库管了但我们复核一遍保持一致。
+            # 左边界要让出 ml，因为菜单自身的 contentsMargins 是透明留白区，
+            # 贴到 rect.left() 会把可见内容压到边缘外。
+            x = max(rect.left(), min(pt.x(), rect.right() - ww))
+            y = max(rect.top() + 4, min(pt.y(), rect.bottom() - hh + 10))
+            return _qm.QPoint(x, y)
+        except Exception:
+            return pt
+
+    # 入口 1：所有 manager 的 _endPosition（顶层下拉/上拉/淡入）
+    # 注意 self.menu.width() 此时可能还没定，故把 manager 自己的口径传进去。
+    for _mgr_name in ("DropDownMenuAnimationManager",
+                      "PullUpMenuAnimationManager",
+                      "FadeInDropDownMenuAnimationManager"):
+        _cls = getattr(_qm, _mgr_name, None)
+        if _cls is None or not hasattr(_cls, "_endPosition"):
+            continue
+        _orig = _cls._endPosition
+
+        def _patched(self, pos, _o=_orig):
+            p = _o(self, pos)
+            try:
+                return _clamp(self.menu, p, w=self.menu.width(),
+                              h=self.menu.height())
+            except Exception:
+                return p
+
+        _cls._endPosition = _patched
+
+    # 入口 2：RoundMenu.adjustPosition（某些路径绕过 manager）
+    _orig_adj = _qm.RoundMenu.adjustPosition
+
+    def _patched_adj(self):
+        _orig_adj(self)
+        try:
+            self.move(_clamp(self, self.pos()))
+        except Exception:
+            pass
+
+    _qm.RoundMenu.adjustPosition = _patched_adj
+    _qm._muppet_edge_fixed = True
+    return True
+
+
+def _clamp_menu_pos(pos, menu, screen_rect):
+    """菜单落点夹取（纯函数版，供测试直接调用）。
+
+    pos 是「按钮报给菜单的弹出点」（还没减 margins）。为了让测试能直接验
+    证，这里先算出库会得到的最终 x（pos.x() - margins.left()），再夹取，
+    语义与运行时补丁完全一致。
+    """
+    from PySide6.QtCore import QPoint
+    lay = menu.layout()
+    ml = lay.contentsMargins().left() if lay else 0
+    w = max(menu.width(), lay.sizeHint().width() if lay else 0) + 5
+    final_x = pos.x() - ml                      # 库会算成这个值
+    x = max(screen_rect.left(), min(final_x, screen_rect.right() - w))
+    # 反解回「按钮该报的 pos.x()」——调用方拿着它去调 _endPosition 才是对的
+    return QPoint(x + ml, pos.y())
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import l2d_rig_core as C
 
@@ -5777,6 +5878,10 @@ def run_app():
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
+    # 菜单左/上边界夹取：qfluentwidgets 顶层菜单只夹右边界，按钮贴左时
+    # 菜单会整个跑出屏幕、文字只剩右半截（详见 _install_menu_edge_fix）。
+    # 放在 QApplication 之后：qfluentwidgets 的 menu 模块此时已可导入。
+    _install_menu_edge_fix()
     # 界面主题：深色 / 浅色（半透明磨砂白）。用户上次的选择存在
     # %APPDATA%\MuppetStudio\ui_theme.json，apply 时读回来并套上全局 QSS。
     TH.apply(app)
