@@ -13,6 +13,7 @@
     asset_downloader 只管"怎么下、下到哪、解压"
 """
 import contextlib
+import hashlib
 import os
 import re
 import shutil
@@ -289,6 +290,17 @@ class AssetDownloadThread(QThread):
             if not ok:
                 self.failed.emit("下载失败：%s（已下部分保留，可重试续传）" % rel)
                 return
+            # ---- 逐文件 sha256 校验（资产带 sha256 表时启用）----
+            # 为什么需要：HF 的 main 分支理论上可被替换，只验「文件存在且
+            # 大小对」挡不住上游被换成内容不同的文件。钉死 sha256 才算真校验。
+            # 代价：每文件多读一遍（1.4GB 约 1~2 秒），值得。
+            bad = self._verify_sha256(rel, target)
+            if bad:
+                self.failed.emit("完整性校验失败：%s 内容与官方不一致"
+                                 "（已删除该文件，请重试）" % rel)
+                with contextlib.suppress(Exception):
+                    os.remove(target)
+                return
         # ---- 下载后严格校验：清单里每个文件都必须真实落地且大小 > 0 ----
         # 这一步是防"读完不到文件却反复重下"的关键：如果落盘位置与清单/应用
         # 读取路径不一致，这里会立刻报出来，而不是让调用方以为成功。
@@ -304,6 +316,32 @@ class AssetDownloadThread(QThread):
                              % (len(missing), missing[0]))
             return
         self.finished_ok.emit(dest_dir)
+
+    def _verify_sha256(self, rel, target):
+        """校验单文件 sha256；资产没配 sha256 或文件不在表里 -> 返回 ""（不校验）。
+
+        返回空串=通过；返回非空=失败原因。
+        """
+        try:
+            table = self.asset.get("sha256") or {}
+            want = (table.get(rel) or "").strip().lower()
+            if not want:
+                return ""
+            if not os.path.isfile(target):
+                return "文件不存在"
+            h = hashlib.sha256()
+            with open(target, "rb") as f:
+                while True:
+                    b = f.read(4 * 1048576)
+                    if not b:
+                        break
+                    h.update(b)
+            got = h.hexdigest().lower()
+            if got != want:
+                return "sha256 不符（期望 %s… 实得 %s…）" % (want[:12], got[:12])
+            return ""
+        except Exception as e:
+            return "校验异常：%s" % e
 
     def _download_file(self, url, target, base_bytes=0, total_bytes=0):
         """单文件断点续传（.part）。成功返回文件大小，失败返回 None。"""

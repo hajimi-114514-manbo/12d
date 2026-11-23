@@ -62,15 +62,35 @@ if m:
     chk(need >= 0, "待下载非负")
 
 print("\n=== 4. 已装的包不该有「下载」按钮 ===")
+
+
+def _action_labels(w):
+    """操作列里所有按钮的文案。
+
+    操作列现在是**容器**（语音资产要同时给「下载」和「音色管理」两个入口），
+    所以不能只看 cellWidget 本身有没有 text()，要递归找里面的按钮。
+    """
+    from qfluentwidgets import PushButton
+    out = []
+    if w is None:
+        return out
+    if hasattr(w, "text"):
+        out.append(w.text())
+    for b in w.findChildren(PushButton):
+        out.append(b.text())
+    return out
+
+
 for r in range(n):
     it = d._assets[r]
     w = d.table.cellWidget(r, 4)
+    labels = _action_labels(w)
     if it["installed"]:
-        chk(not hasattr(w, "text") or w.text() not in ("下载", "补全"),
+        chk("下载" not in labels and "补全" not in labels,
             "%s 已装 -> 无下载按钮 (%s)" % (it["id"], type(w).__name__))
     else:
-        chk(hasattr(w, "text") and w.text() in ("下载", "补全"),
-            "%s 未装 -> 有按钮 '%s'" % (it["id"], getattr(w, "text", lambda: "?")()))
+        chk("下载" in labels or "补全" in labels,
+            "%s 未装 -> 有按钮 %s" % (it["id"], labels))
 
 print("\n=== 5. 无 url 的包点下载：给提示不崩 ===")
 fake = {"asset": {"id": "fake_no_url", "name": "测试无地址包", "kind": "model", "size": 1},

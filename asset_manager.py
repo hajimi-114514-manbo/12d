@@ -150,20 +150,22 @@ class AssetManagerDialog(QDialog):
     def _fetch(self):
         """读清单 + 实时状态。任何一步失败都不让对话框炸掉。"""
         AC = _catalog()
-        lib = _lib_dir()
         rows = []
         for a in AC.ASSETS:
             aid = str(a.get("id") or "")
+            # **不按素材库门控**：不同资产的落点不同（语音底模落引擎目录，
+            # 不依赖素材库）。曾经一律 `if lib else False`，结果没素材库时
+            # 连语音底模也永远显示「未装」，用户点了下不动。
             try:
-                inst = bool(AC.is_installed(a, _BASE_DIR)) if lib else False
+                inst = bool(AC.is_installed(a, _BASE_DIR))
             except Exception:
                 inst = False
             try:
-                sz = float(AC.installed_size(a, _BASE_DIR)) if lib else 0.0
+                sz = float(AC.installed_size(a, _BASE_DIR))
             except Exception:
                 sz = 0.0
             # 部分文件缺失（解压中断）——标记出来，别让人以为装好了
-            # 注意：asset_files_missing 返回 (缺文件列表, 缺目录列表)，不是 bool。
+            # 注意：asset_files_missing 返回 (已存在列表, 缺失列表)，不是 bool。
             missing = False
             try:
                 mf, md = AC.asset_files_missing(a, _BASE_DIR)
@@ -199,7 +201,15 @@ class AssetManagerDialog(QDialog):
         got = sum(r["inst_size"] for r in self._assets if r["installed"])
         self.summary.setText("已安装 %d / %d 个，占磁盘 %s；未装还需下载 %s"
                              % (done, n, _human(got), _human(need)))
-        self.status.setText("仓库根：%s" % (_lib_dir() or "未找到素材库"))
+        # 落点有两个（素材库 / 语音引擎目录），只说一个会误导
+        try:
+            import voice_paths as VP
+            vdir = VP.voice_dir()
+        except Exception:
+            vdir = ""
+        self.status.setText("素材库根：%s　|　语音引擎：%s"
+                            % (_lib_dir() or "未找到素材库",
+                               vdir or "未找到"))
 
     def _fill_table(self):
         self.table.setRowCount(len(self._assets))
@@ -216,17 +226,47 @@ class AssetManagerDialog(QDialog):
             self.table.setItem(r, 3, QTableWidgetItem(st))
 
             # 操作列：放按钮
-            if it["installed"]:
+            # 语音类资产要两个入口（下载底模 / 管理音色），所以用容器装多个
+            # 按钮，而不是一个 cell 只能塞一个 widget。
+            extra = str(it["asset"].get("extra_action") or "")
+            if it["installed"] and not extra:
                 w = CaptionLabel("—", self)
                 w.setAlignment(Qt.AlignCenter)
             else:
-                txt = "补全" if it["missing"] else "下载"
-                w = PrimaryPushButton(txt, self)
-                w.setFixedHeight(28)
-                w.clicked.connect(
-                    lambda _=False, x=it: self._start_download(x))
+                box = QWidget(self)
+                bl = QHBoxLayout(box)
+                bl.setContentsMargins(4, 2, 4, 2)
+                bl.setSpacing(4)
+                if not it["installed"]:
+                    txt = "补全" if it["missing"] else "下载"
+                    b = PrimaryPushButton(txt, box)
+                    b.setFixedHeight(28)
+                    b.clicked.connect(
+                        lambda _=False, x=it: self._start_download(x))
+                    bl.addWidget(b)
+                if extra == "voices":
+                    vb = PushButton("音色管理", box)
+                    vb.setFixedHeight(28)
+                    vb.setToolTip("导入 / 删除角色音色（ckpt + pth 成对）")
+                    vb.clicked.connect(lambda _=False: self._open_voices())
+                    bl.addWidget(vb)
+                w = box
             self.table.setCellWidget(r, 4, w)
         self.table.resizeRowsToContents()
+
+    def _open_voices(self):
+        """打开语音音色管理对话框。"""
+        try:
+            import voice_manager as VM
+        except Exception as e:
+            TOAST.toast_warn(self, "音色管理", "模块缺失: %s" % e, duration=4000)
+            return
+        try:
+            dlg = VM.VoiceManagerDialog(self)
+            dlg.exec()
+            self.reload()
+        except Exception as e:
+            TOAST.toast_warn(self, "音色管理", "打开失败: %s" % e, duration=4000)
 
     # ---------------------------------------------------------------- 动作
     def _start_download(self, it):
@@ -234,7 +274,11 @@ class AssetManagerDialog(QDialog):
         aid = it["id"]
         if aid in self._busy: return
         url = a.get("url") or ""
-        if not url and not a.get("parts"):
+        # **files 模式也算有下载地址**：HF 仓库的逐文件模型（LayerDiff3D /
+        # Marigold / MobileSAM / 语音底模）走 repo+files，由 asset_urls 现拼
+        # URL，没有 url 字段。曾经这里只认 url/parts -> 这些资产点「下载」
+        # 直接报「还没有配置下载地址」，是死路。
+        if not url and not a.get("parts") and not a.get("files"):
             TOAST.toast_warn(self, "资产下载", "%s 还没有配置下载地址" % it["name"], duration=4000)
             return
         try:

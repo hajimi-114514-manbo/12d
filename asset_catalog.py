@@ -86,7 +86,82 @@ _MARIGOLD_FILES = [
     "vae/diffusion_pytorch_model.safetensors",
 ]
 
+# ---- GPT-SoVITS 语音底模（MIT 许可，可自由分发）--------------------------
+# 官方仓库 lj1995/GPT-SoVITS（HF，MIT）。木偶只做**客户端**，不内置推理
+# 代码、不做训练，底模从 HF 官方仓库直接下（hf-mirror 优先，官方回退）。
+#
+# **哪些文件是推理必需的**（从 GPT_SoVITS/TTS_infer_pack/TTS.py 的
+#  default_configs["v2ProPlus"] 读出来，不是猜的）：
+#   t2s_weights_path    -> s1v3.ckpt                      GPT 底模
+#   vits_weights_path   -> v2Pro/s2Gv2ProPlus.pth          SoVITS 底模
+#   cnhuhbert_base_path -> chinese-hubert-base/            特征提取（3 文件）
+#   bert_base_path      -> chinese-roberta-wwm-ext-large/ 文本编码（4 文件）
+# 另加 SV（说话人验证，用于音色相似度打分）与 v2Pro 判别器（推理可选）。
+#
+# 体积 1.37GB。**不含角色音色**（CC-BY-NC 禁止二次配布，且 HF 上没有，
+# 只能用户自备 —— 走「导入音色」入口）。
+_GSV_FILES = [
+    "s1v3.ckpt",
+    "v2Pro/s2Gv2ProPlus.pth",
+    "v2Pro/s2Gv2Pro.pth",
+    "sv/pretrained_eres2netv2w24s4ep4.ckpt",
+    "chinese-hubert-base/config.json",
+    "chinese-hubert-base/preprocessor_config.json",
+    "chinese-hubert-base/pytorch_model.bin",
+    "chinese-roberta-wwm-ext-large/config.json",
+    "chinese-roberta-wwm-ext-large/pytorch_model.bin",
+    "chinese-roberta-wwm-ext-large/tokenizer.json",
+]
+
+# 逐文件 sha256（2026-11-23 实测本地裁剪版与 HF 官方逐字节一致）
+_GSV_SHA256 = {
+    "s1v3.ckpt":
+        "87133414860ea14ff6620c483a3db5ed07b44be42e2c3fcdad65523a729a745a",
+    "v2Pro/s2Gv2ProPlus.pth":
+        "d42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b",
+    "v2Pro/s2Gv2Pro.pth":
+        "0f8ead815234365edf045c6d86370ed6e4f440e8195be77ff0ea72684ad406a5",
+    "sv/pretrained_eres2netv2w24s4ep4.ckpt":
+        "4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35",
+    "chinese-hubert-base/config.json":
+        "c3e5060a1277e0f078cc6be9da4528a605dba6ece93018981fe2c820e5c7b103",
+    "chinese-hubert-base/preprocessor_config.json":
+        "dcd684124d06722947939d41ea6ae58dbf10968c60a11a29f23ddc602c64a29b",
+    "chinese-hubert-base/pytorch_model.bin":
+        "24164f129c66499d1346e2aa55f183250c223161ec2770c0da3d3b08cf432d3c",
+    "chinese-roberta-wwm-ext-large/config.json":
+        "3d57de2fd7e80d0e5c8ff194f0bbb6baa10df7e43fc262a0cc71298a78b0a3e5",
+    "chinese-roberta-wwm-ext-large/pytorch_model.bin":
+        "e53a693acc59ace251d143d068096ae0d7b79e4b1b503fa84c9dcf576448c1d8",
+    "chinese-roberta-wwm-ext-large/tokenizer.json":
+        "173796956820ea27bd14f76bf28162607ff4254807e2948253eb5b46f5bb643b",
+}
+
 ASSETS = [
+    {
+        # GPT-SoVITS 语音底模（MIT 许可，可自由分发）
+        "id": "voice_basemodels",
+        "name": "语音底模（GPT-SoVITS，约 1.4GB）",
+        "desc": "AI 配音的推理底模（官方 lj1995/GPT-SoVITS，MIT 许可）。"
+                "含 GPT/SoVITS 权重、特征提取与文本编码器。"
+                "**不含角色音色**（CC-BY-NC 不可二次配布，需自行导入）"
+                "与推理引擎本体。",
+        "kind": "model",
+        "repo": "lj1995/GPT-SoVITS",
+        "files": _GSV_FILES,
+        "sha256": _GSV_SHA256,
+        "size": 1465875361,
+        "url": "",
+        # 落点：<语音引擎根>/GPT_SoVITS/pretrained_models/
+        # root=voice -> voice_paths.voice_dir()（用户数据目录，见 voice_paths）
+        "root": "voice",
+        "dest": os.path.join("GPT_SoVITS", "pretrained_models"),
+        "check": {"type": "files",
+                  "marker": "s1v3.ckpt",
+                  "min_bytes": 150000000},
+        # 额外入口：音色管理（导入/删除角色音色）
+        "extra_action": "voices",
+    },
     {
         "id": "runtime",
         "name": "内置 Python 运行时",
@@ -309,9 +384,25 @@ def _parts_installed(asset, base_dir):
 
 
 def installed_path(asset, base_dir):
-    """资产装好后应处的目录/文件路径：os.path.join(base_dir, dest)。"""
+    """资产装好后应处的目录/文件路径：os.path.join(base_dir, dest)。
+
+    **root 语义**：资产可带 "root" 指定落到别处（不跟随 base_dir）：
+        root == "voice" -> voice_paths.voice_dir()（用户数据目录，语音引擎）
+      其余情况（如 runtime_root 的 site-packages）由 parts_target_dir 处理。
+    """
     try:
-        if not isinstance(asset, dict) or not base_dir: return ""
+        if not isinstance(asset, dict):
+            return ""
+        root = (asset.get("root") or "").strip()
+        if root == "voice":
+            try:
+                import voice_paths as VP
+                base = VP.voice_dir()
+            except Exception:
+                base = ""
+            if not base:
+                return ""
+            return os.path.join(base, _norm(asset.get("dest", "")))
         return os.path.join(base_dir, _norm(asset.get("dest", "")))
     except Exception:
         return ""
@@ -323,8 +414,8 @@ def _check_path(asset, base_dir):
         chk = asset.get("check") or {}
         ctype = chk.get("type")
         if ctype == "exe": return os.path.join(base_dir, _norm(chk.get("path", "")))
-        # files：marker 相对 dest
-        return os.path.join(base_dir, _norm(asset.get("dest", "")),
+        # files：marker 相对 dest（dest 走 installed_path -> 支持 root 语义）
+        return os.path.join(installed_path(asset, base_dir),
                             _norm(chk.get("marker", "")))
     except Exception:
         return ""
