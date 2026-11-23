@@ -13,6 +13,13 @@
 import os
 import socket
 import sys
+
+# ---- 测试引导：让 tests/ 里的脚本能 import 到项目根的同级模块 ----
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)          # tests/ 的上一级 = 项目根
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
 import tempfile
 import threading
 import time

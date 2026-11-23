@@ -1,5 +1,5 @@
-// 木偶工作室启动器（v3.0.1 重建：原源码从未入库，按 CHANGELOG v2.8.0 行为规格重写）
-// 编译: csc /target:winexe /win32icon:anon_sewing_icon.ico /out:木偶工作室.exe launcher.cs
+﻿// 木偶工作室启动器（v3.0.1 重建：原源码从未入库，按 CHANGELOG v2.8.0 行为规格重写）
+// 编译: csc /target:winexe /win32icon:..\assets\anon_sewing_icon.ico /out:木偶工作室.exe launcher.cs
 // 行为（与 v2.8.0 一致）：
 //   1. launcher.ini 的 python= 存在 → 用它
 //   2. 同目录 runtime\python.exe（内置便携运行时）

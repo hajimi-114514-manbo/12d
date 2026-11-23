@@ -267,9 +267,46 @@ VERSION = "3.6.1"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
-ICON_PNG = os.path.join(V2, "anon_sewing_icon.png")
-ICON_ICO = os.path.join(V2, "anon_sewing_icon.ico")
+ICON_PNG = os.path.join(V2, "assets", "anon_sewing_icon.png")
+ICON_ICO = os.path.join(V2, "assets", "anon_sewing_icon.ico")
 DEFAULT_DIR = os.path.join(V2, "示例工程")
+
+
+def _runtime_file(name):
+    """运行时小文件的落盘路径（最近工程 / 导入记忆 / 启动日志）。
+
+    2026-11-23：这些文件原来散在根目录，跟 55 个 .py 模块混在一起很难看。
+    统一收进 `.runtime/`（带点前缀，资源管理器里默认排最前且不像源码）。
+
+    兼容：旧位置已有文件、新位置还没有时，**继续用旧位置**并在首次写入后
+    自然迁移到新位置——不在启动时做移动，避免只读目录/权限问题把启动卡住。
+    用 `_runtime_read_path()` 读、`_runtime_file()` 写。
+    """
+    d = os.path.join(V2, ".runtime")
+    new = os.path.join(d, name)
+    old = os.path.join(V2, name)
+    try:
+        if not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+        if os.path.isfile(new):
+            return new
+        if os.path.isfile(old):
+            return new          # 写新位置，老文件留着当备份（下次读就走新的）
+        return new
+    except Exception:
+        # 目录建不出来（只读安装目录等）就退回根目录，功能优先于整洁
+        return old
+
+
+def _runtime_read_path(name):
+    """运行时文件读取路径：新位置优先，没有就回退旧位置。取不到返回 None。"""
+    new = os.path.join(V2, ".runtime", name)
+    old = os.path.join(V2, name)
+    if os.path.isfile(new):
+        return new
+    if os.path.isfile(old):
+        return old
+    return None
 # ffmpeg 回退：应用自带优先，其次历史上放过的共享位置
 FFMPEG_CANDIDATES = [os.path.join(V2, "ffmpeg.exe"),
                      r"D:\BaiduNetdiskDownload\Vocal2Midi\ffmpeg.exe"]
@@ -1199,9 +1236,23 @@ class RigCanvas(QWidget):
                 break
 
 # ---------------- 最近工程（持久化：存储上限 100；菜单只显 5，欢迎页按类型分页展示） ----------------
-RECENT_FILE = os.path.join(V2, "recent_projects.json")
+RECENT_FILE = _runtime_file("recent_projects.json")
+# 注意：不要预计算「读路径」成一个独立常量——测试常把 RECENT_FILE 指到临时
+# 文件，预计算的副本不会跟着变，就会出现「写临时文件、读真实文件」的分裂。
+# 读路径一律在用到时现算（见 _recent_read_path）。
 RECENT_MAX = 100
 RECENT_MENU_MAX = 5
+
+
+def _recent_read_path():
+    """最近工程的读取路径：RECENT_FILE 存在就读它（测试注入优先），
+    否则回退旧位置（根目录），都没有则返回 None。"""
+    try:
+        if os.path.isfile(RECENT_FILE):
+            return RECENT_FILE
+    except Exception:
+        pass
+    return _runtime_read_path("recent_projects.json")
 
 def load_recent():
     """读最近工程列表。顺手丢弃已失效的条目。
@@ -1214,8 +1265,11 @@ def load_recent():
     注意：判断「活着」用文件系统而非仅内存，所以每次读都会 stat 一遍
     （最多 RECENT_MAX 个），比反复弹「工程已失效」便宜。
     """
+    rp = _recent_read_path()
+    if not rp:
+        return []
     try:
-        items = json.load(open(RECENT_FILE, encoding="utf8"))
+        items = json.load(open(rp, encoding="utf8"))
     except Exception:
         return []
     if not isinstance(items, list):
@@ -1248,7 +1302,17 @@ def save_recent(items):
 # 发现那个目录已经不存在（或不是合法的 game 目录）才重新弹框。
 # 存独立小文件而不是塞进 recent_projects——后者是「工程」列表，语义不同，
 # 混进去会污染欢迎页/最近菜单。
-IMPORT_GDIR_FILE = os.path.join(V2, "import_game_dir.json")
+IMPORT_GDIR_FILE = _runtime_file("import_game_dir.json")
+
+
+def _import_gdir_read_path():
+    """导入记忆读取路径：现算，不预存（同 _recent_read_path 的理由）。"""
+    try:
+        if os.path.isfile(IMPORT_GDIR_FILE):
+            return IMPORT_GDIR_FILE
+    except Exception:
+        pass
+    return _runtime_read_path("import_game_dir.json")
 
 def is_game_dir(d):
     """是不是可用的 WebGAL 整合包目录（含 game/ 子目录或自身就是 game/）。
@@ -1280,8 +1344,11 @@ def is_game_dir(d):
 
 def load_import_game_dir():
     """读记住的整合包目录；不存在/已失效返回 None（调用方据此弹框）。"""
+    rp = _import_gdir_read_path()
+    if not rp:
+        return None
     try:
-        obj = json.load(open(IMPORT_GDIR_FILE, encoding="utf8"))
+        obj = json.load(open(rp, encoding="utf8"))
     except Exception:
         return None
     d = str(obj.get("dir") or "") if isinstance(obj, dict) else ""

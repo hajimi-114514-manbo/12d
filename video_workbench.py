@@ -48,7 +48,42 @@ from script_editor import ScriptEditor
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ_BASE = os.path.join(_HERE, "projects")
-RECENT_FILE = os.path.join(_HERE, "recent_projects.json")
+
+
+def _recent_file():
+    """最近工程文件：写 `.runtime/`，读时新位置优先、回退旧位置。
+
+    与 l2d_rig_qt._runtime_file 同语义，但这里**不能 import 主模块**
+    （video_workbench 会被主模块 import，反向依赖成环），故就地实现一份。
+    """
+    d = os.path.join(_HERE, ".runtime")
+    new = os.path.join(d, "recent_projects.json")
+    old = os.path.join(_HERE, "recent_projects.json")
+    try:
+        os.makedirs(d, exist_ok=True)
+        return new
+    except Exception:
+        return old                      # 只读目录等异常时退回根目录
+
+
+def _recent_read():
+    """最近工程读取路径：RECENT_FILE 存在就读它（测试注入优先），
+    否则回退根目录旧位置。现算，不预存——预存副本不会跟着 RECENT_FILE 变。"""
+    try:
+        if os.path.isfile(RECENT_FILE):
+            return RECENT_FILE
+    except Exception:
+        pass
+    new = os.path.join(_HERE, ".runtime", "recent_projects.json")
+    old = os.path.join(_HERE, "recent_projects.json")
+    if os.path.isfile(new):
+        return new
+    if os.path.isfile(old):
+        return old
+    return RECENT_FILE
+
+
+RECENT_FILE = _recent_file()
 META_NAME = "video_project.json"
 
 DEFAULT_DUR = {"image": 3.0, "video": 0, "puppet": 0, "audio": 0}  # 0=用素材全长
@@ -1693,7 +1728,7 @@ class VideoWorkbench(QWidget):
         """
         try:
             try:
-                items = json.load(open(RECENT_FILE, encoding="utf8"))
+                items = json.load(open(_recent_read(), encoding="utf8"))
                 assert isinstance(items, list)
             except Exception:
                 items = []
