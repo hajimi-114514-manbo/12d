@@ -291,6 +291,14 @@ class WelcomeWindow(QWidget):
         self.btn_open.setFixedHeight(38)
         self.btn_open.clicked.connect(self._on_browse)
         sl.addWidget(self.btn_open)
+        # 「资产管理」：列出所有按需下载的能力包（运行环境 / 拆图模型 / 加速包 /
+        # WebEngine 预览 / WebGAL 运行时），可看状态、看体积、一键下载。
+        # 工作台里也有同名菜单（AssetMenuMixin），但那按当前编辑页过滤且藏在顶部
+        # 菜单里；欢迎页是「还没进任何页」的视角，需要全量。
+        self.btn_assets = PushButton("资产管理", side)
+        self.btn_assets.setFixedHeight(38)
+        self.btn_assets.clicked.connect(self._on_assets)
+        sl.addWidget(self.btn_assets)
         sl.addStretch(1)
         tip = CaptionLabel("每种工程最多保留 50 个", side)
         tip.setStyleSheet("color:%s;" % TH.t("text_dim"))
@@ -578,6 +586,25 @@ class WelcomeWindow(QWidget):
         self._filt = text or ""
         self._page = 0
         self._refresh_view()
+
+    def _on_assets(self):
+        """「资产管理」：弹全量可下载包清单（惰性 import，未用时不拖启动）。
+
+        asset_manager 只依赖 asset_catalog / asset_downloader / asset_paths，
+        不 import 主模块，所以欢迎页调它不会把工作室和 torch 一起拖起来。
+        """
+        try:
+            import asset_manager as AM
+        except Exception as e:
+            InfoBar.warning("资产管理", "模块加载失败: %s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=5000)
+            return
+        try:
+            dlg = AM.AssetManagerDialog(self)
+            dlg.exec()
+        except Exception as e:
+            InfoBar.warning("资产管理", "打开失败: %s" % e, parent=self,
+                            position=InfoBarPosition.TOP, duration=5000)
 
     # ---------------- 检查更新（task-13，点击才发网络请求，不阻塞启动） ----------------
     def _on_check_update(self):
