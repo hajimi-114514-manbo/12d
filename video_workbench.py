@@ -1682,18 +1682,42 @@ class VideoWorkbench(QWidget):
         return self.save_project(ask=True)
 
     def _record_recent(self):
+        """把当前视频工程写进最近列表（去重、置顶、剪掉失效条目）。
+
+        2026-11-23 修：原实现直接 items[:100] 落盘，且不校验目录是否存在。
+        视频工程动辄几百 MB，一旦目录被删（临时工程、清理、移动）条目会永远
+        留在列表里点不开；欢迎页 load_recent 的存活过滤只在读时生效，不会
+        回写清理，于是脏条目会一直跟着文件走。
+        这里改成写入前先剔除「目录不存在」的条目，上限对齐主模块 RECENT_MAX
+        （原来是硬编码 100，和 l2d_rig_qt.RECENT_MAX 两个数字各改各的）。
+        """
         try:
             try:
                 items = json.load(open(RECENT_FILE, encoding="utf8"))
                 assert isinstance(items, list)
             except Exception:
                 items = []
+
+            # 先剔失效条目（目录没了 / 空 dir），顺便把损坏项丢掉
+            alive = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                pd = str(it.get("dir") or "")
+                if pd and os.path.isdir(pd):
+                    alive.append(it)
+
             d = os.path.normpath(self.proj_dir)
-            items = [it for it in items
+            alive = [it for it in alive
                      if os.path.normpath(it.get("dir", "")) != d]
-            items.insert(0, {"dir": d, "name": os.path.basename(d),
+            alive.insert(0, {"dir": d, "name": os.path.basename(d),
                              "type": "video", "layers": 0})
-            json.dump(items[:100], open(RECENT_FILE, "w", encoding="utf8"),
+
+            try:
+                from l2d_rig_qt import RECENT_MAX as _MAX
+            except Exception:
+                _MAX = 100
+            json.dump(alive[:_MAX], open(RECENT_FILE, "w", encoding="utf8"),
                       ensure_ascii=False, indent=2)
         except Exception:
             pass

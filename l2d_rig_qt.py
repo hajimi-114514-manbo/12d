@@ -1103,18 +1103,35 @@ RECENT_MAX = 100
 RECENT_MENU_MAX = 5
 
 def load_recent():
+    """读最近工程列表。顺手丢弃已失效的条目。
+
+    2026-11-23 修：原实现只做**读时过滤**（不满足条件就不 yield），但从不
+    回写，失效条目会一直留在 json 里。视频工程动辄 300MB+，临时工程或
+    已删除目录的条目会永久挂着，欢迎页点开就报「工程已失效」。
+    这里改成：过滤后若条目数变少，把干净版回写一次（失败也不影响返回）。
+
+    注意：判断「活着」用文件系统而非仅内存，所以每次读都会 stat 一遍
+    （最多 RECENT_MAX 个），比反复弹「工程已失效」便宜。
+    """
     try:
         items = json.load(open(RECENT_FILE, encoding="utf8"))
     except Exception:
         return []
+    if not isinstance(items, list):
+        return []
     out = []
     for it in items:
+        if not isinstance(it, dict):
+            continue
         d = it.get("dir")
         if d and (os.path.isfile(os.path.join(d, "layers_meta.json"))
                   or os.path.isfile(os.path.join(d, "video_project.json"))):
             out.append(it)
         if len(out) >= RECENT_MAX:
             break
+    # 有脏条目就回写干净版（避免"每次读都过滤、文件却越来越脏"）
+    if len(out) != len(items):
+        save_recent(out)
     return out
 
 def save_recent(items):
