@@ -43,6 +43,14 @@ templates/**/live2dcubismcore.min.js
 /asset_library/
 dist/MuppetStudio-Update-v*.zip
 
-# PyInstaller �м������������룩
+# PyInstaller �м�����������룩
 build_launcher_dist/
 build_launcher_work/
+
+# 语音引擎（GPT-SoVITS）—— 仅本机测试用，不进 git
+# 引擎 9.3GB + 音色 4GB；模型授权 CC-BY-NC 且禁止二次配布。
+# 代码与文档放在仓库外：D:\work\puppet\语音接入、D:\gsv_slim\work
+/voicesrv/
+/voices/
+/docs/语音接入/
+/语音接入/
