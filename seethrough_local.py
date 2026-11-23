@@ -26,12 +26,11 @@ import types
 from datetime import datetime
 
 ST_ROOT = os.path.dirname(os.path.abspath(__file__))
-# 模型目录：优先自带 models\（唯一实际使用的路径）；
-# ../l2d_rig/models 的 V1 回退仅为兼容旧部署保留——V1 已于 2026-11-10 退役，
-# 源码归档在本仓库 legacy/v1/，本地目录已删除，该回退不会再命中。
+# 模型目录：只认自带的 models\。
+# 曾经有一条 ../l2d_rig/models 的 V1 回退，V1 已于 2026-11-10 退役、
+# 2026-11-24 源码也从仓库删除了，那条回退永远不可能命中，一并去掉
+# （留着只会让人以为还有第二个模型位置）。
 MODELS_DIR = os.path.join(ST_ROOT, "models")
-if not os.path.isdir(MODELS_DIR):
-    MODELS_DIR = os.path.normpath(os.path.join(ST_ROOT, "..", "l2d_rig", "models"))
 ST_CORE = os.path.join(ST_ROOT, "see-through")   # 核心库已随应用自包含
 ST_COMMON = os.path.join(ST_CORE, "common")
 

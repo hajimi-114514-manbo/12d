@@ -1,7 +1,63 @@
 # 木偶工作室 更新日志（CHANGELOG）
 
 > 给后续会话/维护者快速回忆用。按时间倒序，最新在最上。
-> 目录铁律：V1 `D:\work\puppet\l2d_rig\` 已冻结不再改；V2 `D:\work\puppet\muppet_studio\` 一切用相对路径（以本目录为根）。
+> 目录铁律：本项目 `D:\work\puppet\muppet_studio\` 一切用相对路径（以本目录为根）。
+> V1（骨架工作室）已于 2026-11-10 退役、2026-11-24 源码从仓库删除，
+> 不再有「V1 冻结区」这条约束。
+
+---
+
+## 未发布（2026-11-24）语音链 V1 打通 + 删除 V1 归档
+
+### 一、语音 V1：服务连通性探测
+
+需求池【语音V1】落地。**真服务端到端验收通过**（真引擎起 api_v2 全链路）。
+
+关键事实（读 `api_v2.py` 得出，不是猜的）：
+  · 默认 `127.0.0.1:9880`；**模块级就 `tts_pipeline = TTS(tts_config)`**，
+    所以「服务起来了」= 「模型加载成功了」
+  · `/control` 只支持 restart/exit，**没有健康检查命令**
+  · `TTS.py:556-557` 明确 `del vits_model.enc_q` —— 加载 v2ProPlus 时那句
+    `_IncompatibleKeys(missing_keys=['enc_q...'])` 是**预期行为，不是故障**
+
+探测为什么不能只 ping 端口：`api_v2.py` 是 FastAPI，任何 HTTP 服务都能返回
+200/404，只验端口会把网页服务器误判成语音服务。改用响应指纹：
+    GET /set_gpt_weights  缺参数 -> 400 {"message":"gpt weight path is required"}
+    GET /control          缺参数 -> 400 {"message":"command is required"}
+
+实测（RTX 4060 / v2ProPlus）：
+  · 冷启动到端口就绪 **8.1 秒**；二次探测 **0.03 秒**
+  · 切 GPT 侧权重 0.37s、SoVITS 侧 0.90s
+  · 合成短句「你好，我是千早爱音。」-> 1.94 秒音频 / 耗时 5.35s（含预热）
+  · 合成长句（55 字）-> 10.48 秒音频 / 耗时 2.95s（RTF ≈ 0.28）
+  · 合成日文「今日は三月二十日、朝の七時です。」-> 3.28 秒 / 1.05s
+  · 输出格式：**单声道 32kHz 16bit**（不是 44.1kHz，V3 写文件时参数要对齐）
+  · `prompt_text` 留空 -> 引擎警告 `Prompt free is not supported batch_infer`
+    并自动降级 naive 模式（能用，但要在 V3 决定留空还是让用户填）
+
+**踩过的坑（对任何「调子进程收输出」都成立）**：起服务时用
+`stdout=subprocess.PIPE` 但**不读管道**，子进程写日志把缓冲写满后自己
+阻塞 —— 表现像「服务 120 秒还没就绪」，实际只要 8 秒。要么读走 stdout，
+要么重定向到文件/NUL。
+
+新增：`voice_probe.py`（探测核心）、`voice_service_ui.py`（设置与检测界面，
+探测走 QThread 不卡 UI）、资产管理菜单「— 语音 —」分区。
+测试：`tests/test_voice_probe.py`、`tests/test_voice_service_ui.py`。
+测试重点是**不许误判**：nginx 欢迎页、空响应 HTTP 都不能被认成语音服务。
+
+### 二、删除 V1 归档 `legacy/v1/`
+
+V1（骨架工作室）2026-11-10 退役后一直冻结在 `legacy/v1/`（10 个文件 /
+0.65MB）。2026-11-24 用户指示删除，已从仓库与磁盘一并移除。
+
+删除前核实过：
+  · 代码零引用（只有两处注释提到，已同步更新）
+  · `重新打包.bat` 本来就用 `-xr!legacy` 排除，打包流程不受影响
+  · `seethrough_local.py` 里那条 `../l2d_rig/models` 的 V1 回退永远不可能
+    命中，一并删掉（留着只会让人以为还有第二个模型位置）
+
+**注意**：此前的「V1 selftest（31 项）可跑」已永久失效，且**不能再从仓库恢复**
+（源码已删）。若将来需要那段历史，只能从更早的 git 提交里翻。
 
 ---
 
