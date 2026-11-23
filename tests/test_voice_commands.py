@@ -8,6 +8,14 @@
   · 写操作真的生效（导入音色 -> 能查到 -> 删掉）
   · 错误参数给明确报错，不崩
 """
+def _free_port():
+    """挑一个空闲端口（避开默认 8765，可能被用户的木偶占着）。"""
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
 import http.server
 import json
 import os
@@ -32,6 +40,12 @@ with open(os.path.join(ENG, "GPT_SoVITS", "pretrained_models", "s1v3.ckpt"),
           "wb") as f:
     f.write(b"x" * 1024)
 os.environ["MUPPET_VOICE_DIR"] = ENG
+
+# DSH 联动测试必须用独立端口：默认 8765 可能被**用户正在运行的
+# 木偶工作室**占着（它的 DSH 服务在监听），测试的请求会打到
+# 那个进程上，拿到它的环境而不是测试的 —— 症状是断言「引擎未就绪」
+# 而直接调用明明是「就绪」。这里挑一个空闲端口互不干扰。
+os.environ["MUPPET_REMOTE_PORT"] = str(_free_port())
 
 import remote_control as RC
 import voice_commands as VC

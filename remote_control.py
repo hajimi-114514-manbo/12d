@@ -1431,15 +1431,18 @@ def _cmd_clip_add(wb, args):
         if dur is None: dur = float(src.get("src_dur") or 0.0) or 5.0
         dur = float(dur)
         c = V.new_clip(src, start, dur, src_in=float(args.get("src_in") or 0.0))
-        # 可选 layout
+        # 布局：两种给法并存 —— ①整个 dict ②散着的 x/y/scale/rot
+        # ①优先（dict 里的值直接覆盖），②作为 dict 缺省项补充。
+        # **scale 在两条路上都生效**（原来只有②生效，两条路语义不一致，
+        # 调用方会以为「传了就管用」）。
         lay = args.get("layout")
-        if isinstance(lay, dict): c["layout"] = dict(c.get("layout") or {}, **lay)
-        elif args.get("x") is not None or args.get("y") is not None:
-            c["layout"] = dict(c.get("layout") or {})
-            if args.get("x") is not None: c["layout"]["x"] = float(args["x"])
-            if args.get("y") is not None: c["layout"]["y"] = float(args["y"])
-            if args.get("scale") is not None:
-                c["layout"]["scale"] = float(args["scale"])
+        c["layout"] = dict(c.get("layout") or {})
+        if isinstance(lay, dict):
+            c["layout"].update(lay)
+        for k in ("x", "y", "scale", "rot"):
+            v = args.get(k)
+            if v is not None:
+                c["layout"][k] = float(v)
         tr.setdefault("clips", []).append(c)
     except Exception as e:
         return False, "添加 clip 失败: %s: %s" % (type(e).__name__, e), None
