@@ -41,6 +41,12 @@ _BAD_CHARS = '<>:"/\\|?*'
 _MIN_CKPT = 50 * 1024 * 1024      # GPT 权重下限（约 148MB）
 _MIN_PTH = 50 * 1024 * 1024       # SoVITS 权重下限（约 165MB）
 
+# 侧别 -> (扩展名, 体积下限, 显示名)。收成表，以后加第三种侧别只改这里。
+_SIDE_SPEC = {
+    "ckpt": (".ckpt", _MIN_CKPT, "GPT 侧"),
+    "pth":  (".pth",  _MIN_PTH,  "SoVITS 侧"),
+}
+
 
 def _clean_stem(s):
     """把任意字符串变成可用作文件名的 stem。"""
@@ -118,15 +124,15 @@ def validate_pair(ckpt, pth):
     pt = str(pth or "").strip()
     if not ck or not pt:
         return False, "需要同时选择 .ckpt（GPT 侧）和 .pth（SoVITS 侧）两个文件"
-    for p, ext, label in ((ck, ".ckpt", "GPT 侧(.ckpt)"),
-                          (pt, ".pth", "SoVITS 侧(.pth)")):
+    for p, side in ((ck, "ckpt"), (pt, "pth")):
+        ext, min_bytes, label = _SIDE_SPEC[side]
         if not os.path.isfile(p):
             return False, "%s 不存在：%s" % (label, p)
         if os.path.splitext(p)[1].lower() != ext:
             return False, "%s 文件名后缀应为 %s（当前 %s）" % (
                 label, ext, os.path.splitext(p)[1] or "无")
         sz = os.path.getsize(p)
-        if sz < (_MIN_CKPT if ext == ".ckpt" else _MIN_PTH):
+        if sz < min_bytes:
             return False, "%s 体积异常（%.1f MB，正常约 150~170MB），可能没下完" % (
                 label, sz / 1048576.0)
     ck_stem = os.path.splitext(os.path.basename(ck))[0]

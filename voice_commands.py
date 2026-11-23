@@ -49,14 +49,15 @@ def _voice_status(_wb, args):
     """
     VP = _voice_probe()
     r = VP.probe_local(timeout=float(args.get("timeout") or 2.0))
+    svc = r.service                       # ProbeResult | None
     data = {
-        "engine_ready": bool(r.get("engine")),
-        "engine_dir": r.get("dir") or "",
-        "python": r.get("python") or "",
-        "api": r.get("api") or "",
-        "service_ok": bool((r.get("service") or {}).get("ok")),
-        "service_msg": r.get("service", {}).get("msg", "") if r.get("service") else "",
-        "msg": r.get("msg") or "",
+        "engine_ready": bool(r.engine),
+        "engine_dir": r.dir or "",
+        "python": r.python or "",
+        "api": r.api or "",
+        "service_ok": bool(svc.ok) if svc else False,
+        "service_msg": (svc.msg if svc else "") or "",
+        "msg": r.msg or "",
     }
     # 引擎不在时也把候选位置报出来，方便 AI 告诉用户「去哪装」
     try:
@@ -64,7 +65,7 @@ def _voice_status(_wb, args):
                                _voice_paths().describe().get("candidates", [])]
     except Exception:
         data["candidates"] = []
-    ok = bool(r.get("engine"))
+    ok = bool(r.engine)
     return ok, ("语音引擎就绪" if ok else "语音引擎未就绪"), data
 
 
@@ -81,7 +82,7 @@ def _voice_probe_cmd(_wb, args):
     port = int(args.get("port") or VP.DEFAULT_PORT)
     timeout = float(args.get("timeout") or 4.0)
     r = VP.probe(host, port, timeout=timeout)
-    return bool(r.get("ok")), (r.get("msg") or ""), r
+    return bool(r.ok), (r.msg or ""), r.to_dict()
 
 
 def _voice_list(_wb, _args):

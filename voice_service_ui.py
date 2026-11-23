@@ -69,7 +69,7 @@ def _probe():
 class _ProbeThread(QThread):
     """后台探测（TCP 超时最长几秒，不能放主线程）。"""
 
-    done = Signal(dict)
+    done = Signal(object)
 
     def __init__(self, addr, parent=None):
         super().__init__(parent)
@@ -81,7 +81,8 @@ class _ProbeThread(QThread):
             host, port = VP.parse_addr(self.addr)
             r = VP.probe(host, port, timeout=4.0)
         except Exception as e:
-            r = {"ok": False, "msg": "探测异常：%s" % e, "detail": {}}
+            # 异常也要发一个**同类型**的结果，否则槽函数里的属性访问会炸
+            r = VP.ProbeResult(msg="探测异常：%s" % e)
         self.done.emit(r)
 
 
@@ -183,24 +184,38 @@ class VoiceServiceDialog(QDialog):
             self.lbl_engine.setText("检查失败：%s" % e)
             return
         self.engine_card_state = r
-        if r.get("engine"):
-            lines = ["引擎目录：%s" % (r.get("dir") or "")]
-            if r.get("python"):
-                lines.append("解释器：%s" % r["python"])
+        if r.engine:
+            lines = ["引擎目录：%s" % (r.dir or "")]
+            if r.python:
+                lines.append("解释器：%s" % r.python)
             else:
                 lines.append("解释器：**缺失**（runtime\\python.exe）")
-            if r.get("api"):
-                lines.append("接口：%s" % r["api"])
+            if r.api:
+                lines.append("接口：%s" % r.api)
             else:
                 lines.append("接口：**缺失**（api_v2.py）")
             self.lbl_engine.setText("\n".join(lines))
         else:
             self.lbl_engine.setText(
                 "%s\n可以连**远程**已运行的语音服务（在下面填地址）。"
-                % (r.get("msg") or "本机没有语音引擎"))
+                % (r.msg or "本机没有语音引擎"))
+
+    def _thread_running(self):
+        """线程还在跑吗。
+
+        C++ 对象被销毁后 isRunning() 会抛 RuntimeError，这里一律当「没在跑」
+        —— 保守但不会崩。
+        """
+        t = self._thread
+        if t is None:
+            return False
+        try:
+            return bool(t.isRunning())
+        except RuntimeError:
+            return False
 
     def _do_probe(self):
-        if self._thread is not None and self._thread.isRunning():
+        if self._thread is not None and self._thread_running():
             return
         addr = self.ed_addr.text().strip()
         if not addr:
@@ -217,15 +232,18 @@ class VoiceServiceDialog(QDialog):
 
         th = _ProbeThread(addr, self)
         th.done.connect(self._on_probe_done)
-        th.finished.connect(th.deleteLater)
+        # **不连** th.deleteLater：Qt 会在 finished 之后销毁 C++ 对象，
+        # 之后任何 self._thread.isRunning() 都抛
+        # "Internal C++ object already deleted"（实测踩过）。
+        # 对象交给 Python 引用计数回收即可 —— 它没有 parent，不会泄漏。
         self._thread = th
         th.start()
 
     def _on_probe_done(self, r):
         self.btn_probe.setEnabled(True)
         self.progress.setVisible(False)
-        ok = bool(r.get("ok"))
-        msg = str(r.get("msg") or "")
+        ok = bool(r.ok)
+        msg = str(r.msg or "")
         if ok:
             self.lbl_result.setText("✓ " + msg)
             self.lbl_result.setStyleSheet("color:%s;" % TH.t("text"))
@@ -234,7 +252,7 @@ class VoiceServiceDialog(QDialog):
             self.lbl_result.setStyleSheet("color:%s;" % TH.t("text_mute"))
 
         # 明细（排障用）：把每一步的原始结果摊开
-        det = r.get("detail") or {}
+        det = r.detail or {}
         if det:
             parts = []
             for k, v in det.items():
@@ -250,5 +268,5 @@ class VoiceServiceDialog(QDialog):
         self.badge.setText("可用" if ok else "不可用")
         self.badge.setStyleSheet(
             "color:%s;" % (TH.t("text") if ok else TH.t("text_mute")))
-        self.status.setText("%s:%s" % (r.get("host"), r.get("port")))
+        self.status.setText("%s:%s" % (r.host, r.port))
         self._thread = None

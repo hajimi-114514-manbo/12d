@@ -35,9 +35,22 @@ import urllib.request
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9880
 
-# 服务端支持的语种代码（api_v2 的 languages）
-_LANG_ZH = "zh"
-_LANG_JA = "ja"
+# 语种与音色侧别收进枚举（voice_probe.Lang / voice_probe.VoiceSide）：
+# 以前 "zh"/"ckpt"/"pth" 这些字面量散在好几个文件里，改一次要找半天。
+try:
+    from voice_probe import Lang, VoiceSide
+except Exception:                      # 极端情况：探���模块不可用
+    class _Lang(str):
+        ZH = "zh"
+        JA = "ja"
+        EN = "en"
+        AUTO = "auto"
+    Lang = _Lang()
+
+    class _Side(str):
+        GPT = "ckpt"
+        SOVITS = "pth"
+    VoiceSide = _Side()
 
 # 试听播放器（模块级单例，理由见 play()）
 _PLAYER = None
@@ -59,10 +72,10 @@ def _ext_for(who):
     判据：名字里含日文假名/汉字读音标记就当 ja。
     """
     w = str(who or "")
-    # 平假名 / 片假名
+    # 平假名 / 片假名 -> 日文
     if re.search(r"[\u3040-\u309f\u30a0-\u30ff]", w):
-        return _LANG_JA
-    return _LANG_ZH
+        return Lang.JA
+    return Lang.ZH
 
 
 def _vocal_dir(proj_dir):
