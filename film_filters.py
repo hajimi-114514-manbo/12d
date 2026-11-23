@@ -253,8 +253,7 @@ FILM_FILTERS = [
 def by_name(name):
     """按显示名查预设；找不到返回 None。"""
     for f in FILM_FILTERS:
-        if f["name"] == name:
-            return f
+        if f["name"] == name: return f
     return None
 
 
@@ -263,15 +262,11 @@ def apply_to_clip(clip, preset):
 
     返回实际写入的参数 dict（可能为空）。调用方负责判断该 clip 是不是
     背景/立绘（本模块不碰工程结构）。"""
-    if not isinstance(clip, dict) or preset is None:
-        return {}
+    if not isinstance(clip, dict) or preset is None: return {}
     tr_name = str(preset.get("_kind") or "")
     filt = None
-    if tr_name == "bg":
-        filt = preset.get("bg")
-    elif tr_name == "fig":
-        filt = preset.get("fig")
-    if not filt:
-        return {}
+    if tr_name == "bg": filt = preset.get("bg")
+    elif tr_name == "fig": filt = preset.get("fig")
+    if not filt: return {}
     clip["filter"] = dict(filt)
     return clip["filter"]

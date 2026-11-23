@@ -41,6 +41,7 @@ import urllib.request
 import zipfile
 
 from PySide6.QtCore import QThread, Signal
+import contextlib
 
 # ---------------- 常量（测试可整体替换这些模块级变量造假服务器） ----------------
 # v3.6.2：主源迁到 Gitee（国内直连快、GitHub 常被墙/需镜像），GitHub 保留
@@ -105,8 +106,7 @@ def update_dir():
 
 def installer_name(ver=None):
     """安装包文件名。给版本号时用带版本号名，否则用默认名。"""
-    if ver:
-        return INSTALLER_NAME_TPL.format(ver=str(ver))
+    if ver: return INSTALLER_NAME_TPL.format(ver=str(ver))
     return INSTALLER_NAME
 
 
@@ -177,12 +177,9 @@ def _human_size(n):
         n = int(n or 0)
     except (TypeError, ValueError):
         return "?"
-    if n <= 0:
-        return "?"
-    if n < 1024:
-        return "%d B" % n
-    if n < 1024 * 1024:
-        return "%.1f KB" % (n / 1024.0)
+    if n <= 0: return "?"
+    if n < 1024: return "%d B" % n
+    if n < 1024 * 1024: return "%.1f KB" % (n / 1024.0)
     return "%.1f MB" % (n / 1048576.0)
 
 
@@ -194,19 +191,15 @@ _VER_RE = re.compile(r"\d+")
 
 def _patch_items(meta):
     """从 version.json 里取出所有增量包条目（兼容单条 "patch" 与 "patches"）。"""
-    if not isinstance(meta, dict):
-        return []
+    if not isinstance(meta, dict): return []
     out = []
     single = meta.get("patch")
-    if isinstance(single, dict):
-        out.append(single)
+    if isinstance(single, dict): out.append(single)
     raw = meta.get("patches")
-    if isinstance(raw, dict):
-        raw = [raw]
+    if isinstance(raw, dict): raw = [raw]
     if isinstance(raw, list):
         for item in raw:
-            if isinstance(item, dict):
-                out.append(item)
+            if isinstance(item, dict): out.append(item)
     return out
 
 
@@ -220,15 +213,12 @@ def _valid_patch_entry(item, remote_ver):
     to = str(item.get("to") or "") or (
         "" if remote_ver == (0, 0, 0) else
         "%d.%d.%d" % remote_ver)
-    if parse_ver(frm) == (0, 0, 0) or parse_ver(to) == (0, 0, 0):
-        return None
+    if parse_ver(frm) == (0, 0, 0) or parse_ver(to) == (0, 0, 0): return None
     sha = str(item.get("sha256") or "").strip().lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", sha):
-        return None
+    if not re.fullmatch(r"[0-9a-f]{64}", sha): return None
     name = os.path.basename(str(item.get("file") or "").strip()
                             or patch_name(to, frm))
-    if not name.lower().endswith(".zip"):
-        return None
+    if not name.lower().endswith(".zip"): return None
     try:
         size = int(item.get("size") or 0)
     except (TypeError, ValueError):
@@ -249,13 +239,11 @@ def find_patch(meta, local_version):
     v3.5.8 起客户端走 find_patch_chain（逐跳爬到最新），本函数保留为
     「单跳直达最新」特例，供旧测试与兼容判断使用。"""
     local = parse_ver(local_version)
-    if local == (0, 0, 0):
-        return None
+    if local == (0, 0, 0): return None
     remote = str(meta.get("version") or "") if isinstance(meta, dict) else ""
     for item in _patch_items(meta):
         entry = _valid_patch_entry(item, parse_ver(remote))
-        if entry is None:
-            continue
+        if entry is None: continue
         # to 必须等于远端最新版，防止清单里残留的旧条目被误用
         if parse_ver(entry["from"]) != local or \
                 parse_ver(entry["to"]) != parse_ver(remote):
@@ -280,33 +268,27 @@ def find_patch_chain(meta, local_version, max_hops=12):
     返回 {"hops": [entry...], "total_size": int, "final_to": str}；
     本机已最新/无路可走/链断 -> None。"""
     local = parse_ver(local_version)
-    if not isinstance(meta, dict):
-        return None
+    if not isinstance(meta, dict): return None
     remote = parse_ver(meta.get("version") or "")
-    if local == (0, 0, 0) or remote == (0, 0, 0) or local >= remote:
-        return None
+    if local == (0, 0, 0) or remote == (0, 0, 0) or local >= remote: return None
     by_from = {}                       # from 版本三元组 -> to 最高的合法条目
     for item in _patch_items(meta):
         entry = _valid_patch_entry(item, remote)
-        if entry is None:
-            continue
+        if entry is None: continue
         k = parse_ver(entry["from"])
         t = parse_ver(entry["to"])
         if t <= k:                     # 非递增跳（环/倒退）一律无视
             continue
         cur = by_from.get(k)
-        if cur is None or t > parse_ver(cur["to"]):
-            by_from[k] = entry
+        if cur is None or t > parse_ver(cur["to"]): by_from[k] = entry
     hops = []
     cur = local
     while cur != remote and len(hops) < max_hops:
         nxt = by_from.get(cur)
-        if nxt is None:
-            return None                # 链断：不半途下载，回落整包
+        if nxt is None: return None                # 链断：不半途下载，回落整包
         hops.append(nxt)
         cur = parse_ver(nxt["to"])
-    if cur != remote or not hops:
-        return None
+    if cur != remote or not hops: return None
     return {"hops": hops,
             "total_size": sum(int(h["size"] or 0) for h in hops),
             "final_to": hops[-1]["to"]}
@@ -316,8 +298,7 @@ def find_patch_chain(meta, local_version, max_hops=12):
 def parse_ver(s):
     """"3.1.1"/"v3.1.1"/"3.1"/任意脏串 -> (3,1,1) 三元组；脏输入回 (0,0,0)。"""
     nums = re.findall(r"\d+", str(s or ""))
-    if not nums:
-        return (0, 0, 0)
+    if not nums: return (0, 0, 0)
     t = tuple(int(x) for x in nums[:3])
     while len(t) < 3:
         t = t + (0,)
@@ -337,14 +318,12 @@ def fetch_version_json(timeout=None):
     deadline = time.monotonic() + budget
     for url in REPO_VERSION_URLS:
         left = deadline - time.monotonic()
-        if left <= 0:
-            break
+        if left <= 0: break
         try:
             req = urllib.request.Request(url, headers=UA)
             with urllib.request.urlopen(req, timeout=left) as resp:
                 code = getattr(resp, "status", 200)
-                if code != 200:
-                    continue
+                if code != 200: continue
                 obj = json.loads(resp.read().decode("utf-8-sig", "ignore"))
             if isinstance(obj, dict):
                 global last_source
@@ -369,33 +348,26 @@ def cross_check_sha(expected_sha, budget=15.0):
       "unreachable" 其余源都不可达/未声明 sha -> 宽容通过（离线优先）
     """
     want = str(expected_sha or "").strip().lower()
-    if not want:
-        return "unreachable", None
+    if not want: return "unreachable", None
     deadline = time.monotonic() + max(1.0, float(budget))
     checked = False
     for url in REPO_VERSION_URLS:
-        if url == last_source:
-            continue
+        if url == last_source: continue
         left = deadline - time.monotonic()
-        if left <= 0:
-            break
+        if left <= 0: break
         try:
             req = urllib.request.Request(url, headers=UA)
             with urllib.request.urlopen(req, timeout=left) as resp:
                 code = getattr(resp, "status", 200)
-                if code != 200:
-                    continue
+                if code != 200: continue
                 obj = json.loads(resp.read().decode("utf-8-sig", "ignore"))
         except Exception:
             continue
-        if not isinstance(obj, dict):
-            continue
+        if not isinstance(obj, dict): continue
         other = str(obj.get("installer_sha256") or "").strip().lower()
-        if not other:
-            continue                      # 该源未声明 sha：换下一个源
+        if not other: continue                      # 该源未声明 sha：换下一个源
         checked = True
-        if other == want:
-            return "agree", other
+        if other == want: return "agree", other
         return "conflict", other
     return ("agree" if checked else "unreachable"), None
 
@@ -407,34 +379,27 @@ def cross_check_patch_sha(expected_sha, from_ver, to_ver, budget=15.0):
     只在对方源确实声明了同一条增量包时才判定（对方源还没更新清单不算冲突）。
     """
     want = str(expected_sha or "").strip().lower()
-    if not want:
-        return "unreachable", None
+    if not want: return "unreachable", None
     wf, wt = parse_ver(from_ver), parse_ver(to_ver)
     deadline = time.monotonic() + max(1.0, float(budget))
     checked = False
     for url in REPO_VERSION_URLS:
-        if url == last_source:
-            continue
+        if url == last_source: continue
         left = deadline - time.monotonic()
-        if left <= 0:
-            break
+        if left <= 0: break
         try:
             req = urllib.request.Request(url, headers=UA)
             with urllib.request.urlopen(req, timeout=left) as resp:
-                if getattr(resp, "status", 200) != 200:
-                    continue
+                if getattr(resp, "status", 200) != 200: continue
                 obj = json.loads(resp.read().decode("utf-8-sig", "ignore"))
         except Exception:
             continue
         remote = str(obj.get("version") or "") if isinstance(obj, dict) else ""
         for item in _patch_items(obj):
-            if parse_ver(item.get("from")) != wf:
-                continue
-            if parse_ver(item.get("to") or remote) != wt:
-                continue
+            if parse_ver(item.get("from")) != wf: continue
+            if parse_ver(item.get("to") or remote) != wt: continue
             other = str(item.get("sha256") or "").strip().lower()
-            if not other:
-                continue                  # 该源没写 sha：换下一个源
+            if not other: continue                  # 该源没写 sha：换下一个源
             checked = True
             return ("agree" if other == want else "conflict"), other
     return ("agree" if checked else "unreachable"), None
@@ -445,8 +410,7 @@ def _open_range(url, have):
     """带 Range 打开远端；416（.part 比服务器新，包换过）-> 删残留从头来。
     返回 (resp, have)；失败 (None, 0)。resp 需调用方 close。"""
     req = urllib.request.Request(url, headers=dict(UA))
-    if have > 0:
-        req.add_header("Range", "bytes=%d-" % have)
+    if have > 0: req.add_header("Range", "bytes=%d-" % have)
     try:
         return urllib.request.urlopen(req, timeout=60), have
     except Exception as e:
@@ -472,33 +436,24 @@ def _download_installer(urls, target, on_progress, cancel):
                 try:
                     resp, have = _open_range(url, have)
                 except _StalePart:
-                    try:
-                        os.remove(part)
-                    except OSError:
-                        pass
+                    with contextlib.suppress(OSError): os.remove(part)
                     continue
                 status = getattr(resp, "status", 200)
                 mode = "ab" if status == 206 else "wb"
-                if status != 206:
-                    have = 0
+                if status != 206: have = 0
                 total = 0
-                try:
+                with contextlib.suppress(Exception):
                     cr = resp.headers.get("Content-Range") or ""
                     mm = re.search(r"/(\d+)\s*$", cr)
-                    if mm:
-                        total = int(mm.group(1))
+                    if mm: total = int(mm.group(1))
                     elif resp.headers.get("Content-Length"):
                         total = have + int(resp.headers["Content-Length"])
-                except Exception:
-                    pass
                 got = have
                 with open(part, mode) as f:
                     while True:
-                        if cancel():
-                            return False
+                        if cancel(): return False
                         chunk = resp.read(1024 * 256)
-                        if not chunk:
-                            break
+                        if not chunk: break
                         f.write(chunk)
                         got += len(chunk)
                         on_progress(got, total or got)
@@ -507,20 +462,14 @@ def _download_installer(urls, target, on_progress, cancel):
                     break                  # 不完整 -> 换镜像再续
                 # 完成 -> .part 转正
                 if os.path.exists(target):
-                    try:
-                        os.remove(target)
-                    except OSError:
-                        pass
+                    with contextlib.suppress(OSError): os.remove(target)
                 os.replace(part, target)
                 return True
             except Exception:
                 break                      # 本镜像失败 -> 下一个
             finally:
-                try:
-                    if resp is not None:
-                        resp.close()
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception):
+                    if resp is not None: resp.close()
         # 换镜像时 .part 保留：下一轮自动 Range 续传
     return False
 
@@ -540,8 +489,7 @@ def _sha256(path):
     with open(path, "rb") as f:
         while True:
             b = f.read(1024 * 1024)
-            if not b:
-                break
+            if not b: break
             h.update(b)
     return h.hexdigest()
 
@@ -559,13 +507,10 @@ def _zip_head_ok(path):
 def _safe_member_name(name):
     """zip 条目名归一化；绝对路径 / 盘符 / `..` 一律判非法（zip slip 防护）。"""
     n = str(name or "").replace("\\", "/").strip()
-    if not n:
-        return None
-    if n.startswith("/") or re.match(r"^[A-Za-z]:", n):
-        return None
+    if not n: return None
+    if n.startswith("/") or re.match(r"^[A-Za-z]:", n): return None
     parts = [p for p in n.split("/") if p not in ("", ".")]
-    if not parts or any(p == ".." for p in parts):
-        return None
+    if not parts or any(p == ".." for p in parts): return None
     return "/".join(parts)
 
 
@@ -591,34 +536,27 @@ def stage_patch(zip_path, to_ver="", stage=None):
         plan = []
         total = 0
         for info in infos:
-            if info.is_dir():
-                continue
+            if info.is_dir(): continue
             rel = _safe_member_name(info.filename)
             if rel is None:
                 return False, "增量包含非法路径条目：%s" % str(info.filename)[:60], "", 0
             if rel.split("/")[0] in PATCH_SKIP_NAMES:
                 continue                  # 给人工安装用的说明/批处理，不进暂存
             mode = (info.external_attr >> 16) & 0o170000
-            if mode == 0o120000:
-                return False, "增量包含符号链接条目，拒绝", "", 0
+            if mode == 0o120000: return False, "增量包含符号链接条目，拒绝", "", 0
             total += int(info.file_size or 0)
             if total > PATCH_MAX_BYTES:
                 return False, "增量包解压后超过上限（%s）" % _human_size(PATCH_MAX_BYTES), "", 0
             plan.append((info, rel))
-        if not plan:
-            return False, "增量包是空的", "", 0
+        if not plan: return False, "增量包是空的", "", 0
         if os.path.isdir(stage):
-            try:
-                shutil.rmtree(stage, ignore_errors=True)
-            except OSError:
-                pass
+            with contextlib.suppress(OSError): shutil.rmtree(stage, ignore_errors=True)
         try:
             os.makedirs(stage, exist_ok=True)
             for info, rel in plan:
                 dst = os.path.join(stage, rel.replace("/", os.sep))
                 d = os.path.dirname(dst)
-                if d:
-                    os.makedirs(d, exist_ok=True)
+                if d: os.makedirs(d, exist_ok=True)
                 with zf.open(info) as src, open(dst, "wb") as out:
                     shutil.copyfileobj(src, out, 1024 * 256)
         except Exception as e:
@@ -650,8 +588,7 @@ def launch_update(install_dir):
     """DETACHED 拉起 Setup.exe --auto --dir <install_dir>，成功 True。
     调用方随后负责退出应用。没有已下载包返回 False。"""
     exe = pending_installer()
-    if not exe:
-        return False
+    if not exe: return False
     argv = [exe, "--auto", "--dir", str(install_dir)]
     try:
         subprocess.Popen(argv, stdin=subprocess.DEVNULL,
@@ -676,8 +613,7 @@ def pending_patch():
     链上任何一环的 zip/stage 丢失 -> 整链作废（半截链绝不应用）。"""
     global _pending_patch
     hops = _pending_patch
-    if not hops:
-        return None
+    if not hops: return None
     for h in hops:
         if not os.path.isfile(h.get("zip") or "") or \
                 not os.path.isdir(h.get("stage") or ""):
@@ -690,14 +626,11 @@ def set_pending_patch(st):
     """测试/恢复用；None 清空。接受单跳 dict（旧格式，包装成 list）
     或按序 list。"""
     global _pending_patch
-    if st is None:
-        _pending_patch = None
-    elif isinstance(st, dict):
-        _pending_patch = [dict(st)]
+    if st is None: _pending_patch = None
+    elif isinstance(st, dict): _pending_patch = [dict(st)]
     elif isinstance(st, (list, tuple)) and all(isinstance(x, dict) for x in st):
         _pending_patch = [dict(x) for x in st]
-    else:
-        _pending_patch = None
+    else: _pending_patch = None
 
 
 def clear_pending_patch():
@@ -810,14 +743,11 @@ def launch_patch(install_dir):
     （单跳 = 链长 1），bat 按 (stage, zip) 参数对逐段应用。
     """
     hops = pending_patch()
-    if not hops:
-        return False
+    if not hops: return False
     dst = os.path.abspath(str(install_dir or "")).rstrip("\\/")
-    if not dst or not os.path.isdir(dst):
-        return False
+    if not dst or not os.path.isdir(dst): return False
     for h in hops:
-        if not os.path.isdir(h.get("stage") or ""):
-            return False
+        if not os.path.isdir(h.get("stage") or ""): return False
     d = update_dir()
     bat = os.path.join(d, _APPLY_BAT)
     log = os.path.join(d, "patch_apply.log")
@@ -884,8 +814,7 @@ class UpdateThread(QThread):
     def _run(self):
         self.status.emit("正在检查更新…")
         meta = fetch_version_json()
-        if self._cancelled():
-            return
+        if self._cancelled(): return
         if meta is None:
             self.failed.emit("网络不可用，检查更新失败")
             return
@@ -905,22 +834,18 @@ class UpdateThread(QThread):
                 handled = self._try_patch_chain(meta, remote, chain)
             except Exception as e:
                 self.status.emit("增量链处理异常，改下完整安装包：%s" % str(e)[:60])
-            if handled:
-                return
-            if self._cancelled():
-                return
+            if handled: return
+            if self._cancelled(): return
             self.status.emit("改用完整安装包 v%s…" % remote)
         urls = release_urls(remote)
         target = installer_path(remote)
         # 上一轮已下好且仍是要的版本：直接复用
         if os.path.isfile(target) and os.path.getsize(target) > 0:
-            try:
+            with contextlib.suppress(OSError):
                 if self._verify(target, meta) and self._cross_ok(meta):
                     set_pending_installer(target)
                     self.ready.emit(target)
                     return
-            except OSError:
-                pass
         ok = _download_installer(urls, target,
                                  lambda g, t: self.progressed.emit(int(g), int(t)),
                                  self._cancelled)
@@ -973,11 +898,9 @@ class UpdateThread(QThread):
         urls = patch_urls(to, frm)
         # 上一轮已下好且校验通过：直接复用，不重复下载
         if os.path.isfile(target) and os.path.getsize(target) > 0:
-            try:
+            with contextlib.suppress(OSError):
                 if self._verify_patch(target, patch) and self._cross_patch_ok(patch):
                     return self._finish_patch(target, to, patch)
-            except OSError:
-                pass
         ok = _download_installer(urls, target,
                                  lambda g, t: self.progressed.emit(int(g), int(t)),
                                  self._cancelled)
@@ -1108,17 +1031,11 @@ class UpdateThread(QThread):
         for h in done:
             st = h.get("stage")
             if st and os.path.isdir(st):
-                try:
-                    shutil.rmtree(st, ignore_errors=True)
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception): shutil.rmtree(st, ignore_errors=True)
 
     @staticmethod
     def _drop(path):
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError): os.remove(path)
 
     def _verify_patch(self, target, patch):
         """增量包 sha256 校验（fail-closed，同整包策略）。"""

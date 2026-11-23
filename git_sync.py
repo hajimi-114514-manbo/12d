@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import time
+import contextlib
 
 # ---------------- 常量（测试可整体替换） ----------------
 PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,19 +34,15 @@ TIMEOUT = 20                            # 单条 git 命令超时（秒）
 # ---------------- 版本工具 ----------------
 def parse_version(s):
     """'3.4.0' / 'v3.4.0' -> (3, 4, 0)；非法返回 None。"""
-    if not s:
-        return None
+    if not s: return None
     t = str(s).strip().lstrip("vV")
     parts = []
     for seg in t.split(".")[:4]:
         num = ""
         for ch in seg:
-            if ch.isdigit():
-                num += ch
-            else:
-                break
-        if not num:
-            return None
+            if ch.isdigit(): num += ch
+            else: break
+        if not num: return None
         parts.append(int(num))
     while len(parts) < 3:
         parts.append(0)
@@ -55,8 +52,7 @@ def parse_version(s):
 def cmp_version(a, b):
     """返回 -1/0/1；任一非法返回 None。数字三元组比较（3.10.0 > 3.9.9）。"""
     pa, pb = parse_version(a), parse_version(b)
-    if pa is None or pb is None:
-        return None
+    if pa is None or pb is None: return None
     return (pa > pb) - (pa < pb)
 
 
@@ -66,8 +62,7 @@ def _read_version_from_text(text):
         s = line.strip()
         if s.startswith("VERSION") and "=" in s:
             v = s.split("=", 1)[1].strip().strip("'\"")
-            if parse_version(v):
-                return v
+            if parse_version(v): return v
     return None
 
 
@@ -104,15 +99,12 @@ def is_repo(proj_dir=None):
 def dirty_files(proj_dir=None):
     """未提交改动列表（含未跟踪）；非仓库/git 不可用返回 None。"""
     d = proj_dir or PROJ_DIR
-    if not is_repo(d):
-        return None
+    if not is_repo(d): return None
     rc, out, _err = _git(d, "status", "--porcelain")
-    if rc != 0:
-        return None
+    if rc != 0: return None
     files = []
     for line in out.splitlines():
-        if not line.strip():
-            continue
+        if not line.strip(): continue
         # porcelain 格式：两个状态列 + 一个空格 + 路径
         #   已跟踪改动 -> " M path"（M 在第 2 列，第 1 列是空格）
         #   未跟踪     -> "?? path"
@@ -121,26 +113,22 @@ def dirty_files(proj_dir=None):
         if " -> " in path:                      # 重命名：取新名
             path = path.split(" -> ", 1)[1]
         path = path.strip()
-        if len(path) >= 2 and path[0] == '"' and path[-1] == '"':
-            path = path[1:-1]
-        if path:
-            files.append(path)
+        if len(path) >= 2 and path[0] == '"' and path[-1] == '"': path = path[1:-1]
+        if path: files.append(path)
     return files
 
 
 def remote_version(proj_dir=None, fetch=True):
     """远端 VERSION：优先读 origin/<branch>:l2d_rig_qt.py。失败返回 None。"""
     d = proj_dir or PROJ_DIR
-    if not is_repo(d):
-        return None
+    if not is_repo(d): return None
     if fetch:
         rc, _o, _e = _git(d, "fetch", REMOTE, BRANCH)
         if rc != 0:
             # fetch 失败（无网）仍尝试用已有的远端引用
             pass
     rc, out, _e = _git(d, "show", "%s/%s:%s" % (REMOTE, BRANCH, VERSION_FILE))
-    if rc != 0:
-        return None
+    if rc != 0: return None
     return _read_version_from_text(out)
 
 
@@ -200,14 +188,10 @@ def state(proj_dir=None, fetch=True):
     res["relation"] = ("same" if c == 0
                        else ("local_newer" if c > 0 else "remote_newer"))
     res["ok"] = True
-    if res["relation"] == "remote_newer":
-        res["msg"] = "远端 %s 比本地 %s 新，可以更新" % (rv, lv)
-    elif res["relation"] == "local_newer":
-        res["msg"] = "本地 %s 比远端 %s 新，无需更新" % (lv, rv)
-    else:
-        res["msg"] = "本地与远端版本相同（%s）" % lv
-    if res["dirty"]:
-        res["msg"] += "；但检测到 %d 个未提交改动，请先提交后再更新" % len(dirty)
+    if res["relation"] == "remote_newer": res["msg"] = "远端 %s 比本地 %s 新，可以更新" % (rv, lv)
+    elif res["relation"] == "local_newer": res["msg"] = "本地 %s 比远端 %s 新，无需更新" % (lv, rv)
+    else: res["msg"] = "本地与远端版本相同（%s）" % lv
+    if res["dirty"]: res["msg"] += "；但检测到 %d 个未提交改动，请先提交后再更新" % len(dirty)
     return res
 
 
@@ -221,8 +205,7 @@ def diff_files(proj_dir=None):
     d = proj_dir or PROJ_DIR
     rc, out, _e = _git(d, "diff", "--name-only", "HEAD",
                        "%s/%s" % (REMOTE, BRANCH))
-    if rc != 0:
-        return []
+    if rc != 0: return []
     return [x.strip() for x in out.splitlines() if x.strip()]
 
 
@@ -239,15 +222,12 @@ def _backup_files(proj_dir, files):
     saved = []
     for rel in files:
         src = os.path.join(proj_dir, rel.replace("/", os.sep))
-        if not os.path.isfile(src):
-            continue
+        if not os.path.isfile(src): continue
         out = os.path.join(dst, rel.replace("/", os.sep))
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        try:
+        with contextlib.suppress(OSError):
             shutil.copy2(src, out)
             saved.append(rel)
-        except OSError:
-            pass
     manifest = {
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
         "proj_dir": proj_dir,
@@ -255,11 +235,9 @@ def _backup_files(proj_dir, files):
         "remote_commit": remote_commit(proj_dir),
         "files": saved,
     }
-    try:
+    with contextlib.suppress(OSError):
         with open(os.path.join(dst, "manifest.json"), "w", encoding="utf-8") as f:
             json.dump(manifest, f, ensure_ascii=False, indent=1)
-    except OSError:
-        pass
     return dst, saved
 
 
@@ -280,22 +258,18 @@ def rollback(backup_dir, proj_dir=None):
         # 没清单就整目录扫
         for root, _ds, fs in os.walk(backup_dir):
             for fn in fs:
-                if fn == "manifest.json":
-                    continue
+                if fn == "manifest.json": continue
                 files.append(os.path.relpath(os.path.join(root, fn),
                                              backup_dir).replace(os.sep, "/"))
     restored = []
     for rel in files:
         src = os.path.join(backup_dir, rel.replace("/", os.sep))
         dst = os.path.join(d, rel.replace("/", os.sep))
-        if not os.path.isfile(src):
-            continue
-        try:
+        if not os.path.isfile(src): continue
+        with contextlib.suppress(OSError):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(src, dst)
             restored.append(rel)
-        except OSError:
-            pass
     return True, "已从备份还原 %d 个文件" % len(restored), restored
 
 
@@ -314,8 +288,7 @@ def pull_overwrite(proj_dir=None):
         st = state(proj_dir=d, fetch=True)
         report["local_version"] = st.get("local_version")
         report["remote_version"] = st.get("remote_version")
-        if not st.get("ok"):
-            return False, st.get("msg") or "检测失败", report
+        if not st.get("ok"): return False, st.get("msg") or "检测失败", report
         # 规则 2：脏工作区一律拒绝
         if st.get("dirty"):
             names = st.get("dirty_files") or []
@@ -336,8 +309,7 @@ def pull_overwrite(proj_dir=None):
             return False, "无法确定版本关系，已中止（%s）" % (st.get("msg") or ""), report
         # 取差异清单
         files = diff_files(d)
-        if not files:
-            return False, "远端虽版本更新，但没有差异文件可覆盖", report
+        if not files: return False, "远端虽版本更新，但没有差异文件可覆盖", report
         report["local_head"] = local_commit(d)
         report["remote_commit"] = remote_commit(d)
         # 规则 3：先备份
@@ -369,13 +341,11 @@ def _main(argv=None):
     d = None
     if "--dir" in argv:
         i = argv.index("--dir")
-        if i + 1 < len(argv):
-            d = argv[i + 1]
+        if i + 1 < len(argv): d = argv[i + 1]
     if "--pull" in argv:
         ok, msg, rep = pull_overwrite(d)
         print(("OK " if ok else "FAIL ") + msg)
-        if rep.get("backup_dir"):
-            print("backup:", rep["backup_dir"])
+        if rep.get("backup_dir"): print("backup:", rep["backup_dir"])
         return 0 if ok else 1
     if "--rollback" in argv:
         i = argv.index("--rollback")
@@ -392,5 +362,4 @@ def _main(argv=None):
     return 0 if st.get("ok") else 1
 
 
-if __name__ == "__main__":
-    raise SystemExit(_main())
+if __name__ == "__main__": raise SystemExit(_main())

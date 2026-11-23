@@ -62,6 +62,7 @@
 import copy
 import os
 import re
+import contextlib
 
 # C2：预置动作/表情表（C1 纯数据模块）。表缺失时整体宽松，不硬依赖。
 try:
@@ -106,8 +107,7 @@ def _sanitize_layout(raw):
             elif k == "scale":
                 n = _num(v, 1.0)
                 out[k] = min(_SCALE_MAX, max(_SCALE_MIN, n))
-            elif k == "rot":
-                out[k] = _num(v, 0.0)
+            elif k == "rot": out[k] = _num(v, 0.0)
             else:                       # opacity/anchor/crop/blend/keyframes/...
                 out[k] = v              # 不校验不改写，原样带走
     return out
@@ -119,8 +119,7 @@ def layout_at(clip, t=None):
     A1：纯静态，忽略 t。C 方案的 layout 关键帧只改本函数内部
     （从 clip["layout"]["keyframes"] 采样插值覆盖对应通道），签名与
     返回结构不变，调用方零改动。"""
-    if not isinstance(clip, dict):
-        return dict(LAYOUT_DEFAULT)
+    if not isinstance(clip, dict): return dict(LAYOUT_DEFAULT)
     return _sanitize_layout(clip.get("layout"))
 
 
@@ -201,8 +200,7 @@ def act_view(proj, aid=None):
             if isinstance(a, dict) and a.get("aid") == aid:
                 act = a
                 break
-    if act is None and acts and isinstance(acts[0], dict):
-        act = acts[0]
+    if act is None and acts and isinstance(acts[0], dict): act = acts[0]
     if act:
         t = act.get("tracks")
         view["tracks"] = t if isinstance(t, list) else []
@@ -228,15 +226,12 @@ def _upgrade_to_v2(proj):
 
     只在**真正需要多幕**时调用（add_act / 读入 v2 文件）。迁移语义见
     §2.3：顶层 tracks/dialogue 收进 acts[0]，顶层不再保留镜像。"""
-    if is_multi_act(proj):
-        return proj
+    if is_multi_act(proj): return proj
     act = new_act("a1", "幕一")
     act["tracks"] = proj.get("tracks") or act["tracks"]
     act["dialogue"] = proj.get("dialogue") or []
-    if "comments" in proj:
-        act["comments"] = proj.get("comments") or []
-    if "effects" in proj:
-        act["effects"] = proj.get("effects") or []
+    if "comments" in proj: act["comments"] = proj.get("comments") or []
+    if "effects" in proj: act["effects"] = proj.get("effects") or []
     proj.pop("tracks", None)
     proj.pop("dialogue", None)
     proj.pop("comments", None)
@@ -249,20 +244,16 @@ def _upgrade_to_v2(proj):
 
 def find_act(proj, aid):
     """-> 幕 dict 或 None（v1 单幕形状返回 None：它没有 acts）。"""
-    if not isinstance(proj, dict):
-        return None
+    if not isinstance(proj, dict): return None
     for a in proj.get("acts") or []:
-        if isinstance(a, dict) and a.get("aid") == aid:
-            return a
+        if isinstance(a, dict) and a.get("aid") == aid: return a
     return None
 
 
 def act_ids(proj):
     """已声明的幕 id 列表（v1 单幕 -> ['a1'] 虚拟幕，便于 UI 统一展示）。"""
-    if not isinstance(proj, dict):
-        return []
-    if not is_multi_act(proj):
-        return ["a1"]
+    if not isinstance(proj, dict): return []
+    if not is_multi_act(proj): return ["a1"]
     return [a.get("aid") for a in proj["acts"]
             if isinstance(a, dict) and a.get("aid")]
 
@@ -270,8 +261,7 @@ def act_ids(proj):
 def act_list(proj):
     """UI 用幕摘要列表：[{aid,name,clips,duration,choices}]。"""
     out = []
-    if not isinstance(proj, dict):
-        return out
+    if not isinstance(proj, dict): return out
     if not is_multi_act(proj):
         view = act_view(proj)
         clips = sum(len(t.get("clips") or []) for t in view["tracks"]
@@ -300,36 +290,28 @@ def unreachable_acts(proj, entry=None):
     边的来源与导出器一致：choice.options[].target、jumps[].target、next。
     单幕工程 -> []（没有分支可言）。entry 缺省取第一幕（= a1，导出入口）。
     """
-    if not isinstance(proj, dict) or not is_multi_act(proj):
-        return []
+    if not isinstance(proj, dict) or not is_multi_act(proj): return []
     ids = act_ids(proj)
-    if not ids:
-        return []
+    if not ids: return []
     start = entry or ids[0]
     seen = {start}
     stack = [start]
     while stack:
         cur = stack.pop()
         a = find_act(proj, cur)
-        if not a:
-            continue
+        if not a: continue
         outs = []
-        try:
+        with contextlib.suppress(Exception):
             for ch in (a.get("choices") or []):
                 if isinstance(ch, dict):
                     for o in (ch.get("options") or []):
                         if isinstance(o, dict) and o.get("target"):
                             outs.append(str(o["target"]))
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             for j in (a.get("jumps") or []):
                 if isinstance(j, dict) and j.get("target"):
                     outs.append(str(j["target"]))
-        except Exception:
-            pass
-        if a.get("next"):
-            outs.append(str(a["next"]))
+        if a.get("next"): outs.append(str(a["next"]))
         for t in outs:
             if t in ids and t not in seen:
                 seen.add(t)
@@ -339,16 +321,13 @@ def unreachable_acts(proj, entry=None):
 
 def act_duration(act):
     """幕内时长（该幕 tracks 的最大 clip 结束时刻）。"""
-    if not isinstance(act, dict):
-        return 0.0
+    if not isinstance(act, dict): return 0.0
     end = 0.0
     for t in (act.get("tracks") or []):
         if isinstance(t, dict):
             for c in (t.get("clips") or []):
-                try:
+                with contextlib.suppress(Exception):
                     end = max(end, float(c["start"]) + float(c["dur"]))
-                except Exception:
-                    pass
     return round(end, 3)
 
 
@@ -357,28 +336,23 @@ def add_act(proj, name=None, after_aid=None):
 
     新幕复制画布参数（在 proj 顶层，天然共享）+ 空双轨；不复制 tracks/
     dialogue（那是 duplicate_act 的语义）。"""
-    if not isinstance(proj, dict):
-        return False, "工程不是 dict", None
+    if not isinstance(proj, dict): return False, "工程不是 dict", None
     _upgrade_to_v2(proj)
     aid = next_act_id(proj)
     act = new_act(aid, name or ("幕%d" % (len(proj["acts"]) + 1)))
     if after_aid:
         idx = next((i for i, a in enumerate(proj["acts"])
                     if a.get("aid") == after_aid), None)
-        if idx is not None:
-            proj["acts"].insert(idx + 1, act)
-        else:
-            proj["acts"].append(act)
-    else:
-        proj["acts"].append(act)
+        if idx is not None: proj["acts"].insert(idx + 1, act)
+        else: proj["acts"].append(act)
+    else: proj["acts"].append(act)
     return True, "", aid
 
 
 def rename_act(proj, aid, name):
     """改幕显示名（aid 不变，引用不受影响）。返回 (ok, msg)。"""
     a = find_act(proj, aid)
-    if a is None:
-        return False, "幕不存在: %s" % aid
+    if a is None: return False, "幕不存在: %s" % aid
     a["name"] = str(name or aid)
     return True, ""
 
@@ -386,8 +360,7 @@ def rename_act(proj, aid, name):
 def duplicate_act(proj, aid):
     """复制一幕（含 tracks/dialogue/choices/jumps，引用按原样带走）。"""
     src = find_act(proj, aid)
-    if src is None:
-        return False, "幕不存在: %s" % aid, None
+    if src is None: return False, "幕不存在: %s" % aid, None
     new_aid = next_act_id(proj)
     dup = copy.deepcopy(src)
     dup["aid"] = new_aid
@@ -403,15 +376,12 @@ def remove_act(proj, aid):
     至少保留一幕（删最后一个 -> 拒绝）。返回 (ok, msg, cleared_refs)。
     cleared_refs 供 UI 提示"已清理 N 处引用"。"""
     a = find_act(proj, aid)
-    if a is None:
-        return False, "幕不存在: %s" % aid, 0
-    if len(proj.get("acts") or []) <= 1:
-        return False, "至少要保留一幕", 0
+    if a is None: return False, "幕不存在: %s" % aid, 0
+    if len(proj.get("acts") or []) <= 1: return False, "至少要保留一幕", 0
     proj["acts"].remove(a)
     cleared = 0
     for other in proj["acts"]:
-        if not isinstance(other, dict):
-            continue
+        if not isinstance(other, dict): continue
         if other.get("next") == aid:
             other["next"] = None
             cleared += 1
@@ -477,8 +447,7 @@ def add_track(proj, kind, name=None, aid=None):
 
     aid（F2-L1 可选）：指定加到哪一幕（缺省当前幕/第一幕）。
     轨道 id 幕内唯一——多幕同名合法，调用方需带 aid 定位。"""
-    if kind not in ("video", "audio"):
-        return False, "轨道类型必须是 video/audio", None
+    if kind not in ("video", "audio"): return False, "轨道类型必须是 video/audio", None
     tid = next_track_id(proj, kind, aid)
     tracks = _tracks_of(proj, aid)
     cnt = sum(1 for t in tracks if t["kind"] == kind) + 1
@@ -497,8 +466,7 @@ def find_clip(proj, clip_id):
     """-> (track, clip) 或 (None, None)"""
     for t in _tracks_of(proj):
         for c in t["clips"]:
-            if c["id"] == clip_id:
-                return t, c
+            if c["id"] == clip_id: return t, c
     return None, None
 
 
@@ -506,8 +474,7 @@ def find_track(proj, track_id, aid=None):
     """按 id 找轨道。多幕工程必须带 aid 才能定位当前幕的轨（aid=None
     只搜第一幕，当前幕非第一幕时找不到新轨）。"""
     for t in _tracks_of(proj, aid):
-        if t["id"] == track_id:
-            return t
+        if t["id"] == track_id: return t
     return None
 
 
@@ -530,20 +497,16 @@ def _tracks_of(proj, aid=None):
     v1 单幕 -> 顶层 tracks 原引用（行为与旧版全等）；
     v2 多幕 -> act_view(proj, aid)["tracks"]，aid=None 取第一幕。
     修改型函数（add_track/add_clip…）拿到的是该幕真实 list，写入即生效。"""
-    if not isinstance(proj, dict):
-        return []
-    if is_multi_act(proj):
-        return act_view(proj, aid)["tracks"]
+    if not isinstance(proj, dict): return []
+    if is_multi_act(proj): return act_view(proj, aid)["tracks"]
     t = proj.get("tracks")
     return t if isinstance(t, list) else []
 
 
 def _dialogue_of(proj, aid=None):
     """F2-L1：取"当前幕"的 dialogue list（同 _tracks_of 口径）。"""
-    if not isinstance(proj, dict):
-        return []
-    if is_multi_act(proj):
-        return act_view(proj, aid)["dialogue"]
+    if not isinstance(proj, dict): return []
+    if is_multi_act(proj): return act_view(proj, aid)["dialogue"]
     d = proj.get("dialogue")
     return d if isinstance(d, list) else []
 
@@ -551,22 +514,18 @@ def _dialogue_of(proj, aid=None):
 def clips_at(proj, t, kind=None):
     out = []
     for tr in _tracks_of(proj):
-        if kind and tr["kind"] != kind:
-            continue
+        if kind and tr["kind"] != kind: continue
         for c in tr["clips"]:
-            if c["start"] - EPS <= t < clip_end(c) - EPS:
-                out.append(c)
+            if c["start"] - EPS <= t < clip_end(c) - EPS: out.append(c)
     return out
 
 
 def top_video_clip_at(proj, t):
     """最上层可见视频轨在 t 时刻的 clip（后加的轨在上）。"""
     for tr in reversed(_tracks_of(proj)):
-        if tr["kind"] != "video" or tr.get("hidden"):
-            continue
+        if tr["kind"] != "video" or tr.get("hidden"): continue
         for c in tr["clips"]:
-            if c["start"] - EPS <= t < clip_end(c) - EPS:
-                return c
+            if c["start"] - EPS <= t < clip_end(c) - EPS: return c
     return None
 
 
@@ -575,8 +534,7 @@ def snap_points(proj, exclude_id=None):
     pts = {0.0}
     for t in _tracks_of(proj):
         for c in t["clips"]:
-            if c["id"] == exclude_id:
-                continue
+            if c["id"] == exclude_id: continue
             pts.add(round(c["start"], 3))
             pts.add(round(clip_end(c), 3))
     return sorted(pts)
@@ -587,8 +545,7 @@ def snap_time(points, t, eps=SNAP_STEP * 3):
     best, bd = t, eps
     for p in points:
         d = abs(p - t)
-        if d <= bd:
-            best, bd = p, d
+        if d <= bd: best, bd = p, d
     return round(best, 3)
 
 
@@ -598,8 +555,7 @@ def snap_points_multi(proj, exclude_ids=None):
     pts = {0.0}
     for t in _tracks_of(proj):
         for c in t["clips"]:
-            if c["id"] in ex:
-                continue
+            if c["id"] in ex: continue
             pts.add(round(c["start"], 3))
             pts.add(round(clip_end(c), 3))
     return sorted(pts)
@@ -612,10 +568,8 @@ def _overlap(a0, a1, b0, b1):
 def _clash(proj, track, start, dur, exclude_id=None):
     """同轨重叠检查 -> 冲突 clip 或 None。"""
     for c in track["clips"]:
-        if c["id"] == exclude_id:
-            continue
-        if _overlap(start, start + dur, c["start"], clip_end(c)):
-            return c
+        if c["id"] == exclude_id: continue
+        if _overlap(start, start + dur, c["start"], clip_end(c)): return c
     return None
 
 
@@ -625,8 +579,7 @@ def src_dur_of(clip):
 
 def _src_limit_ok(clip, src_in, dur):
     """素材时长约束：image 无限长恒 OK；其余 src_in+dur <= src_dur+EPS。"""
-    if clip["source"]["kind"] == "image":
-        return True
+    if clip["source"]["kind"] == "image": return True
     sd = src_dur_of(clip)
     if sd <= 0:          # 未知长度素材（探测失败）：不拦
         return True
@@ -640,14 +593,10 @@ def add_clip(proj, track_id, clip, aid=None):
     if tr is None and aid is not None:
         # aid 指定幕里没有 -> 不再回退第一幕（旧行为会把片段塞错幕）
         return False, "轨道不存在: %s" % track_id
-    if tr is None:
-        return False, "轨道不存在: %s" % track_id
-    if tr.get("locked"):
-        return False, "轨道已锁定"
-    if clip["dur"] < MIN_DUR - EPS:
-        return False, "clip 太短（<%.2fs）" % MIN_DUR
-    if _clash(proj, tr, clip["start"], clip["dur"]):
-        return False, "与同轨 clip 重叠"
+    if tr is None: return False, "轨道不存在: %s" % track_id
+    if tr.get("locked"): return False, "轨道已锁定"
+    if clip["dur"] < MIN_DUR - EPS: return False, "clip 太短（<%.2fs）" % MIN_DUR
+    if _clash(proj, tr, clip["start"], clip["dur"]): return False, "与同轨 clip 重叠"
     clip = dict(clip)
     clip["id"] = next_clip_id(proj)
     tr["clips"].append(clip)
@@ -656,10 +605,8 @@ def add_clip(proj, track_id, clip, aid=None):
 
 def remove_clip(proj, clip_id):
     tr, c = find_clip(proj, clip_id)
-    if c is None:
-        return False, "clip 不存在"
-    if tr.get("locked"):
-        return False, "轨道已锁定"
+    if c is None: return False, "clip 不存在"
+    if tr.get("locked"): return False, "轨道已锁定"
     tr["clips"].remove(c)
     return True, ""
 
@@ -667,15 +614,11 @@ def remove_clip(proj, clip_id):
 def move_clip(proj, clip_id, new_start, new_track_id=None):
     """同轨/跨轨移动。跨轨换轨时校验目标轨类型不限、重叠不撞。"""
     tr, c = find_clip(proj, clip_id)
-    if c is None:
-        return False, "clip 不存在"
-    if tr.get("locked"):
-        return False, "轨道已锁定"
+    if c is None: return False, "clip 不存在"
+    if tr.get("locked"): return False, "轨道已锁定"
     dst = find_track(proj, new_track_id) if new_track_id else tr
-    if dst is None:
-        return False, "目标轨道不存在"
-    if dst.get("locked"):
-        return False, "目标轨道已锁定"
+    if dst is None: return False, "目标轨道不存在"
+    if dst.get("locked"): return False, "目标轨道已锁定"
     new_start = round(max(0.0, float(new_start)), 3)
     if _clash(proj, dst, new_start, c["dur"], exclude_id=clip_id):
         return False, "与目标轨 clip 重叠"
@@ -690,10 +633,8 @@ def _clash_any(proj, track, start, dur, exclude_ids):
     """同轨重叠检查，排除**一组** id（成组移动用：组内互不判撞）。"""
     ex = set(exclude_ids or ())
     for c in track["clips"]:
-        if c["id"] in ex:
-            continue
-        if _overlap(start, start + dur, c["start"], clip_end(c)):
-            return c
+        if c["id"] in ex: continue
+        if _overlap(start, start + dur, c["start"], clip_end(c)): return c
     return None
 
 
@@ -708,8 +649,7 @@ def move_clips(proj, clip_ids, delta):
       但**只有全部成员都锁着**才算失败回弹。
     任一可动成员撞组外片段 -> 整组不动（部分成功会把成组移动变成撕裂）。"""
     ids = [str(i) for i in (clip_ids or ())]
-    if not ids:
-        return False, "未选中片段"
+    if not ids: return False, "未选中片段"
     try:
         delta = float(delta)
     except (TypeError, ValueError):
@@ -717,22 +657,17 @@ def move_clips(proj, clip_ids, delta):
     moving = []
     for cid in ids:
         tr, c = find_clip(proj, cid)
-        if c is None:
-            return False, "clip 不存在"
-        if tr.get("locked"):
-            continue
+        if c is None: return False, "clip 不存在"
+        if tr.get("locked"): continue
         moving.append((tr, c))
-    if not moving:
-        return False, "轨道已锁定"
-    if abs(delta) < EPS:
-        return True, ""
+    if not moving: return False, "轨道已锁定"
+    if abs(delta) < EPS: return True, ""
     moved_ids = {c["id"] for _t, c in moving}
     lo = min(float(c["start"]) + delta for _t, c in moving)
     shift = -lo if lo < 0 else 0.0
     for tr, c in moving:
         ns = round(float(c["start"]) + delta + shift, 3)
-        if _clash_any(proj, tr, ns, float(c["dur"]), moved_ids):
-            return False, "与组外片段重叠"
+        if _clash_any(proj, tr, ns, float(c["dur"]), moved_ids): return False, "与组外片段重叠"
     for tr, c in moving:
         c["start"] = round(float(c["start"]) + delta + shift, 3)
     return True, ""
@@ -744,12 +679,9 @@ def remove_clips(proj, clip_ids):
     last_msg = ""
     for cid in list(clip_ids or ()):
         ok, msg = remove_clip(proj, cid)
-        if ok:
-            n += 1
-        else:
-            last_msg = msg
-    if not n:
-        return False, last_msg or "clip 不存在"
+        if ok: n += 1
+        else: last_msg = msg
+    if not n: return False, last_msg or "clip 不存在"
     return True, ""
 
 
@@ -757,33 +689,24 @@ def trim_clip(proj, clip_id, side, new_value):
     """side='start'：改起点（联动 src_in）；side='end'：改终点。
     new_value 是**时间轴坐标**（秒）。两端都保持素材偏移合法。"""
     tr, c = find_clip(proj, clip_id)
-    if c is None:
-        return False, "clip 不存在"
-    if tr.get("locked"):
-        return False, "轨道已锁定"
+    if c is None: return False, "clip 不存在"
+    if tr.get("locked"): return False, "轨道已锁定"
     v = round(max(0.0, float(new_value)), 3)
     if side == "start":
         d = v - c["start"]                      # >0 左端右移，<0 左扩
         new_in = c["src_in"] + d                # image 恒回 0
-        if c["source"]["kind"] == "image":
-            new_in = 0.0
-        if new_in < -EPS:
-            return False, "不能拖到 0 之前"
+        if c["source"]["kind"] == "image": new_in = 0.0
+        if new_in < -EPS: return False, "不能拖到 0 之前"
         new_dur = c["dur"] - d
-        if new_dur < MIN_DUR - EPS:
-            return False, "trim 后太短"
-        if not _src_limit_ok(c, max(0.0, new_in), new_dur):
-            return False, "超出素材长度"
-        if _clash(proj, tr, v, new_dur, exclude_id=clip_id):
-            return False, "与邻接 clip 重叠"
+        if new_dur < MIN_DUR - EPS: return False, "trim 后太短"
+        if not _src_limit_ok(c, max(0.0, new_in), new_dur): return False, "超出素材长度"
+        if _clash(proj, tr, v, new_dur, exclude_id=clip_id): return False, "与邻接 clip 重叠"
         c["start"], c["src_in"], c["dur"] = v, round(max(0.0, new_in), 3), new_dur
         return True, ""
     elif side == "end":
         new_dur = v - c["start"]
-        if new_dur < MIN_DUR - EPS:
-            return False, "trim 后太短"
-        if not _src_limit_ok(c, c["src_in"], new_dur):
-            return False, "超出素材长度"
+        if new_dur < MIN_DUR - EPS: return False, "trim 后太短"
+        if not _src_limit_ok(c, c["src_in"], new_dur): return False, "超出素材长度"
         if _clash(proj, tr, c["start"], new_dur, exclude_id=clip_id):
             return False, "与邻接 clip 重叠"
         c["dur"] = round(new_dur, 3)
@@ -794,14 +717,11 @@ def trim_clip(proj, clip_id, side, new_value):
 def split_clip(proj, clip_id, t):
     """在时间轴 t 处切成两段。t 必须严格在 clip 内部。返回 (ok, msg, 右段id)。"""
     tr, c = find_clip(proj, clip_id)
-    if c is None:
-        return False, "clip 不存在", None
-    if tr.get("locked"):
-        return False, "轨道已锁定", None
+    if c is None: return False, "clip 不存在", None
+    if tr.get("locked"): return False, "轨道已锁定", None
     left = t - c["start"]
     right = clip_end(c) - t
-    if left < MIN_DUR - EPS or right < MIN_DUR - EPS:
-        return False, "切分后片段太短", None
+    if left < MIN_DUR - EPS or right < MIN_DUR - EPS: return False, "切分后片段太短", None
     if c["source"]["kind"] != "image" and not _src_limit_ok(c, c["src_in"] + left, right):
         return False, "超出素材长度", None
     right_clip = new_clip(c["source"], t, right,
@@ -819,12 +739,10 @@ def split_clip(proj, clip_id, t):
 def delete_range(proj, t0, t1):
     """剪映「删除选中」简化版：把 [t0,t1) 覆盖部分从 clip 上抠掉
     （两侧留头尾则一分为二）。第一阶段供工具栏删除按钮用。"""
-    if t1 - t0 < MIN_DUR - EPS:
-        return 0
+    if t1 - t0 < MIN_DUR - EPS: return 0
     n = 0
     for tr in _tracks_of(proj):
-        if tr.get("locked"):
-            continue
+        if tr.get("locked"): continue
         out = []
         for c in list(tr["clips"]):
             if not _overlap(c["start"], clip_end(c), t0, t1):
@@ -874,8 +792,7 @@ def _sanitize_transition(raw):
       · duration_ms 夹到 [0, 5000]
       · 「无转场」（enter/exit 皆空）合法，导出据此不插 setTransition
     """
-    if not isinstance(raw, dict):
-        return None
+    if not isinstance(raw, dict): return None
     enter = str(raw.get("enter") or "")
     exit_ = str(raw.get("exit") or "")
     try:
@@ -884,10 +801,8 @@ def _sanitize_transition(raw):
         TR = None
     # 引擎表校验：任一脏名 -> 整体退回默认（None），保守不写坏指令
     if TR is not None:
-        if enter and not TR.valid_anim(enter):
-            enter = ""
-        if exit_ and not TR.valid_anim(exit_):
-            exit_ = ""
+        if enter and not TR.valid_anim(enter): enter = ""
+        if exit_ and not TR.valid_anim(exit_): exit_ = ""
     dur = _num(raw.get("duration_ms"), 300.0)
     dur = int(max(0, min(5000, dur)))
     name = str(raw.get("name") or "")
@@ -913,28 +828,22 @@ def _sanitize_effects(raw):
     `setTransform` / `setTempAnimation`（白名单，防脏值被执行）。脏项丢弃。
     """
     out = []
-    if not isinstance(raw, list):
-        return out
+    if not isinstance(raw, list): return out
     for it in raw:
-        if not isinstance(it, dict):
-            continue
+        if not isinstance(it, dict): continue
         t = _num(it.get("t"), -1.0)
         cmd = it.get("cmd")
-        if t < 0 or not isinstance(cmd, str):
-            continue
+        if t < 0 or not isinstance(cmd, str): continue
         s = cmd.strip().rstrip(";").strip()
-        if not s or ":" not in s:
-            continue
+        if not s or ":" not in s: continue
         head, _, body = s.partition(":")
         head = head.strip()
-        if head not in ("setTransform", "setTempAnimation"):
-            continue
+        if head not in ("setTransform", "setTempAnimation"): continue
         body = body.strip()
         # 参数体必须像样：setTransform 要求是 JSON 对象；
         # setTempAnimation 要求是 JSON 数组。空的/乱写的一律丢
         # （否则导出时会把脏指令原样吐给引擎）。
-        if not body or body[0] not in "{[":
-            continue
+        if not body or body[0] not in "{[": continue
         out.append({"t": round(t, 3), "cmd": s})
     return out
 
@@ -943,15 +852,12 @@ def _sanitize_comments(raw):
     """工程级注释载体 comments=[{t,text}]（I3/task-67）：导入端 `//` 与
     `;xxx;` 注释行内容保留，导出端转合法 `;xxx;`。脏项丢弃，绝不抛。"""
     out = []
-    if not isinstance(raw, list):
-        return out
+    if not isinstance(raw, list): return out
     for it in raw:
-        if not isinstance(it, dict):
-            continue
+        if not isinstance(it, dict): continue
         t = _num(it.get("t"), -1.0)
         text = it.get("text")
-        if t < 0 or not isinstance(text, str) or not text.strip():
-            continue
+        if t < 0 or not isinstance(text, str) or not text.strip(): continue
         out.append({"t": round(t, 3), "text": text.strip()})
     return out
 
@@ -965,28 +871,22 @@ def _sanitize_dialogue(raw):
     只丢字段不丢台词**。
     """
     out = []
-    if not isinstance(raw, list):
-        return out
+    if not isinstance(raw, list): return out
     for it in raw:
-        if not isinstance(it, dict):
-            continue
+        if not isinstance(it, dict): continue
         t = _num(it.get("t"), -1.0)
         dur = _num(it.get("dur"), -1.0)
-        if t < 0 or dur < 0:
-            continue
+        if t < 0 or dur < 0: continue
         who, text = it.get("who"), it.get("text")
-        if not isinstance(who, str) or not isinstance(text, str):
-            continue
+        if not isinstance(who, str) or not isinstance(text, str): continue
         ent = {"t": round(t, 3), "dur": round(dur, 3),
                "who": who, "text": text}
         mv = _sanitize_preset(it.get("motion"),
                               lambda: _MT.motion_ids())
         ex = _sanitize_preset(it.get("expression"),
                               lambda: _MT.expression_ids())
-        if mv:
-            ent["motion"] = mv
-        if ex:
-            ent["expression"] = ex
+        if mv: ent["motion"] = mv
+        if ex: ent["expression"] = ex
         out.append(ent)
     return out
 
@@ -994,8 +894,7 @@ def _sanitize_dialogue(raw):
 def _sanitize_tracks(tracks, proj_for_id):
     """校验一组轨道（sanitize 内部共用：v1 顶层与 v2 每幕）。"""
     out = []
-    if not isinstance(tracks, list):
-        return out
+    if not isinstance(tracks, list): return out
     seen_ids = set()
     for tr in tracks:
         if not isinstance(tr, dict) or tr.get("kind") not in ("video", "audio"):
@@ -1013,8 +912,7 @@ def _sanitize_tracks(tracks, proj_for_id):
         clips = []
         for c in (tr.get("clips") or []):
             cc = _sanitize_clip(c, seen_clip_ids=seen_ids)
-            if cc:
-                clips.append(cc)
+            if cc: clips.append(cc)
         out.append({
             "id": tid, "kind": tr["kind"],
             "name": str(tr.get("name") or tid),
@@ -1032,16 +930,13 @@ def _sanitize_str_list(raw, limit=0):
     silently 洗成 []（实测 bug：伪幕吸收的 option.set 全部丢失）。
     字符串按未转义分号切分后逐条清洗，语义与列表形态一致。"""
     items = []
-    if isinstance(raw, list):
-        items = raw
-    elif isinstance(raw, str):
-        items = [x for x in raw.split(";") if x is not None]
+    if isinstance(raw, list): items = raw
+    elif isinstance(raw, str): items = [x for x in raw.split(";") if x is not None]
     out = []
     for x in items:
         if isinstance(x, str) and x.strip():
             s = x.strip()[:200]
-            if limit and len(out) >= limit:
-                break
+            if limit and len(out) >= limit: break
             out.append(s)
     return out
 
@@ -1050,13 +945,10 @@ def _sanitize_choices(raw, act_aids, warn=None):
     """F2-L1 §2.2：choices 清洗（上限/悬空引用容错，绝不抛）。"""
     out = []
     for ch in (raw if isinstance(raw, list) else []):
-        if not isinstance(ch, dict):
-            continue
-        if len(out) >= MAX_CHOICES_PER_ACT:
-            break
+        if not isinstance(ch, dict): continue
+        if len(out) >= MAX_CHOICES_PER_ACT: break
         cid = str(ch.get("cid") or "")
-        if not cid:
-            cid = next_id("c", [c["cid"] for c in out])
+        if not cid: cid = next_id("c", [c["cid"] for c in out])
         t = ch.get("t")
         try:
             t = None if t is None else round(max(0.0, float(t)), 3)
@@ -1064,19 +956,15 @@ def _sanitize_choices(raw, act_aids, warn=None):
             t = None
         opts = []
         for o in (ch.get("options") or []):
-            if not isinstance(o, dict):
-                continue
-            if len(opts) >= MAX_OPTIONS_PER_CHOICE:
-                break
+            if not isinstance(o, dict): continue
+            if len(opts) >= MAX_OPTIONS_PER_CHOICE: break
             text = str(o.get("text") or "").strip()[:100]
-            if not text:
-                continue
+            if not text: continue
             tgt = o.get("target")
             tgt = str(tgt) if tgt else None
             if tgt and act_aids and tgt not in act_aids:
                 # 悬空引用：保留原名（往返保真），但标记
-                if warn is not None:
-                    warn.append("选项「%s」目标幕不存在: %s" % (text, tgt))
+                if warn is not None: warn.append("选项「%s」目标幕不存在: %s" % (text, tgt))
             opt = {"text": text, "target": tgt,
                    "set": _sanitize_str_list(o.get("set"), 8),
                    "when": (str(o.get("when")).strip()[:120]
@@ -1093,15 +981,13 @@ def _sanitize_jumps(raw, act_aids, warn=None):
     """F2-L1 §2.2：jumps 清洗。"""
     out = []
     for j in (raw if isinstance(raw, list) else []):
-        if not isinstance(j, dict):
-            continue
+        if not isinstance(j, dict): continue
         try:
             t = round(max(0.0, float(j.get("t"))), 3)
         except (TypeError, ValueError):
             continue
         when = str(j.get("when") or "").strip()[:200]
-        if not when:
-            continue
+        if not when: continue
         tgt = j.get("target")
         tgt = str(tgt) if tgt else None
         if tgt and act_aids and tgt not in act_aids and warn is not None:
@@ -1116,11 +1002,9 @@ def _sanitize_vars(raw):
     """F2-L1：变量声明清洗 [{name, default}]。"""
     out = []
     for v in (raw if isinstance(raw, list) else []):
-        if not isinstance(v, dict):
-            continue
+        if not isinstance(v, dict): continue
         name = str(v.get("name") or "").strip()
-        if not name or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
-            continue
+        if not name or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name): continue
         out.append({"name": name, "default": v.get("default", 0)})
     return out
 
@@ -1134,18 +1018,14 @@ def sanitize_project(obj, warn=None):
     - v2（有 acts）：逐幕校验，输出 v2
 
     warn（可选 list）：收集容错警告（悬空分支引用等）。"""
-    if not isinstance(obj, dict) or obj.get("type") != PROJECT_TYPE:
-        return None
+    if not isinstance(obj, dict) or obj.get("type") != PROJECT_TYPE: return None
     # 画布参数：脏值/越界一律回默认（宽容，别因一个坏字段拒整个工程）
     w = int(_num(obj.get("width"), 1920))
     h = int(_num(obj.get("height"), 1080))
     fps = _num(obj.get("fps"), 30.0)
-    if not (16 <= w <= 7680):
-        w = 1920
-    if not (16 <= h <= 7680):
-        h = 1080
-    if not (1 <= fps <= 240):
-        fps = 30.0
+    if not (16 <= w <= 7680): w = 1920
+    if not (16 <= h <= 7680): h = 1080
+    if not (1 <= fps <= 240): fps = 30.0
 
     acts_raw = obj.get("acts")
     if isinstance(acts_raw, list) and acts_raw:
@@ -1156,8 +1036,7 @@ def sanitize_project(obj, warn=None):
         # 先定 aid 集合（choices/jumps 悬空校验需要）
         aids, seen = [], set()
         for i, a in enumerate(acts_raw):
-            if not isinstance(a, dict):
-                continue
+            if not isinstance(a, dict): continue
             aid = str(a.get("aid") or "")
             if not aid or aid in seen:
                 aid = "a%d" % (i + 1)
@@ -1173,30 +1052,23 @@ def sanitize_project(obj, warn=None):
                    "choices": _sanitize_choices(a.get("choices"), act_aids, warn),
                    "jumps": _sanitize_jumps(a.get("jumps"), act_aids, warn),
                    "next": (str(a["next"]) if a.get("next") else None)}
-            if not act["tracks"]:
-                act["tracks"] = new_act()["tracks"]
-            if "comments" in a:
-                act["comments"] = _sanitize_comments(a.get("comments"))
-            if "effects" in a:
-                act["effects"] = _sanitize_effects(a.get("effects"))
+            if not act["tracks"]: act["tracks"] = new_act()["tracks"]
+            if "comments" in a: act["comments"] = _sanitize_comments(a.get("comments"))
+            if "effects" in a: act["effects"] = _sanitize_effects(a.get("effects"))
             if act["next"] and act["next"] not in act_aids and warn is not None:
                 warn.append("续幕目标不存在: %s" % act["next"])
             proj["acts"].append(act)
-        if not proj["acts"]:
-            return None
+        if not proj["acts"]: return None
         _tr = _sanitize_transition(obj.get("transition"))
-        if _tr is not None:
-            proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
+        if _tr is not None: proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
         return proj
 
     # ---------- v1 单幕（原行为逐字节保留）----------
     tracks = obj.get("tracks")
-    if not isinstance(tracks, list):
-        return None
+    if not isinstance(tracks, list): return None
     proj = {"type": PROJECT_TYPE, "version": 1, "width": w, "height": h,
             "fps": fps, "tracks": _sanitize_tracks(tracks, None)}
-    if not proj["tracks"]:
-        proj["tracks"] = new_project()["tracks"]     # 至少保证有默认双轨
+    if not proj["tracks"]: proj["tracks"] = new_project()["tracks"]     # 至少保证有默认双轨
     # A4：台词表（WebGAL 导出与舞台字幕共用）
     proj["dialogue"] = _sanitize_dialogue(obj.get("dialogue"))
     # I3（task-67）：工程级注释载体（导入保留 → 导出转合法语法）
@@ -1204,8 +1076,7 @@ def sanitize_project(obj, warn=None):
     # v3.5：画面特效载体（导入保留 → 导出 emit 成真实 setTransform 指令）
     proj["effects"] = _sanitize_effects(obj.get("effects"))
     _tr = _sanitize_transition(obj.get("transition"))
-    if _tr is not None:
-        proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
+    if _tr is not None: proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
     return proj
 
 
@@ -1238,8 +1109,7 @@ def _lib_motion_keys():
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "webgal_games", "asset_library")
         fig = os.path.join(lib, "figure")
-        if not os.path.isdir(fig):
-            return _LIB_MOTION_KEYS or set()
+        if not os.path.isdir(fig): return _LIB_MOTION_KEYS or set()
         # 戳：figure 目录的 mtime + 子项数量（新增/删除素材会变）
         st = os.stat(fig)
         stamp = (st.st_mtime, len(os.listdir(fig)))
@@ -1249,25 +1119,21 @@ def _lib_motion_keys():
         import json as _json
         for role in os.listdir(fig):
             rd = os.path.join(fig, role)
-            if not os.path.isdir(rd):
-                continue
+            if not os.path.isdir(rd): continue
             for cos in os.listdir(rd):
                 p = os.path.join(rd, cos, "model.json")
-                if not os.path.isfile(p):
-                    continue
+                if not os.path.isfile(p): continue
                 try:
                     o = _json.load(open(p, encoding="utf-8"))
                 except Exception:
                     continue
                 mo = o.get("motions")
-                if isinstance(mo, dict):
-                    keys |= {str(k) for k in mo}
+                if isinstance(mo, dict): keys |= {str(k) for k in mo}
                 elif isinstance(mo, list):
                     keys |= {str(x.get("name")) for x in mo
                              if isinstance(x, dict) and x.get("name")}
                 ex = o.get("expressions")
-                if isinstance(ex, dict):
-                    keys |= {str(k) for k in ex}
+                if isinstance(ex, dict): keys |= {str(k) for k in ex}
                 elif isinstance(ex, list):
                     keys |= {str(x.get("name")) for x in ex
                              if isinstance(x, dict) and x.get("name")}
@@ -1295,22 +1161,16 @@ def _cubism_key_ok(v):
       （后者的用户可见后果是「人物全都不动」）。
       脏值（空白/分号/冒号/引号/反斜杠/路径特征）在任何档位都会被拒。
     """
-    if not isinstance(v, str):
-        return False
+    if not isinstance(v, str): return False
     s = v.strip()
-    if not s or len(s) > 64:
-        return False
-    if _CUBISM_KEY_BAD_RE.search(s) or "\\" in s:
-        return False
-    if s.startswith(("/", ".")) or s.endswith("/") or ".." in s:
-        return False
+    if not s or len(s) > 64: return False
+    if _CUBISM_KEY_BAD_RE.search(s) or "\\" in s: return False
+    if s.startswith(("/", ".")) or s.endswith("/") or ".." in s: return False
     # 1) 前缀式形态（anon/idle01）
-    if "/" in s:
-        return True
+    if "/" in s: return True
     # 2) 素材库实有键名（裸键走这条）—— 这是正常路径
     lib = _lib_motion_keys()
-    if lib:
-        return s in lib
+    if lib: return s in lib
     # 3) 素材库不可用时的兜底：只放行纯标识符（不让整条链路瘫掉）
     return bool(re.match(r"^[A-Za-z0-9_\u3040-\u30ff\u4e00-\u9fff\-]+$", s))
 
@@ -1322,10 +1182,8 @@ def _motion_value_ok(v, ids=None):
     键名形态（G5 放行，AI 直接引用素材库 meta.motions 的键名）。两者都不
     满足 -> False（脏值防线不降）。ids 传 None/空 = 只按键名形态判。
     表不可用时的"非空串透传"是 _sanitize_preset 的既有兜底，不在本函数。"""
-    if not isinstance(v, str) or not v.strip():
-        return False
-    if ids and v in ids:
-        return True
+    if not isinstance(v, str) or not v.strip(): return False
+    if ids and v in ids: return True
     return _cubism_key_ok(v)
 
 
@@ -1335,10 +1193,8 @@ def _sanitize_preset(raw, ids_fn):
     motion_table 不可用（import 失败）时宽松透传非空字符串，绝不因表缺失
     拒绝整个 clip（G5 的键名形态在此兜底下同样放行）。
     """
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    if _MT is None:
-        return raw
+    if not isinstance(raw, str) or not raw.strip(): return None
+    if _MT is None: return raw
     try:
         ids = ids_fn()
     except Exception:
@@ -1383,15 +1239,12 @@ def _sanitize_filter(raw):
 
     返回 None 表示"没有有效滤镜"（调用方据此不写 filter 键）。
     """
-    if not isinstance(raw, dict):
-        return None
+    if not isinstance(raw, dict): return None
     out = {}
     for k, (lo, hi) in _FILTER_KEYS.items():
-        if k not in raw:
-            continue
+        if k not in raw: continue
         v = raw.get(k)
-        if isinstance(v, bool):
-            continue
+        if isinstance(v, bool): continue
         try:
             fv = float(v)
         except (TypeError, ValueError):
@@ -1401,27 +1254,21 @@ def _sanitize_filter(raw):
         out[k] = round(max(lo, min(hi, fv)), 4)
     for k in _FILTER_BOOL_KEYS:
         v = raw.get(k)
-        if isinstance(v, bool) and v:
-            out[k] = True
+        if isinstance(v, bool) and v: out[k] = True
     return out or None
 
 
 def _sanitize_clip(c, seen_clip_ids):
-    if not isinstance(c, dict):
-        return None
+    if not isinstance(c, dict): return None
     src = c.get("source")
-    if not isinstance(src, dict) or src.get("kind") not in _KINDS:
-        return None
+    if not isinstance(src, dict) or src.get("kind") not in _KINDS: return None
     path = str(src.get("path") or "")
-    if not path:
-        return None
+    if not path: return None
     cid = str(c.get("id") or "")
-    if cid in seen_clip_ids:
-        cid = ""            # 让调用方后面重排；先保留 clip
+    if cid in seen_clip_ids: cid = ""            # 让调用方后面重排；先保留 clip
     start = max(0.0, _num(c.get("start"), 0.0))
     dur = _num(c.get("dur"), 0.0)
-    if dur < MIN_DUR - EPS:
-        return None
+    if dur < MIN_DUR - EPS: return None
     src_in = max(0.0, _num(c.get("src_in"), 0.0))
     _src_out = {"kind": src["kind"], "path": path,
                 "w": int(_num(src.get("w"), 0)),
@@ -1432,8 +1279,7 @@ def _sanitize_clip(c, seen_clip_ids):
     # 导出 WebGAL 时可直接写回素材库相对路径，省一次拷贝。
     for _k in ("lib_file", "lib_name"):
         _v = src.get(_k)
-        if isinstance(_v, str) and _v.strip():
-            _src_out[_k] = _v.strip()
+        if isinstance(_v, str) and _v.strip(): _src_out[_k] = _v.strip()
     out = {"id": cid,
            "source": _src_out,
            "start": round(start, 3), "src_in": round(src_in, 3),
@@ -1441,15 +1287,12 @@ def _sanitize_clip(c, seen_clip_ids):
            "layout": _sanitize_layout(c.get("layout"))}
     # 滤镜（「特效」页改名后新增）：setTransform 参数的子集，脏值丢键不丢 clip
     _filt = _sanitize_filter(c.get("filter"))
-    if _filt:
-        out["filter"] = _filt
+    if _filt: out["filter"] = _filt
     # C2：motion / expression 透传（脏值丢键不丢 clip）
     mv = _sanitize_preset(c.get("motion"), _MT.motion_ids)
     ex = _sanitize_preset(c.get("expression"), _MT.expression_ids)
-    if mv:
-        out["motion"] = mv
-    if ex:
-        out["expression"] = ex
+    if mv: out["motion"] = mv
+    if ex: out["expression"] = ex
     return out
 
 
@@ -1469,14 +1312,11 @@ _FIGURE_SRC_KINDS = ("image", "puppet")
 
 def is_figure_clip(clip, track=None):
     """单 clip 是否计入同屏人数（判定口径见上方注释）。"""
-    if not isinstance(clip, dict):
-        return False
+    if not isinstance(clip, dict): return False
     src = clip.get("source") or {}
     sk = src.get("kind")
-    if sk not in _FIGURE_SRC_KINDS:
-        return False
-    if sk == "puppet":
-        return True
+    if sk not in _FIGURE_SRC_KINDS: return False
+    if sk == "puppet": return True
     tr_name = str((track or {}).get("name") or "").upper()
     return tr_name.startswith("FIG")
 
@@ -1484,35 +1324,28 @@ def is_figure_clip(clip, track=None):
 def figure_clips_at(proj, t):
     """时刻 t（含）生效的立绘 clip 列表（dict 引用，按轨道序）。"""
     out = []
-    if not isinstance(proj, dict):
-        return out
+    if not isinstance(proj, dict): return out
     try:
         tf = float(t)
     except (TypeError, ValueError):
         return out
     for tr in _tracks_of(proj):
-        if not isinstance(tr, dict) or tr.get("kind") == "audio":
-            continue
+        if not isinstance(tr, dict) or tr.get("kind") == "audio": continue
         for c in tr.get("clips") or []:
-            if not is_figure_clip(c, tr):
-                continue
+            if not is_figure_clip(c, tr): continue
             s = _num(c.get("start"), 0.0)
-            if s <= tf < s + _num(c.get("dur"), 0.0):
-                out.append(c)
+            if s <= tf < s + _num(c.get("dur"), 0.0): out.append(c)
     return out
 
 
 def figure_intervals(proj, exclude_cid=None):
     """全部立绘 clip 的 (start, end, clip) 区间表（end 开区间右端）。"""
     iv = []
-    if not isinstance(proj, dict):
-        return iv
+    if not isinstance(proj, dict): return iv
     for tr in _tracks_of(proj):
-        if not isinstance(tr, dict) or tr.get("kind") == "audio":
-            continue
+        if not isinstance(tr, dict) or tr.get("kind") == "audio": continue
         for c in tr.get("clips") or []:
-            if exclude_cid is not None and c.get("id") == exclude_cid:
-                continue
+            if exclude_cid is not None and c.get("id") == exclude_cid: continue
             if is_figure_clip(c, tr):
                 s = _num(c.get("start"), 0.0)
                 iv.append((s, s + _num(c.get("dur"), 0.0), c))
@@ -1526,24 +1359,19 @@ def figure_overlap_max(proj, t0, t1, exclude_cid=None):
         a0, a1 = float(t0), float(t1)
     except (TypeError, ValueError):
         return 0
-    if a1 <= a0:
-        return 0
+    if a1 <= a0: return 0
     ivs = figure_intervals(proj, exclude_cid=exclude_cid)
     pts = {a0, a1}
     for s, e, _c in ivs:
-        if a0 <= s < a1:
-            pts.add(s)
-        if a0 < e <= a1:
-            pts.add(e)
+        if a0 <= s < a1: pts.add(s)
+        if a0 < e <= a1: pts.add(e)
     sp = sorted(pts)
     best = 0
     for a, b in zip(sp, sp[1:]):
-        if b <= a:
-            continue
+        if b <= a: continue
         mid = (a + b) / 2.0
         n = sum(1 for s, e, _c in ivs if s <= mid < e)
-        if n > best:
-            best = n
+        if n > best: best = n
     return best
 
 
@@ -1552,27 +1380,21 @@ def figure_occupancy_note(proj, t0, t1, exclude_cid=None):
     取 [t0,t1) 内首次达到峰值人数的时刻，列出生效立绘的 轨道名@区间。"""
     ivs = [(s, e, c) for s, e, c in figure_intervals(proj, exclude_cid)
            if e > t0 and s < t1]
-    if not ivs:
-        return ""
+    if not ivs: return ""
     pts = sorted({t0} | {s for s, _e, _c in ivs if t0 <= s < t1}
                  | {e for _s, e, _c in ivs if t0 < e <= t1} | {t1})
     peak, peak_t = 0, t0
     for a, b in zip(pts, pts[1:]):
-        if b <= a:
-            continue
+        if b <= a: continue
         mid = (a + b) / 2.0
         n = sum(1 for s, e, _c in ivs if s <= mid < e)
-        if n > peak:
-            peak, peak_t = n, mid
-    if peak <= 0:
-        return ""
+        if n > peak: peak, peak_t = n, mid
+    if peak <= 0: return ""
     names = []
     for tr in _tracks_of(proj):
         for c in tr.get("clips") or []:
-            if exclude_cid is not None and c.get("id") == exclude_cid:
-                continue
-            if not is_figure_clip(c, tr):
-                continue
+            if exclude_cid is not None and c.get("id") == exclude_cid: continue
+            if not is_figure_clip(c, tr): continue
             s = _num(c.get("start"), 0.0)
             if s <= peak_t < s + _num(c.get("dur"), 0.0):
                 nm = str(tr.get("name") or tr.get("id") or "?")
@@ -1592,12 +1414,10 @@ def normalize_ids(proj):
         return proj
     used = set()
     for tr in _tracks_of(proj):
-        if tr["id"] in used:
-            tr["id"] = next_track_id(proj, tr["kind"])
+        if tr["id"] in used: tr["id"] = next_track_id(proj, tr["kind"])
         used.add(tr["id"])
         for c in tr["clips"]:
-            if not c["id"] or c["id"] in used:
-                c["id"] = next_clip_id(proj)
+            if not c["id"] or c["id"] in used: c["id"] = next_clip_id(proj)
             used.add(c["id"])
     return proj
 

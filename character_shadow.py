@@ -51,8 +51,7 @@ def _clamp(v, lo, hi, d=0.0):
         f = float(v)
     except (TypeError, ValueError):
         f = d
-    if f != f:
-        f = d
+    if f != f: f = d
     return max(lo, min(hi, f))
 
 
@@ -86,8 +85,7 @@ def make_shadow_rgba(w=256, h=96, concentration=0.38, softness=0.55,
     h = max(8, int(h))
     conc = _clamp(concentration, 0.0, 1.0, 0.38)
     soft = _clamp(softness, 0.01, 0.99, 0.55)
-    if conc <= 0:
-        return np.zeros((h, w, 4), np.uint8)
+    if conc <= 0: return np.zeros((h, w, 4), np.uint8)
 
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     cx, cy = (w - 1) / 2.0, (h - 1) / 2.0
@@ -160,8 +158,7 @@ def place_shadow(fig_layout, proj_w, proj_h, **kw):
     p = dict(DEFAULTS)
     for k in ("concentration", "softness", "width_pct",
               "height_pct", "offset_y"):
-        if k in kw:
-            p[k] = kw[k]
+        if k in kw: p[k] = kw[k]
     p["concentration"] = _clamp(p["concentration"], 0, 1, 0.38)
     p["softness"] = _clamp(p["softness"], 0.01, 0.99, 0.55)
     p["width_pct"] = _clamp(p["width_pct"], 0.1, 2.0, 0.62)

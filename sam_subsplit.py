@@ -14,6 +14,7 @@ r"""SAM 智能子拆分 —— 用 SAM 自动掩码把单个图层按视觉块�
 import os
 import sys
 import numpy as np
+import contextlib
 
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 # 权重路径（模块级常量，便于测试 monkeypatch / 补装脚本定位）
@@ -27,10 +28,7 @@ _SAM_DEVICE = None
 
 def _log(verbose, msg):
     if verbose:
-        try:
-            verbose(msg)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): verbose(msg)
 
 
 def _load_sam(verbose=print):

@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 
 import anim as A
 import ui_theme as TH
+import contextlib
+import ui_toast as TOAST
 
 # 配色（跟随 ui_theme 主题：深色 / 浅色半透明磨砂白）
 # 做法：这里的模块级名字由 _refresh_colors() 在切主题时整体重新赋值，
@@ -80,10 +82,7 @@ def _refresh_colors():
     C_LINK = TH.qcolor("tl_link")
     C_KF_INNER = TH.qcolor("tl_kf_inner")
     for p in _PANELS:
-        try:
-            p._apply_theme()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): p._apply_theme()
 
 
 _PANELS = []          # 存活的 TimelinePanel，切主题时重刷头部样式
@@ -206,10 +205,7 @@ class TimelinePanel(QWidget):
             self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
         except Exception:
             pass
-        try:
-            self.area.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.area.update()
 
     # ---------------- 缩放/尺寸 ----------------
     def _apply_scale(self):
@@ -234,31 +230,20 @@ class TimelinePanel(QWidget):
         for w in (self.btn_add, self.btn_clear, self.spin_dur, self.spin_fps,
                   self.cmb_scale, self.lbl_dur, self.lbl_fps, self.lbl_scale,
                   self.hint):
-            try:
-                w.setFont(f)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): w.setFont(f)
         # 提示文字提亮（原来用 C_TEXT.name() 太暗）
-        try:
-            self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
         # 大字号时提示文字可能撑宽布局 -> 空间不够就隐藏，避免把窗口撑出屏幕
-        try:
+        with contextlib.suppress(Exception):
             need = sum(w.sizeHint().width() for w in
                        (self.btn_add, self.btn_clear, self.lbl_dur,
                         self.spin_dur, self.lbl_fps, self.spin_fps,
                         self.lbl_scale, self.cmb_scale))
             self.hint.setVisible(need < max(600, self.width() - 240))
-        except Exception:
-            pass
         self.setMinimumWidth(0)       # 面板本身不参与撑宽
         # 面板高度重算
         self._resize_panel()
-        try:
-            self.area.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.area.update()
 
     def _scale_changed(self, idx):
         try:
@@ -272,14 +257,12 @@ class TimelinePanel(QWidget):
         s = max(SCALE_LEVELS[0], min(SCALE_LEVELS[-1], float(s)))
         self.ui_scale = s
         # 同步下拉框（不回环）
-        try:
+        with contextlib.suppress(Exception):
             self.cmb_scale.blockSignals(True)
             idx = min(range(len(SCALE_LEVELS)),
                       key=lambda i: abs(SCALE_LEVELS[i] - s))
             self.cmb_scale.setCurrentIndex(idx)
             self.cmb_scale.blockSignals(False)
-        except Exception:
-            pass
         self._apply_scale()
 
     def scaled_row_h(self):
@@ -289,13 +272,11 @@ class TimelinePanel(QWidget):
         而不是行高不变、下面留一片空白。
         """
         base = max(16, int(round(ROW_H * self.ui_scale)))
-        if self._manual_h is None:
-            return base
+        if self._manual_h is None: return base
         n = max(1, len(self._rows()))
         avail = (int(self._manual_h) - self._head.height()
                  - self.scaled_time_h() - 6)
-        if avail <= 0:
-            return base
+        if avail <= 0: return base
         per = avail // n
         # 最多放大到基准的 2.5 倍，避免一两条轨道被拉得夸张
         return max(base, min(int(round(base * 2.5)), int(per)))
@@ -314,10 +295,8 @@ class TimelinePanel(QWidget):
 
     def _resize_panel(self):
         """面板高度：用户拖过/动过滑块就用手动值，否则按行数自适应。"""
-        if self._manual_h is not None:
-            h = int(self._manual_h)
-        else:
-            h = self._content_height()
+        if self._manual_h is not None: h = int(self._manual_h)
+        else: h = self._content_height()
         h = max(PANEL_MIN_H, min(PANEL_MAX_H, h))
         self.setFixedHeight(h)
         self.update()               # 顶部拖拽条随宽度重画
@@ -362,10 +341,8 @@ class TimelinePanel(QWidget):
         # 悬停到顶部拖拽条：高亮 + 调整光标
         hot = self._hit_h_edge(ev.position())
         self._set_hot(hot)
-        if hot:
-            self.setCursor(Qt.SizeVerCursor)
-        else:
-            self.unsetCursor()
+        if hot: self.setCursor(Qt.SizeVerCursor)
+        else: self.unsetCursor()
         super().mouseMoveEvent(ev)
 
     def mouseReleaseEvent(self, ev):
@@ -383,17 +360,13 @@ class TimelinePanel(QWidget):
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
-        try:
-            self.area.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.area.update()
 
 
     # ---------------- 数据访问 ----------------
     def _tracks(self):
         rig = getattr(self.wb, "rig", None)
-        if not isinstance(rig, dict):
-            return {}
+        if not isinstance(rig, dict): return {}
         kf = rig.get("keyframes")
         return kf if isinstance(kf, dict) else {}
 
@@ -410,15 +383,13 @@ class TimelinePanel(QWidget):
     # ---------------- 刷新 ----------------
     def refresh(self):
         """外部数据变了以后调用：重设 spin 值 + 重绘 + 按行数调整高度。"""
-        try:
+        with contextlib.suppress(Exception):
             self.spin_dur.blockSignals(True)
             self.spin_dur.setValue(self._dur())
             self.spin_dur.blockSignals(False)
             self.spin_fps.blockSignals(True)
             self.spin_fps.setValue(int(getattr(self.wb, "fps", 30)))
             self.spin_fps.blockSignals(False)
-        except Exception:
-            pass
         self._resize_panel()          # 行数/缩放变了都要重算高度
         self.area.update()
 
@@ -432,10 +403,8 @@ class TimelinePanel(QWidget):
 
     def _clear_all(self):
         rig = getattr(self.wb, "rig", None)
-        if not isinstance(rig, dict):
-            return
-        if not A.has_anim(rig.get("keyframes")):
-            return
+        if not isinstance(rig, dict): return
+        if not A.has_anim(rig.get("keyframes")): return
         rig["keyframes"] = {}
         self.wb.push_history()          # 先改后 push（与项目既有约定一致）
         self._sel = None
@@ -450,16 +419,14 @@ class TimelinePanel(QWidget):
         node = self._current_node()
         if not node:
             from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.warning("提示", "先在右侧「骨架节点」里选中一个节点",
-                            parent=self, position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_warn(self, "提示", "先在右侧「骨架节点」里选中一个节点", duration=2000)
             return
         self.add_keyframe_for_node(node)
 
     def _current_node(self):
         try:
             it = self.wb.tree.currentItem()
-            if it is None:
-                return None
+            if it is None: return None
             n = it.data(Qt.UserRole)
             return n if isinstance(n, str) else None
         except Exception:
@@ -472,12 +439,10 @@ class TimelinePanel(QWidget):
         值取当前 t 下 animation_for 的基线值，这样"打帧"不改变当前画面。
         """
         rig = getattr(self.wb, "rig", None)
-        if not isinstance(rig, dict):
-            return
+        if not isinstance(rig, dict): return
         t = self._now()
         nd = next((n for n in rig["nodes"] if n["node"] == node), None)
-        if nd is None:
-            return
+        if nd is None: return
         import l2d_rig_core as C
         base = C.animation_for(node, t, nd, None)   # 取 sin 基线（不含已有轨道）
         kf = A.clone_tracks(rig.get("keyframes"))
@@ -513,8 +478,7 @@ class TimelinePanel(QWidget):
 
     def x_to_t(self, x):
         r = self.lane_rect()
-        if r.width() <= 0:
-            return 0.0
+        if r.width() <= 0: return 0.0
         u = (x - r.left()) / r.width()
         return max(0.0, min(1.0, u)) * self._dur()
 
@@ -539,23 +503,19 @@ class _TrackArea(QWidget):
         head_h, time_h, row_h, _ = self._geom()
         rows = self.panel._rows()
         i = int((y - (head_h + time_h)) // row_h)
-        if 0 <= i < len(rows):
-            return i
+        if 0 <= i < len(rows): return i
         return None
 
     def _kf_at(self, x, y, px=None):
         """返回 (node, param, t) 或 None。"""
-        if px is None:
-            px = 7.0 * float(self.panel.ui_scale)
+        if px is None: px = 7.0 * float(self.panel.ui_scale)
         i = self._row_at(y)
-        if i is None:
-            return None
+        if i is None: return None
         rows = self.panel._rows()
         node, param, track = rows[i]
         for kf in track:
             kx = self.panel.t_to_x(kf["t"])
-            if abs(kx - x) <= px:
-                return (node, param, kf["t"])
+            if abs(kx - x) <= px: return (node, param, kf["t"])
         return None
 
     # ---- 绘制 ----
@@ -609,8 +569,7 @@ class _TrackArea(QWidget):
         kf_r = max(4.0, 5.0 * s)
         for i, (node, param, track) in enumerate(rows):
             y0 = head_h + time_h + i * row_h
-            if y0 > self.height():
-                break
+            if y0 > self.height(): break
             bg = C_ROW_A if i % 2 == 0 else C_ROW_B
             p.fillRect(QRectF(0, y0, self.width(), row_h), bg)
             # 行名（提亮 + 按缩放取字宽）
@@ -663,11 +622,9 @@ class _TrackArea(QWidget):
         x, y = ev.position().x(), ev.position().y()
         if ev.button() == Qt.RightButton:
             hit = self._kf_at(x, y)
-            if hit:
-                self._context_menu(hit, ev)
+            if hit: self._context_menu(hit, ev)
             return
-        if ev.button() != Qt.LeftButton:
-            return
+        if ev.button() != Qt.LeftButton: return
         hit = self._kf_at(x, y)
         if hit is not None:
             self.panel._sel = (hit[0], hit[1], round(hit[2], 6))
@@ -691,8 +648,7 @@ class _TrackArea(QWidget):
                 dx = x - d["x0"]
                 lane = self.panel.lane_rect()
                 dt = 0.0
-                if lane.width() > 0:
-                    dt = dx / lane.width() * self.panel._dur()
+                if lane.width() > 0: dt = dx / lane.width() * self.panel._dur()
                 self._move_kf(d["hit"], d["t0"] + dt)
             return
         if self.panel._scrub:
@@ -700,12 +656,9 @@ class _TrackArea(QWidget):
             self.update()
             return
         # 悬停光标
-        if self._kf_at(x, y):
-            self.setCursor(Qt.SizeHorCursor)
-        elif y >= self._geom()[0]:
-            self.setCursor(Qt.PointingHandCursor)
-        else:
-            self.unsetCursor()
+        if self._kf_at(x, y): self.setCursor(Qt.SizeHorCursor)
+        elif y >= self._geom()[0]: self.setCursor(Qt.PointingHandCursor)
+        else: self.unsetCursor()
 
     def mouseReleaseEvent(self, ev):
         d = self.panel._drag
@@ -720,19 +673,16 @@ class _TrackArea(QWidget):
 
     def mouseDoubleClickEvent(self, ev):
         hit = self._kf_at(ev.position().x(), ev.position().y())
-        if hit is None:
-            return
+        if hit is None: return
         self._delete_kf(hit)
 
     # ---- 关键帧操作 ----
     def _move_kf(self, hit, new_t):
         node, param, old_t = hit
         rig = getattr(self.panel.wb, "rig", None)
-        if not isinstance(rig, dict):
-            return
+        if not isinstance(rig, dict): return
         new_t = max(0.0, min(self.panel._dur(), round(new_t, 2)))
-        if abs(new_t - old_t) < 1e-9:
-            return
+        if abs(new_t - old_t) < 1e-9: return
         kf = A.clone_tracks(rig.get("keyframes"))
         nt = kf.get(node, {}).get(param, [])
         # 取老帧的值与缓动
@@ -741,8 +691,7 @@ class _TrackArea(QWidget):
             if abs(k["t"] - old_t) < 0.05:
                 val, ease = k["v"], k.get("ease", "linear")
                 break
-        if val is None:
-            return
+        if val is None: return
         kf = A.remove_keyframe(kf, node, param, old_t, eps=0.05)
         kf = A.set_keyframe(kf, node, param, new_t, val, ease)
         rig["keyframes"] = kf
@@ -757,8 +706,7 @@ class _TrackArea(QWidget):
     def _delete_kf(self, hit):
         node, param, t = hit
         rig = getattr(self.panel.wb, "rig", None)
-        if not isinstance(rig, dict):
-            return
+        if not isinstance(rig, dict): return
         rig["keyframes"] = A.remove_keyframe(
             A.clone_tracks(rig.get("keyframes")), node, param, t)
         self.panel.wb.push_history()        # 先改后 push
@@ -789,8 +737,7 @@ class _TrackArea(QWidget):
     def _set_ease(self, hit, ease):
         node, param, t = hit
         rig = getattr(self.panel.wb, "rig", None)
-        if not isinstance(rig, dict):
-            return
+        if not isinstance(rig, dict): return
         kf = A.clone_tracks(rig.get("keyframes"))
         nt = kf.get(node, {}).get(param, [])
         for k in nt:
@@ -818,11 +765,9 @@ def _draw_diamond(p, cx, cy, r, fill, edge):
 
 def _nice_step(raw):
     """把 raw 秒规整成 1/2/5 x 10^n 的"好看"刻度间隔。"""
-    if raw <= 0:
-        return 1.0
+    if raw <= 0: return 1.0
     e = math.floor(math.log10(raw))
     base = 10 ** e
     for m in (1, 2, 5, 10):
-        if raw <= base * m:
-            return base * m
+        if raw <= base * m: return base * m
     return base * 10

@@ -21,6 +21,7 @@ proj["transition"] 形态（工程级，全片统一）：
 """
 import json
 import os
+import contextlib
 
 # ---- 内置快照（animationTable.json 读不到时的兜底）----
 # 名字 = 引擎 v1 动画名；运行时真表里每个都还有 -v2 变体，导出用 v1 名即可。
@@ -73,14 +74,11 @@ def _load_table():
     """引擎动画名集合（小写）。优先运行时 animationTable.json，退回快照。"""
     d = _anim_dir()
     if d:
-        try:
+        with contextlib.suppress(Exception):
             with open(os.path.join(d, "animationTable.json"), encoding="utf-8") as f:
                 arr = json.load(f)
             names = {str(x).lower() for x in arr if isinstance(x, str)}
-            if names:
-                return names
-        except Exception:
-            pass
+            if names: return names
     return {str(x).lower() for x in _TABLE_FALLBACK}
 
 
@@ -92,11 +90,9 @@ def _read_anim(name):
     v2: {keyframes:[{time, alpha, position:{x}, blur}, ...]}，time 是**绝对毫秒**。
     解析失败返回 (None, [])。"""
     d = _anim_dir()
-    if not d or not name:
-        return None, []
+    if not d or not name: return None, []
     p = os.path.join(d, "%s.json" % name)
-    if not os.path.isfile(p):
-        return None, []
+    if not os.path.isfile(p): return None, []
     try:
         with open(p, encoding="utf-8") as f:
             data = json.load(f)
@@ -106,26 +102,19 @@ def _read_anim(name):
         kfs = data.get("keyframes") or []
         total = 0
         for k in kfs:
-            try:
-                total = max(total, int(k.get("time") or 0))
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): total = max(total, int(k.get("time") or 0))
         return (total or None), kfs
     if isinstance(data, list):        # v1
         total = 0
         for k in data:
-            try:
-                total += int(k.get("duration") or 0)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): total += int(k.get("duration") or 0)
         return (total or None), data
     return None, []
 
 
 def _kf_get(kf, key):
     """关键帧里取属性（v1 平铺 / v2 也平铺），position 归一成 (dx, dy)。"""
-    if not isinstance(kf, dict):
-        return None
+    if not isinstance(kf, dict): return None
     if key == "position":
         pos = kf.get("position")
         if isinstance(pos, dict):
@@ -138,34 +127,28 @@ def _anim_props(kfs):
     """关键帧里出现过的动画属性集合（alpha/position/scale/blur）。"""
     out = set()
     for kf in kfs:
-        if not isinstance(kf, dict):
-            continue
+        if not isinstance(kf, dict): continue
         for key in ("alpha", "position", "scale", "blur"):
-            if kf.get(key) is not None:
-                out.add(key)
+            if kf.get(key) is not None: out.add(key)
     return out
 
 
 def catalog():
     """转场预设列表（带派生的时长/属性），供 UI 与导出消费。进程级缓存。"""
     global _cache
-    if _cache is not None:
-        return _cache
+    if _cache is not None: return _cache
     table = _load_table()
     out = []
     for name, desc, enter, exit_, vkind in _PRESETS:
         dur = 0
         props = set()
         for a in (enter, exit_):
-            if not a:
-                continue
+            if not a: continue
             d, kfs = _read_anim(a)
-            if d:
-                dur = max(dur, d)
+            if d: dur = max(dur, d)
             props |= _anim_props(kfs)
         # 读不到运行时关键帧时给个合理默认时长（enter/exit 实测 300ms）
-        if dur <= 0:
-            dur = 300 if (enter or exit_) else 0
+        if dur <= 0: dur = 300 if (enter or exit_) else 0
         available = True
         if enter or exit_:
             available = (enter.lower() in table and exit_.lower() in table)
@@ -184,8 +167,7 @@ def catalog():
 
 def by_name(name):
     for p in catalog():
-        if p["name"] == name:
-            return p
+        if p["name"] == name: return p
     return None
 
 
@@ -196,8 +178,7 @@ def to_proj_transition(name):
     （导出据此不插 setTransition）。引擎表里没有的预设也返回带
     available=False 的项，由导出侧决定退回默认。"""
     p = by_name(name)
-    if p is None:
-        return None
+    if p is None: return None
     return {
         "name": p["name"],
         "enter": p["enter"],
@@ -211,6 +192,5 @@ def to_proj_transition(name):
 
 def valid_anim(name):
     """动画名是否在引擎表里（导出前校验，脏名退回默认 enter/exit）。"""
-    if not name:
-        return True          # 空（无转场）合法
+    if not name: return True          # 空（无转场）合法
     return str(name).lower() in _load_table()

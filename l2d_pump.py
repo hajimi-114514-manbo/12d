@@ -33,6 +33,7 @@ import threading
 import time
 
 import numpy as np
+import contextlib
 
 _V_DIR = os.path.dirname(os.path.abspath(__file__))
 if _V_DIR not in sys.path:
@@ -216,17 +217,11 @@ class L2DAnimPump(object):
         with self._lock:
             self._active = False
             if self._timer is not None:
-                try:
-                    self._timer.stop()
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception): self._timer.stop()
             rd = self._renderer
         # 退出手动模式（预览/下次导出都从干净状态开始）
         if rd is not None:
-            try:
-                rd.set_manual(False)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): rd.set_manual(False)
         self._drop_all("导出结束")
 
     def abort(self):
@@ -450,8 +445,5 @@ def shutdown():
     global _PUMP
     with _PUMP_LOCK:
         if _PUMP is not None:
-            try:
-                _PUMP.stop()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): _PUMP.stop()
             _PUMP = None

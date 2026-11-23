@@ -38,6 +38,7 @@ import re
 from PySide6.QtCore import Qt, QUrl, QByteArray, QBuffer, QIODevice, QObject, \
     Signal, Slot, QTimer
 from PySide6.QtWidgets import QWidget, QVBoxLayout
+import contextlib
 
 try:
     from PySide6.QtWebEngineWidgets import QWebEngineView              # noqa
@@ -91,8 +92,7 @@ def runtime_ready(runtime_dir=None):
     """
     d = runtime_dir or RUNTIME_DIR
     try:
-        if not os.path.isfile(os.path.join(d, "index.html")):
-            return False
+        if not os.path.isfile(os.path.join(d, "index.html")): return False
         return os.path.isfile(os.path.join(d, "game", "config.txt"))
     except OSError:
         return False
@@ -111,8 +111,7 @@ def recommended_chromium_flags():
 
 def _mime_of(path):
     low = path.lower()
-    if low.endswith(".exp.json") or low.endswith(".physics.json"):
-        return _MIME[".json"]
+    if low.endswith(".exp.json") or low.endswith(".physics.json"): return _MIME[".json"]
     return _MIME.get(os.path.splitext(low)[1], b"application/octet-stream")
 
 
@@ -123,12 +122,10 @@ def _slug(s):
 
 def _find_runtime_es(runtime_dir):
     """运行时解析 index.es-*.js（哈希名不硬编码、不进 git）。"""
-    try:
+    with contextlib.suppress(OSError):
         for fn in sorted(os.listdir(os.path.join(runtime_dir, "assets"))):
             if fn.startswith("index.es-") and fn.endswith(".js"):
                 return "runtime/assets/" + fn
-    except OSError:
-        pass
     return None
 
 
@@ -156,18 +153,15 @@ def _find_lib_dir(lib_dir=None):
     （v3.4.2 起主位，用户装完即有）→ 本地预研原型 lib。
     含 live2d.min.js 才算命中；全无 -> None（页面报 error 降级，不崩）。"""
     cands = []
-    if lib_dir:
-        cands.append(lib_dir)
+    if lib_dir: cands.append(lib_dir)
     env = os.environ.get("MUPPET_LIVE2D_DIR")
-    if env:
-        cands.append(env)
+    if env: cands.append(env)
     cands.append(os.path.join(RUNTIME_DIR, "lib"))
     cands.append(_asset_lib_core_dir())
     cands.append(os.path.join(os.path.dirname(_V_DIR), "webgal_games",
                               "preview_proto", "lib"))
     for c in cands:
-        if c and os.path.isfile(os.path.join(c, "live2d.min.js")):
-            return c
+        if c and os.path.isfile(os.path.join(c, "live2d.min.js")): return c
     return None
 
 
@@ -177,8 +171,7 @@ def _model_root_of(outfit_dir):
     （model.json 里 ../.mtn_exp/... 引用必须落在白名单内——
     与 webgal_export H1 整角色根拷贝同理）。"""
     d = os.path.normpath(str(outfit_dir))
-    if os.path.isfile(d):
-        d = os.path.dirname(d)
+    if os.path.isfile(d): d = os.path.dirname(d)
     parent = os.path.dirname(d)
     root = parent if os.path.isdir(os.path.join(parent, ".mtn_exp")) else d
     key = _slug(os.path.basename(root)) + "-" + \
@@ -214,8 +207,7 @@ _SCHEME_REGISTERED = False
 def _ensure_scheme_registered():
     """muppet:// 注册（进程一次；必须在任何 profile 创建之前）。"""
     global _SCHEME_REGISTERED
-    if _SCHEME_REGISTERED or not HAS_WEBENGINE:
-        return
+    if _SCHEME_REGISTERED or not HAS_WEBENGINE: return
     sc = QWebEngineUrlScheme(b"muppet")
     fl = QWebEngineUrlScheme.Flag
     sc.setFlags(fl.SecureScheme | fl.CorsEnabled | fl.FetchApiAllowed)
@@ -357,8 +349,7 @@ if HAS_WEBENGINE:
 
         def start(self):
             """装载宿主页。runtime 缺失 -> 本地合成 error 事件（降级不抛）。"""
-            if self._degraded:
-                return
+            if self._degraded: return
             if not _find_runtime_es(self._runtime):
                 self._degraded = "no_runtime"
                 self._record_event({"v": 1, "evt": "error",
@@ -373,28 +364,23 @@ if HAS_WEBENGINE:
             """QUrl -> (路径键 or 本地绝对路径, ok)。
             越界（.. / 绝对盘符 / 未注册 key / 非白名单根 / 非常规 host）
             -> (None, False)。纯函数化便于单测直查。"""
-            if qurl.scheme() != "muppet" or qurl.host() != "stage":
-                return None, False
+            if qurl.scheme() != "muppet" or qurl.host() != "stage": return None, False
             path = posixpath.normpath("/" + qurl.path().lstrip("/"))
-            if ".." in path.split("/"):
-                return None, False
-            if path in ("/", "/" + HOST_PAGE):
-                return "@host", True
+            if ".." in path.split("/"): return None, False
+            if path in ("/", "/" + HOST_PAGE): return "@host", True
             if path.startswith("/runtime/"):
                 rel = path[len("/runtime/"):]
                 return (self._under(self._runtime, rel), True) \
                     if self._under_ok(self._runtime, rel) else (None, False)
             if path.startswith("/lib/"):
                 rel = path[len("/lib/"):]
-                if not self._lib:
-                    return None, False
+                if not self._lib: return None, False
                 return (self._under(self._lib, rel), True) \
                     if self._under_ok(self._lib, rel) else (None, False)
             if path.startswith("/model/"):
                 key, _s, sub = path[len("/model/"):].partition("/")
                 root = self._model_roots.get(key)
-                if root is None or not sub:
-                    return None, False
+                if root is None or not sub: return None, False
                 return (self._under(root, sub), True) \
                     if self._under_ok(root, sub) else (None, False)
             # v3.5.11：/game/** -> runtime 自带 game 资源（config.txt 等）。
@@ -410,8 +396,7 @@ if HAS_WEBENGINE:
 
         @staticmethod
         def _under_ok(root, rel):
-            if not rel:
-                return False
+            if not rel: return False
             full = os.path.realpath(
                 os.path.join(root, rel.replace("/", os.sep)))
             rr = os.path.realpath(root)
@@ -425,8 +410,7 @@ if HAS_WEBENGINE:
             """resolve 产物 -> (bytes, mime)；宿主模板做 runtime/lib 路径注入。"""
             if key_path == "@host":
                 p = os.path.join(STAGE_TEMPLATE_DIR, HOST_PAGE)
-                if not os.path.isfile(p):
-                    return None, None
+                if not os.path.isfile(p): return None, None
                 html = open(p, encoding="utf8").read()
                 es = _find_runtime_es(self._runtime)
                 inject = {
@@ -458,10 +442,8 @@ if HAS_WEBENGINE:
         def apply_state(self, proj, t, force=False):
             """入口：按 figure_clips_at 口径算在场立绘，diff 后只发差量。
             force=True 跳过防抖（工程切换/离场急清）。"""
-            if self._degraded:
-                return
-            if force:
-                self._do_apply(proj, t)
+            if self._degraded: return
+            if force: self._do_apply(proj, t)
             else:
                 self._pending_apply = (proj, t)
                 self._deb.start()
@@ -516,8 +498,7 @@ if HAS_WEBENGINE:
                         self._send("setExpression", {"modelId": cid,
                                                      "name": st["expression"]})
             for cid in old:
-                if cid not in target:
-                    self._send("clearModel", {"modelId": cid})
+                if cid not in target: self._send("clearModel", {"modelId": cid})
             self._figstate = target
             # ---- v3.5.2：背景 / 字幕 / 滤镜三层 ----
             # 原来只推立绘，用户看到「实时预览没有背景和文字和滤镜」。
@@ -535,32 +516,25 @@ if HAS_WEBENGINE:
             资源走已有的 /model/<key>/ 静态通道（register_model_dir 同一个
             注册表，只是这里注册的是图片**所在目录**），不新开路由。
             """
-            try:
+            with contextlib.suppress(Exception):
                 import video_model as VM
                 want = ""
                 for tr in VM._tracks_of(proj, getattr(self, "_aid", None)):
-                    if tr.get("kind") != "video" or tr.get("hidden"):
-                        continue
+                    if tr.get("kind") != "video" or tr.get("hidden"): continue
                     for c in (tr.get("clips") or []):
                         s0 = float(c.get("start") or 0.0)
                         d0 = float(c.get("dur") or 0.0)
-                        if not (s0 - 1e-6 <= t < s0 + d0 - 1e-6):
-                            continue
+                        if not (s0 - 1e-6 <= t < s0 + d0 - 1e-6): continue
                         src = c.get("source") or {}
-                        if str(src.get("kind") or "") != "image":
-                            continue
+                        if str(src.get("kind") or "") != "image": continue
                         path = str(src.get("path") or "")
                         if path and os.path.isfile(path):
                             want = self._register_file(path)
                         break
-                    if want:
-                        break
-                if want == getattr(self, "_bg_url", None):
-                    return
+                    if want: break
+                if want == getattr(self, "_bg_url", None): return
                 self._bg_url = want
                 self._send("setBackground", {"url": want})
-            except Exception:
-                pass
 
         def _register_file(self, path):
             """单个文件 -> 可被页面请求的相对 URL（复用 /model 通道）。"""
@@ -576,27 +550,23 @@ if HAS_WEBENGINE:
 
         def _apply_subtitle(self, proj, t):
             """当前时刻生效的台词 -> setSubtitle（取最后一条并集，与舞台一致）"""
-            try:
+            with contextlib.suppress(Exception):
                 import video_model as VM
                 view = VM.act_view(proj, getattr(self, "_aid", None))
                 cur = None
                 for d in (view.get("dialogue") or []):
                     s0 = float(d.get("t") or 0.0)
                     d0 = float(d.get("dur") or 0.0)
-                    if s0 - 1e-6 <= t < s0 + d0 - 1e-6:
-                        cur = d
+                    if s0 - 1e-6 <= t < s0 + d0 - 1e-6: cur = d
                 key = ""
                 if cur:
                     key = "%s\x00%s" % (cur.get("who") or "",
                                        cur.get("text") or "")
-                if key == getattr(self, "_sub_key", None):
-                    return
+                if key == getattr(self, "_sub_key", None): return
                 self._sub_key = key
                 who = (cur or {}).get("who") or ""
                 txt = (cur or {}).get("text") or ""
                 self._send("setSubtitle", {"who": str(who), "text": str(txt)})
-            except Exception:
-                pass
 
         def _filter_effects_cache(self, view):
             """把 setTransform 特效**预解析一次**并缓存（性能关键）。
@@ -627,17 +597,14 @@ if HAS_WEBENGINE:
                 except (TypeError, ValueError):
                     continue
                 cmd = str(ef.get("cmd") or "")
-                if not cmd.startswith("setTransform"):
-                    continue
+                if not cmd.startswith("setTransform"): continue
                 m = _re.search(r"\{.*\}", cmd)
-                if not m:
-                    continue
+                if not m: continue
                 try:
                     params = _json.loads(m.group(0))
                 except Exception:
                     continue
-                if not isinstance(params, dict):
-                    continue
+                if not isinstance(params, dict): continue
                 tm = _re.search(r"-target=(\S+?)(?:\s|;|$)", cmd)
                 target = tm.group(1) if tm else "bg-main"
                 parsed.append((et, target.startswith("bg"), params))
@@ -671,33 +638,26 @@ if HAS_WEBENGINE:
                 # ---- ① 先应用 setTransform 特效指令（已预解析）----
                 # parsed 按 t 升序，扫到 > t 就可以停（原实现扫全表）
                 for et, is_bg, params in self._filter_effects_cache(view):
-                    if et > t + 1e-6:
-                        break
-                    if is_bg:
-                        bg = params
-                    else:
-                        fig = params
+                    if et > t + 1e-6: break
+                    if is_bg: bg = params
+                    else: fig = params
 
                 # ---- ② 再叠加当前时刻在场片段的 clip["filter"] ----
                 # 后写覆盖：片段上的滤镜是用户在滤镜页/电影滤镜里最近套的，
                 # 应当盖过更早的 effects 指令。
                 eps = 1e-6
                 for tr in VM._tracks_of(proj, aid):
-                    if not isinstance(tr, dict) or tr.get("hidden"):
-                        continue
-                    if tr.get("kind") != "video":
-                        continue
+                    if not isinstance(tr, dict) or tr.get("hidden"): continue
+                    if tr.get("kind") != "video": continue
                     for c in (tr.get("clips") or []):
                         f = c.get("filter")
-                        if not isinstance(f, dict) or not f:
-                            continue
+                        if not isinstance(f, dict) or not f: continue
                         try:
                             s0 = float(c.get("start") or 0.0)
                             d0 = float(c.get("dur") or 0.0)
                         except (TypeError, ValueError):
                             continue
-                        if not (s0 - eps <= t < s0 + d0 - eps):
-                            continue
+                        if not (s0 - eps <= t < s0 + d0 - eps): continue
                         # 判断是背景还是立绘（与导出器/工作台同口径）
                         is_bg = False
                         try:
@@ -709,15 +669,12 @@ if HAS_WEBENGINE:
                                 and src.get("kind") == "image")
                         except Exception:
                             is_bg = False
-                        if is_bg:
-                            bg = dict(f)
-                        else:
-                            fig = dict(f)
+                        if is_bg: bg = dict(f)
+                        else: fig = dict(f)
 
                 want = {"bg": bg, "fig": fig}
                 key = _json.dumps(want, sort_keys=True)
-                if key == getattr(self, "_filter_key", None):
-                    return
+                if key == getattr(self, "_filter_key", None): return
                 self._filter_key = key
                 self._send("setFilter", want)
             except Exception:
@@ -748,17 +705,14 @@ if HAS_WEBENGINE:
                 except (TypeError, ValueError):
                     continue
                 cmd = str(ef.get("cmd") or "")
-                if not cmd.startswith("setTempAnimation"):
-                    continue
+                if not cmd.startswith("setTempAnimation"): continue
                 m = _re.search(r"\[.*\]", cmd, _re.S)
-                if not m:
-                    continue
+                if not m: continue
                 try:
                     kfs = _json.loads(m.group(0))
                 except Exception:
                     continue
-                if not (isinstance(kfs, list) and kfs):
-                    continue
+                if not (isinstance(kfs, list) and kfs): continue
                 # 引擎 v1 关键帧语义：kf0 是起始状态（在 t0 生效），
                 # kf1..n 是后续状态，从上一帧过渡过来耗时本帧 duration 毫秒。
                 # times[0]=0（kf0 生效），times[i]=times[i-1]+kfs[i].duration。
@@ -805,8 +759,7 @@ if HAS_WEBENGINE:
                 # 取 t 之前最后一条（缓存已按 t 升序，扫到 >t 即停）
                 picked = None
                 for et, kfs, total_ms, times in best:
-                    if et > t + 1e-6:
-                        break
+                    if et > t + 1e-6: break
                     picked = (et, kfs, total_ms, times)
                 if not picked:
                     if getattr(self, "_cam_key", None) is not None:
@@ -815,24 +768,20 @@ if HAS_WEBENGINE:
                     return
                 t0, kfs, total_ms, times = picked
                 total = total_ms / 1000.0
-                if total <= 1e-9:
-                    return
+                if total <= 1e-9: return
                 el = max(0.0, min(t - t0, total))    # 结束后保持末帧
                 el_ms = el * 1000.0
                 # 段定位：落在 [times[i], times[i+1]) 的段 i（段 i 从 kfs[i]
                 # 过渡到 kfs[i+1]）；到末尾时取最后一段、p=1。
                 idx = 0
                 for i in range(len(times) - 1):
-                    if el_ms >= times[i] - 1e-6:
-                        idx = i
+                    if el_ms >= times[i] - 1e-6: idx = i
                 seg_start = times[idx]
                 seg_end = (times[idx + 1] if idx + 1 < len(times)
                            else total_ms)
                 seg_dur = seg_end - seg_start
-                if seg_dur <= 1e-9:
-                    p = 1.0
-                else:
-                    p = min(1.0, max(0.0, (el_ms - seg_start) / seg_dur))
+                if seg_dur <= 1e-9: p = 1.0
+                else: p = min(1.0, max(0.0, (el_ms - seg_start) / seg_dur))
 
                 def _val(key, sub=None):
                     """取该段的属性值（首段无对应键时沿用上一个关键帧）。"""
@@ -843,17 +792,12 @@ if HAS_WEBENGINE:
                             if isinstance(v, dict) and v.get(sub) is not None:
                                 return float(v.get(sub))
                         elif v is not None:
-                            try:
-                                return float(v)
-                            except (TypeError, ValueError):
-                                pass
+                            with contextlib.suppress((TypeError, ValueError)): return float(v)
                     return None
 
                 def _lerp(a, b, r):
-                    if a is None:
-                        return b
-                    if b is None:
-                        return a
+                    if a is None: return b
+                    if b is None: return a
                     return a + (b - a) * r
 
                 nxt = min(idx + 1, len(kfs) - 1)
@@ -881,24 +825,16 @@ if HAS_WEBENGINE:
                 blur = _pair("blur")
                 alpha = _pair("alpha")
                 cam = {"active": True, "p": round(p, 4)}
-                if sx is not None:
-                    cam["scaleX"] = round(sx, 4)
-                if sy is not None:
-                    cam["scaleY"] = round(sy, 4)
+                if sx is not None: cam["scaleX"] = round(sx, 4)
+                if sy is not None: cam["scaleY"] = round(sy, 4)
                 # position 是「舞台百分比偏移」（引擎里 ±50 约等于半个屏）
-                if px is not None:
-                    cam["x"] = round(px / STAGE_W * 100.0, 3)
-                if py is not None:
-                    cam["y"] = round(py / STAGE_H * 100.0, 3)
-                if rot is not None:
-                    cam["rot"] = round(rot, 3)
-                if blur is not None:
-                    cam["blur"] = round(max(0.0, min(30.0, blur)), 3)
-                if alpha is not None:
-                    cam["alpha"] = round(max(0.0, min(1.0, alpha)), 3)
+                if px is not None: cam["x"] = round(px / STAGE_W * 100.0, 3)
+                if py is not None: cam["y"] = round(py / STAGE_H * 100.0, 3)
+                if rot is not None: cam["rot"] = round(rot, 3)
+                if blur is not None: cam["blur"] = round(max(0.0, min(30.0, blur)), 3)
+                if alpha is not None: cam["alpha"] = round(max(0.0, min(1.0, alpha)), 3)
                 key = _json.dumps(cam, sort_keys=True)
-                if key == getattr(self, "_cam_key", None):
-                    return
+                if key == getattr(self, "_cam_key", None): return
                 self._cam_key = key
                 self._send("setCamera", cam)
             except Exception:
@@ -926,8 +862,7 @@ if HAS_WEBENGINE:
                 e = json.loads(json_str)
             except Exception:
                 return
-            if isinstance(e, dict):
-                self._record_event(e)
+            if isinstance(e, dict): self._record_event(e)
 
         def _record_event(self, e):
             self._events.append(e)
@@ -937,20 +872,16 @@ if HAS_WEBENGINE:
             # 降级后 start()/apply_state 走 _degraded 既有零流量分支，
             # 会话内不重试不重弹（UI 侧收信号后置灰开关，用 disabled() 查询）。
             try:
-                if not isinstance(e, dict):
-                    return
+                if not isinstance(e, dict): return
                 evt = e.get("evt")
                 if evt == "error":
                     code = str((e.get("data") or {}).get("code") or "")
-                    if code in self.MECHANISM_ERROR_CODES:
-                        self._err_streak += 1
-                    else:
-                        return              # 参数级：不计数不重置
+                    if code in self.MECHANISM_ERROR_CODES: self._err_streak += 1
+                    else: return              # 参数级：不计数不重置
                 elif evt == "ready":
                     self._err_streak = 0    # 任一模型装载成功即重置
                     return
-                else:
-                    return
+                else: return
                 if (self._err_streak >= self.ERROR_STREAK_LIMIT
                         and not self._degraded):
                     self._degraded = "error_streak"
@@ -970,5 +901,4 @@ if HAS_WEBENGINE:
             img = self.view.grab()
             return bool(img.save(out_path))
 
-else:
-    WebPreviewView = None
+else: WebPreviewView = None

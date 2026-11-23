@@ -17,6 +17,7 @@
   - 预览**无声**（画面逐帧合成）；导出 mp4 含混音
   - 工程存 projects/<名>/video_project.json
 """
+import contextlib
 import json
 import os
 import threading
@@ -45,6 +46,7 @@ import character_library as CL
 import model_thumb as MT
 from stage_view import StageView
 from script_editor import ScriptEditor
+import ui_toast as TOAST
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 PROJ_BASE = os.path.join(_HERE, "projects")
@@ -69,11 +71,9 @@ def _recent_file():
 def _recent_read():
     """最近工程读取路径：RECENT_FILE 存在就读它（测试注入优先），
     否则回退根目录旧位置。现算，不预存——预存副本不会跟着 RECENT_FILE 变。"""
-    try:
+    with contextlib.suppress(Exception):
         if os.path.isfile(RECENT_FILE):
             return RECENT_FILE
-    except Exception:
-        pass
     new = os.path.join(_HERE, ".runtime", "recent_projects.json")
     old = os.path.join(_HERE, "recent_projects.json")
     if os.path.isfile(new):
@@ -135,10 +135,7 @@ def _refresh_all():
     global _SPLIT_QSS
     _SPLIT_QSS = _split_qss()
     for wb in list(_WORKBENCHES):
-        try:
-            wb._apply_theme()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): wb._apply_theme()
 
 
 TH.register(_refresh_all)
@@ -682,11 +679,9 @@ class _BgCard(CardWidget):
         lbl.setStyleSheet("color:%s;font-size:9px;" % TH.t("text"))
         lbl.setToolTip("%s\n%s" % (name, bg.get("cat") or ""))
         # 单行省略（背景名可能很长）
-        try:
+        with contextlib.suppress(Exception):
             lbl.setText(lbl.fontMetrics().elidedText(
                 name, Qt.ElideRight, 96))
-        except Exception:
-            pass
         lay.addWidget(lbl)
         self.setToolTip("%s\n分类：%s" % (name, bg.get("cat") or "-"))
 
@@ -940,19 +935,14 @@ class VideoWorkbench(QWidget):
     def _apply_theme(self):
         """切主题时重刷那些在 setStyleSheet 里写死颜色的部件。"""
         self._frost_pm = None       # 噪点纹理按主题重生成
-        try:
-            self.update()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception): self.update()
+        with contextlib.suppress(Exception):
             global _SPLIT_QSS
             _SPLIT_QSS = _split_qss()
             for sp in (getattr(self, "_hsplit", None),
                        getattr(self, "_vsplit", None)):
                 if sp is not None:
                     sp.setStyleSheet(_SPLIT_QSS)
-        except Exception:
-            pass
         try:
             # 只让最外层面板带半透明白（磨砂卡片），内层 viewport/host
             # 必须透明：三层都上 0.66 alpha 会叠成纯白，层次全没了。
@@ -989,14 +979,9 @@ class VideoWorkbench(QWidget):
                             ("est_lbl", " font-size:11px;")):
             w = getattr(self, attr, None)
             if w is not None:
-                try:
+                with contextlib.suppress(Exception):
                     w.setStyleSheet("color:%s;%s" % (TH.t("text_dim"), extra))
-                except Exception:
-                    pass
-        try:
-            self.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.update()
 
     def __init__(self, parent=None, proj=None, proj_dir=None):
         super().__init__(parent)
@@ -1504,10 +1489,8 @@ class VideoWorkbench(QWidget):
         else:
             _base = os.environ.get("APPDATA") or os.path.expanduser("~")
             _settings_path = os.path.join(_base, "MuppetStudio", _sname)
-            try:
+            with contextlib.suppress(Exception):
                 os.makedirs(os.path.dirname(_settings_path), exist_ok=True)
-            except Exception:
-                pass
         self._settings = QSettings(_settings_path, QSettings.IniFormat)
         hsplit.splitterMoved.connect(lambda *a: self._save_splitter_sizes())
         vsplit.splitterMoved.connect(lambda *a: self._save_splitter_sizes())
@@ -1518,10 +1501,7 @@ class VideoWorkbench(QWidget):
         self._apply_theme()
         # 首次渲染左栏：构造时没调过 _rebuild_asset_cards，
         # 否则「角色」页一片空白 + 显示"还没有素材"（用户实报）。
-        try:
-            self._rebuild_asset_cards()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self._rebuild_asset_cards()
 
         # 快捷键：Ctrl+S 保存 / Ctrl+Z Y 撤销重做 / 空格播放
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_project)
@@ -1546,26 +1526,21 @@ class VideoWorkbench(QWidget):
         self._apply_project(None)
         self._seed_history()
         # v3.6.2：工程属性里「已应用的滤镜 / 特效」首屏填充
-        try:
-            self._refresh_fx_panel()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self._refresh_fx_panel()
         # v3.6.2：背景页签**懒渲染** —— 首次切到「背景」时才读索引建卡
         # （1053 条目建 400 张卡有开销，不该拖慢启动）。这里只清空占位。
 
     # ================= splitter 尺寸持久化 =================
     def _save_splitter_sizes(self):
         """拖拽结束（splitterMoved）：把两个 splitter 的尺寸写入 QSettings。"""
-        try:
+        with contextlib.suppress(Exception):
             self._settings.setValue("splitter/horizontal", self._hsplit.sizes())
             self._settings.setValue("splitter/vertical", self._vsplit.sizes())
             self._settings.sync()
-        except Exception:
-            pass
 
     def _restore_splitter_sizes(self):
         """构造时恢复：校验列表长度与正数，否则用默认尺寸。"""
-        try:
+        with contextlib.suppress(Exception):
             hs = self._settings.value("splitter/horizontal")
             if isinstance(hs, (list, tuple)) and len(hs) == 3 \
                     and all(int(v) > 0 for v in hs):
@@ -1574,22 +1549,14 @@ class VideoWorkbench(QWidget):
             if isinstance(vs, (list, tuple)) and len(vs) == 2 \
                     and all(int(v) > 0 for v in vs):
                 self._vsplit.setSizes([int(v) for v in vs])
-        except Exception:
-            pass
 
     # ================= 工程生命周期 =================
     def _refresh_all(self):
         """工程结构/属性变化后的统一刷新：时间轴 + 传输条 + 属性 + 预览。"""
-        try:
-            self.timeline.refresh()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.timeline.refresh()
         self._update_transport()
         self._fill_clip_props()
-        try:
-            self._refresh_fx_panel()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self._refresh_fx_panel()
         if not self._playing:
             self.render_frame(self._t)
 
@@ -1700,13 +1667,10 @@ class VideoWorkbench(QWidget):
                       encoding="utf8") as f:
                 json.dump(self.proj, f, ensure_ascii=False, indent=1)
             self._record_recent()
-            InfoBar.success("已保存", os.path.basename(self.proj_dir),
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=2000)
+            TOAST.toast_ok(self, "已保存", os.path.basename(self.proj_dir), duration=2000)
             return True
         except Exception as e:
-            InfoBar.error("保存失败", repr(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "保存失败", repr(e), duration=4000)
             return False
 
     def save_as(self):
@@ -1765,14 +1729,11 @@ class VideoWorkbench(QWidget):
         try:
             obj = json.load(open(os.path.join(d, META_NAME), encoding="utf8"))
         except Exception as e:
-            InfoBar.error("打开失败", "video_project.json 读取异常：%r" % e,
-                          parent=self, position=InfoBarPosition.TOP,
-                          duration=4000)
+            TOAST.toast_err(self, "打开失败", "video_project.json 读取异常：%r" % e, duration=4000)
             return False
         p = V.sanitize_project(obj)
         if p is None:
-            InfoBar.error("打开失败", "不是合法的视频工程文件", parent=self,
-                          position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "打开失败", "不是合法的视频工程文件", duration=4000)
             return False
         V.normalize_ids(p)
         self._sources.close_all()
@@ -1808,9 +1769,7 @@ class VideoWorkbench(QWidget):
             try:
                 src = VS.probe_source(p)
             except Exception as e:
-                InfoBar.warning("跳过素材", "%s\n%r" % (os.path.basename(p), e),
-                                parent=self, position=InfoBarPosition.TOP,
-                                duration=3000)
+                TOAST.toast_warn(self, "跳过素材", "%s\n%r" % (os.path.basename(p), e))
                 continue
             if any(a["path"] == src["path"] and a["kind"] == src["kind"]
                    for a in self.assets):
@@ -1818,8 +1777,7 @@ class VideoWorkbench(QWidget):
             self.assets.append(src)
             n += 1
         if n:
-            InfoBar.success("已导入", "%d 个素材" % n, parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_ok(self, "已导入", "%d 个素材" % n, duration=2000)
         self._rebuild_asset_cards()
 
     def _thumb(self, src):
@@ -1857,14 +1815,12 @@ class VideoWorkbench(QWidget):
 
     def _find_card_widget(self, pred):
         """在 asset_flow 里找第一个满足 pred 的卡片 widget。"""
-        try:
+        with contextlib.suppress(Exception):
             for i in range(self.asset_flow.count()):
                 it = self.asset_flow.itemAt(i)
                 w = it.widget() if hasattr(it, "widget") else it
                 if w is not None and pred(w):
                     return w
-        except Exception:
-            pass
         return None
 
     def _rebuild_keeping(self, keep_pred):
@@ -1880,11 +1836,9 @@ class VideoWorkbench(QWidget):
             w1 = self._find_card_widget(keep_pred)
             if w1 is None:
                 return
-            try:
+            with contextlib.suppress(Exception):
                 sb = self.asset_scroll.verticalScrollBar()
                 sb.setValue(max(0, w1.y() - vy))
-            except Exception:
-                pass
 
         QTimer.singleShot(0, _fix)
         QTimer.singleShot(40, _fix)
@@ -1956,11 +1910,9 @@ class VideoWorkbench(QWidget):
                 wi.deleteLater()
         filt = self._asset_tab
         # v3.6.2：运镜编辑器只在特效页出现（其他页它没意义，还占掉半屏）
-        try:
+        with contextlib.suppress(Exception):
             if getattr(self, "_cam_panel", None) is not None:
                 self._cam_panel.setVisible(filt == "template")
-        except Exception:
-            pass
         if filt == "text":
             # F1：文本页 = 剧情编辑器
             self._show_script_editor(True)
@@ -2116,26 +2068,20 @@ class VideoWorkbench(QWidget):
         m = card.model
         d = CL.model_path(m)
         if not d or not os.path.isdir(d):
-            InfoBar.warning("加入失败", "模型目录不存在，请检查素材库。",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "加入失败", "模型目录不存在，请检查素材库。")
             return
         try:
             src = V.new_source("puppet", d, src_dur=0.0)
         except Exception as e:
-            InfoBar.warning("加入失败", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "加入失败", str(e))
             return
-        try:
+        with contextlib.suppress(Exception):
             src["lib_file"] = m.get("file")
             src["lib_name"] = m.get("name")
             src["lib_author"] = m.get("author") or ""
             src["lib_role"] = m.get("slug")
-        except Exception:
-            pass
         self._add_asset_to_timeline(src)
-        InfoBar.success("已加入", CL.display_name(m), parent=self,
-                        position=InfoBarPosition.TOP, duration=1800)
+        TOAST.toast_ok(self, "已加入", CL.display_name(m), duration=1800)
 
     def _model_to_timeline_persona(self, card):
         """把模型作为「新人格」加入：建一条独立视频轨（新时间轴）再放片段。
@@ -2148,30 +2094,24 @@ class VideoWorkbench(QWidget):
         m = card.model
         d = CL.model_path(m)
         if not d or not os.path.isdir(d):
-            InfoBar.warning("加入失败", "模型目录不存在，请检查素材库。",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "加入失败", "模型目录不存在，请检查素材库。")
             return
         try:
             src = V.new_source("puppet", d, src_dur=0.0)
         except Exception as e:
-            InfoBar.warning("加入失败", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "加入失败", str(e))
             return
-        try:
+        with contextlib.suppress(Exception):
             src["lib_file"] = m.get("file")
             src["lib_name"] = m.get("name")
             src["lib_author"] = m.get("author") or ""
             src["lib_role"] = m.get("slug")
-        except Exception:
-            pass
         # 为该角色建一条独立视频轨，命名体现「人格/副本」
         role_cn = m.get("role_cn") or m.get("slug") or "角色"
         ok, _m, tid = V.add_track(self.proj, "video", name=None,
                                   aid=getattr(self, "_cur_aid", None))
         if not ok:
-            InfoBar.warning("建轨失败", _m, parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "建轨失败", _m)
             return
         tr = V.find_track(self.proj, tid,
                           aid=getattr(self, "_cur_aid", None))
@@ -2182,9 +2122,7 @@ class VideoWorkbench(QWidget):
                      and str(t.get("name") or "").startswith(role_cn)]) + 1
             tr["name"] = "%s·人格%d" % (role_cn, n)
         self._add_asset_to_timeline(src, track_id=tid)
-        InfoBar.success("已作为新人格加入", "%s（独立时间轴）" % role_cn,
-                        parent=self, position=InfoBarPosition.TOP,
-                        duration=1800)
+        TOAST.toast_ok(self, "已作为新人格加入", "%s（独立时间轴）" % role_cn, duration=1800)
 
     # ---------- 音频页：素材库音频试听 + 上轨 ----------
     def _rebuild_audio_cards(self):
@@ -2246,23 +2184,18 @@ class VideoWorkbench(QWidget):
 
     def _on_preview_state(self, st):
         """播放结束/停止时把卡片图标复原。"""
-        try:
+        with contextlib.suppress(Exception):
             from PySide6.QtMultimedia import QMediaPlayer
             if st == QMediaPlayer.PlaybackState.StoppedState:
                 if self._previewing is not None:
                     self._previewing.set_playing(False)
                     self._previewing = None
-        except Exception:
-            pass
 
     def _toggle_audio_preview(self, card):
         """试听：点同一条=停止，点别的=切过去。"""
         pl = self._ensure_audio_player()
         if pl is None:
-            InfoBar.warning("无法试听",
-                            "缺少 QtMultimedia 组件，但仍可加入时间轴。",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "无法试听", "缺少 QtMultimedia 组件，但仍可加入时间轴。")
             return
         from PySide6.QtCore import QUrl
         if self._previewing is card:
@@ -2271,15 +2204,10 @@ class VideoWorkbench(QWidget):
             self._previewing = None
             return
         if self._previewing is not None:
-            try:
-                self._previewing.set_playing(False)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self._previewing.set_playing(False)
         path = AL.audio_path(card.item)
         if not path or not os.path.isfile(path):
-            InfoBar.warning("试听失败", "音频文件不在素材库里：%s" % card.item,
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "试听失败", "音频文件不在素材库里：%s" % card.item)
             return
         pl.setSource(QUrl.fromLocalFile(path))
         pl.play()
@@ -2288,15 +2216,9 @@ class VideoWorkbench(QWidget):
 
     def _stop_audio_preview(self):
         if self._audio_player is not None:
-            try:
-                self._audio_player.stop()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self._audio_player.stop()
         if self._previewing is not None:
-            try:
-                self._previewing.set_playing(False)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self._previewing.set_playing(False)
             self._previewing = None
 
     def _audio_item_to_timeline(self, card):
@@ -2304,24 +2226,18 @@ class VideoWorkbench(QWidget):
         it = card.item
         path = AL.audio_path(it)
         if not path or not os.path.isfile(path):
-            InfoBar.warning("加入失败",
-                            "音频文件不在素材库里，请检查素材库位置。",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "加入失败", "音频文件不在素材库里，请检查素材库位置。")
             return
         dur = float(it.get("dur") or 0.0)
         try:
             src = V.new_source("audio", path, src_dur=dur)
         except Exception as e:
-            InfoBar.warning("加入失败", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "加入失败", str(e))
             return
         # 记下它来自素材库，导出时可直接复用相对路径
-        try:
+        with contextlib.suppress(Exception):
             src["lib_file"] = it.get("file")
             src["lib_name"] = it.get("name")
-        except Exception:
-            pass
         was = self._asset_tab
         self._add_asset_to_timeline(src)
         self._asset_tab = was
@@ -2381,12 +2297,10 @@ class VideoWorkbench(QWidget):
         # v3.6.2：记下"当前滤镜"，供批量工具条的「批量套当前滤镜」使用。
         # 存的是合成后的单层参数（bg/fig 在批量时按 clip 类型各自取——这里
         # 退化成"人物层优先"，因为批量套用最常见的目的就是统一人物观感）。
-        try:
+        with contextlib.suppress(Exception):
             self._cur_filter_preset = (preset.get("fig")
                                        or preset.get("bg") or None)
             self._cur_filter_name = name
-        except Exception:
-            pass
         cid = getattr(self, "_sel_clip", None)
         targets = []
         want_bg = preset.get("bg")
@@ -2407,10 +2321,7 @@ class VideoWorkbench(QWidget):
                 for c in (tr.get("clips") or []):
                     targets.append((tr, c))
         if not targets:
-            InfoBar.warning("没有可应用的对象",
-                            "先选中一个片段，或让时间轴上有画面片段。",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=2500)
+            TOAST.toast_warn(self, "没有可应用的对象", "先选中一个片段，或让时间轴上有画面片段。", duration=2500)
             return
         n_bg = n_fig = 0
         for tr, c in targets:
@@ -2432,15 +2343,11 @@ class VideoWorkbench(QWidget):
         if n_fig:
             parts.append("人物 %d 个" % n_fig)
         if not parts:
-            InfoBar.warning("该滤镜不适用",
-                            "「%s」只调%s层，当前没有对应片段。"
-                            % (name, "背景" if want_bg else "人物"),
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "该滤镜不适用",
+                       "「%s」只调%s层，当前没有对应片段。"
+                            % (name, "背景" if want_bg else "人物"))
             return
-        InfoBar.success("滤镜已应用", "%s：%s" % (name, "，".join(parts)),
-                        parent=self, position=InfoBarPosition.TOP,
-                        duration=2500)
+        TOAST.toast_ok(self, "滤镜已应用", "%s：%s" % (name, "，".join(parts)), duration=2500)
 
     def _apply_filter(self, filt):
         """把滤镜写到目标 clip（有选中写选中，否则整幕所有可见 clip）。"""
@@ -2461,10 +2368,7 @@ class VideoWorkbench(QWidget):
                 for c in (tr.get("clips") or []):
                     targets.append(c)
         if not targets:
-            InfoBar.warning("没有可应用的对象",
-                            "先选中一个片段，或让时间轴上有画面片段。",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=2500)
+            TOAST.toast_warn(self, "没有可应用的对象", "先选中一个片段，或让时间轴上有画面片段。", duration=2500)
             return
         for c in targets:
             if filt is None:
@@ -2474,11 +2378,9 @@ class VideoWorkbench(QWidget):
         self.push_history()
         self.timeline.refresh()
         self._after_edit()
-        InfoBar.success(
-            "滤镜已应用",
-            ("清除滤镜" if filt is None
-             else "应用到 %d 个片段" % len(targets)),
-            parent=self, position=InfoBarPosition.TOP, duration=2000)
+        TOAST.toast_ok(self, "滤镜已应用", "清除滤镜" if filt is None
+             else "应用到 %d 个片段" % len(targets),
+                 duration=2000)
 
     # ---------- 已应用的滤镜 / 特效（删除管理） ----------
     def _fx_effect_label(self, ef):
@@ -2622,8 +2524,7 @@ class VideoWorkbench(QWidget):
         self._after_edit()
         self.render_frame(self._t)
         self._refresh_fx_panel()
-        InfoBar.success("已删除特效", name or "特效已移除", parent=self,
-                        position=InfoBarPosition.TOP, duration=1800)
+        TOAST.toast_ok(self, "已删除特效", name or "特效已移除", duration=1800)
 
     def _remove_clip_filter(self, clip_id):
         """删掉某片段上的滤镜。"""
@@ -2638,8 +2539,7 @@ class VideoWorkbench(QWidget):
         self._after_edit()
         self.render_frame(self._t)
         self._refresh_fx_panel()
-        InfoBar.success("已删除滤镜", "片段滤镜已清除", parent=self,
-                        position=InfoBarPosition.TOP, duration=1800)
+        TOAST.toast_ok(self, "已删除滤镜", "片段滤镜已清除", duration=1800)
 
     def _clear_all_effects(self):
         """清空当前幕全部特效（二次确认）。"""
@@ -2659,8 +2559,7 @@ class VideoWorkbench(QWidget):
         self._after_edit()
         self.render_frame(self._t)
         self._refresh_fx_panel()
-        InfoBar.success("已清空", "删除 %d 条特效" % n, parent=self,
-                        position=InfoBarPosition.TOP, duration=2000)
+        TOAST.toast_ok(self, "已清空", "删除 %d 条特效" % n, duration=2000)
 
     def _clear_all_filters(self):
         """清空所有片段上的滤镜（二次确认）。"""
@@ -2684,8 +2583,7 @@ class VideoWorkbench(QWidget):
         self._after_edit()
         self.render_frame(self._t)
         self._refresh_fx_panel()
-        InfoBar.success("已清空", "删除 %d 个片段的滤镜" % n, parent=self,
-                        position=InfoBarPosition.TOP, duration=2000)
+        TOAST.toast_ok(self, "已清空", "删除 %d 个片段的滤镜" % n, duration=2000)
 
     # ---------- 背景栏数据（背景页签用；页面在左栏内） ----------
     def _load_bg_items(self):
@@ -2749,13 +2647,11 @@ class VideoWorkbench(QWidget):
             return
         # 首次填充分类下拉（除「全部」外按条数降序）
         if self.bg_combo.count() <= 1:
-            try:
+            with contextlib.suppress(Exception):
                 self.bg_combo.blockSignals(True)
                 for cat in self._bg_categories():
                     self.bg_combo.addItem(cat)
                 self.bg_combo.blockSignals(False)
-            except Exception:
-                pass
         # 清空
         while self.bg_flow.count():
             it = self.bg_flow.takeAt(0)
@@ -2800,13 +2696,11 @@ class VideoWorkbench(QWidget):
         """展开/收起某个背景分类（同一时刻只展开一个，与角色页一致）。"""
         self._bg_open = None if getattr(self, "_bg_open", None) == cat else cat
         # 下拉回到「全部」——展开状态由 _bg_open 表达，避免两处状态打架
-        try:
+        with contextlib.suppress(Exception):
             if self.bg_combo.currentIndex() != 0:
                 self.bg_combo.blockSignals(True)
                 self.bg_combo.setCurrentIndex(0)
                 self.bg_combo.blockSignals(False)
-        except Exception:
-            pass
         self._rebuild_bg_keeping(cat)
 
     def _rebuild_bg_keeping(self, cat):
@@ -2838,11 +2732,9 @@ class VideoWorkbench(QWidget):
                 w = it.widget() if hasattr(it, "widget") else it
                 if type(w).__name__ == "_BgCateCard" \
                         and getattr(w, "cat", None) == cat:
-                    try:
+                    with contextlib.suppress(Exception):
                         sb = self.bg_scroll.verticalScrollBar()
                         sb.setValue(max(0, w.y() - vy))
-                    except Exception:
-                        pass
                     return
         QTimer.singleShot(0, _fix)
         QTimer.singleShot(40, _fix)
@@ -2878,8 +2770,7 @@ class VideoWorkbench(QWidget):
             import video_source as VS
             src = VS.probe_source(bg["full"])
         except Exception as e:
-            InfoBar.warning("背景加载失败", str(e)[:120], parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "背景加载失败", str(e)[:120])
             return
         # 找/建底轨（BG 命名优先，否则最前可见视频轨）
         tid = None
@@ -2892,8 +2783,7 @@ class VideoWorkbench(QWidget):
         if tid is None:
             ok, _m, tid = V.add_track(self.proj, "video", "BG", aid=aid)
             if not ok:
-                InfoBar.warning("建立背景轨失败", _m, parent=self,
-                                position=InfoBarPosition.TOP, duration=2500)
+                TOAST.toast_warn(self, "建立背景轨失败", _m, duration=2500)
                 return
         tr = V.find_track(self.proj, tid, aid)
         # 时长：到工程末尾（至少 5s），并让位于当前时刻之后的旧背景 clip
@@ -2913,16 +2803,15 @@ class VideoWorkbench(QWidget):
                 clip["dur"] = V.MIN_DUR
         ok, cid = V.add_clip(self.proj, tid, clip, aid=aid)
         if not ok:
-            InfoBar.warning("背景插入失败", cid, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "背景插入失败", cid, duration=2500)
             return
         self.push_history()
         self.timeline.refresh()
         self.render_frame(self._t)
         self._after_edit()
-        InfoBar.success("背景已设置", bg.get("name") or os.path.basename(
-            bg["full"]), parent=self, position=InfoBarPosition.TOP,
-            duration=1800)
+        TOAST.toast_ok(self, "背景已设置", bg.get("name") or os.path.basename(
+            bg["full"]),
+                 duration=1800)
     def _rebuild_effect_cards(self):
         """特效页：按分类分组列出 206 个演出特效，点卡片=在当前时刻插入。
 
@@ -2944,7 +2833,7 @@ class VideoWorkbench(QWidget):
         # v3.6.2：**氛围光效**置顶（用官方引擎真支持的滤镜拼出的布光观感）。
         # 它和下面的「206 个演出特效」是两套东西：光效库只有 13 条、每条
         # 是精调过的双层参数（bg+fig），点一下同时作用于两层。
-        try:
+        with contextlib.suppress(Exception):
             import light_effects as LE
             exp_light = "氛围光效" in opened
             self.asset_flow.addWidget(
@@ -2959,8 +2848,6 @@ class VideoWorkbench(QWidget):
                                  "kind": "transform", "_light": p},
                                 self._apply_light_preset,
                                 parent=self.asset_host))
-        except Exception:
-            pass
 
         for cat, cnt in SE.CATEGORIES:
             items = SE.by_category(cat)
@@ -3002,17 +2889,12 @@ class VideoWorkbench(QWidget):
         for c in codes:
             effs.append({"t": round(t, 3), "cmd": c + ";"})
         # effects 需按时刻有序（导出/合成都按序扫）
-        try:
-            effs.sort(key=lambda x: float(x.get("t") or 0.0))
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): effs.sort(key=lambda x: float(x.get("t") or 0.0))
         self.push_history()
         self._after_edit()
-        InfoBar.success(
-            "特效已插入",
-            "%s（%.2fs，%d 条指令）" % (eff.get("name") or "特效", t,
+        TOAST.toast_ok(self, "特效已插入", "%s（%.2fs，%d 条指令）" % (eff.get("name") or "特效", t,
                                      len(codes)),
-            parent=self, position=InfoBarPosition.TOP, duration=2200)
+                 duration=2200)
 
     # ---------- v3.6.2：多段路径运镜 ----------
     # ---------- v3.6.2：批量脚本操作 ----------
@@ -3048,16 +2930,10 @@ class VideoWorkbench(QWidget):
             n += 1
         if not n:
             return
-        try:
-            effs.sort(key=lambda x: float(x.get("t") or 0.0))
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): effs.sort(key=lambda x: float(x.get("t") or 0.0))
         self.push_history()
         self._after_edit()
-        InfoBar.success(
-            "光效已应用",
-            "%s（%.2fs，%d 条指令）" % (p["name"], t, n),
-            parent=self, position=InfoBarPosition.TOP, duration=2400)
+        TOAST.toast_ok(self, "光效已应用", "%s（%.2fs，%d 条指令）" % (p["name"], t, n), duration=2400)
 
     def _add_shadow(self, who=None):
         """给指定角色加地面投影（用贴图 clip 实现，官方引擎真能渲染）。
@@ -3083,10 +2959,7 @@ class VideoWorkbench(QWidget):
             for c in (tr.get("clips") or []):
                 figs.append((ch, tr, c))
         if not figs:
-            InfoBar.warning("没有立绘",
-                            "先给角色上一条立绘 clip，再加投影",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "没有立绘", "先给角色上一条立绘 clip，再加投影")
             return
         ch, tr, c = figs[0]
         lay = V.layout_at(c)
@@ -3122,9 +2995,7 @@ class VideoWorkbench(QWidget):
             except Exception:
                 strack = None
         if strack is None:
-            InfoBar.warning("加投影失败", "无法创建投影轨",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "加投影失败", "无法创建投影轨")
             return
         try:
             sc = V.new_clip(V.new_source("image", png),
@@ -3133,25 +3004,18 @@ class VideoWorkbench(QWidget):
             sc["layout"] = dict(s_layout)
             strack.setdefault("clips", []).append(sc)
             # 投影必须在人物**下面**：把它移到人物轨之前
-            try:
+            with contextlib.suppress(Exception):
                 trucks = self.proj.get("tracks") or []
                 if strack in trucks and tr in trucks:
                     trucks.remove(strack)
                     trucks.insert(trucks.index(tr), strack)
-            except Exception:
-                pass
         except Exception as e:
-            InfoBar.warning("加投影失败", str(e),
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "加投影失败", str(e))
             return
         self.push_history()
         self.timeline.refresh()
         self._after_edit()
-        InfoBar.success(
-            "投影已添加",
-            "%s（浓度 %.0f%%）" % (sname, conc * 100),
-            parent=self, position=InfoBarPosition.TOP, duration=2600)
+        TOAST.toast_ok(self, "投影已添加", "%s（浓度 %.0f%%）" % (sname, conc * 100), duration=2600)
 
     def _clear_shadows(self):
         """移除所有投影轨（SHADOW-*）。"""
@@ -3160,17 +3024,13 @@ class VideoWorkbench(QWidget):
                 .upper().startswith("SHADOW")]
         n = len(tracks) - len(keep)
         if n <= 0:
-            InfoBar.info("没有投影", "当前工程里没有投影轨",
-                         parent=self, position=InfoBarPosition.TOP,
-                         duration=2000)
+            TOAST.toast_info(self, "没有投影", "当前工程里没有投影轨", duration=2000)
             return
         self.proj["tracks"] = keep
         self.push_history()
         self.timeline.refresh()
         self._after_edit()
-        InfoBar.success("已移除投影", "清理 %d 条投影轨" % n,
-                        parent=self, position=InfoBarPosition.TOP,
-                        duration=2200)
+        TOAST.toast_ok(self, "已移除投影", "清理 %d 条投影轨" % n, duration=2200)
 
     def _run_batch(self, name, extra=None):
         """执行一个批处理动作（由 batch_bar 触发）。
@@ -3210,24 +3070,17 @@ class VideoWorkbench(QWidget):
             return
         self.proj = newp
         self.push_history()
-        try:
-            self.timeline.refresh()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.timeline.refresh()
         self._after_edit()
         self._batch_report(msg, True)
-        InfoBar.success("批量操作完成", msg,
-                        parent=self, position=InfoBarPosition.TOP,
-                        duration=2600)
+        TOAST.toast_ok(self, "批量操作完成", msg, duration=2600)
 
     def _batch_report(self, text, ok=True):
         bar = getattr(self, "_batch_bar", None)
         if bar is not None:
-            try:
+            with contextlib.suppress(Exception):
                 bar.report(text, ok)
                 return
-            except Exception:
-                pass
 
     def _apply_camera_path(self, payload):
         """把运镜编辑器生成的多段路径落到当前时刻。
@@ -3253,17 +3106,12 @@ class VideoWorkbench(QWidget):
             n += 1
         if not n:
             return
-        try:
-            effs.sort(key=lambda x: float(x.get("t") or 0.0))
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): effs.sort(key=lambda x: float(x.get("t") or 0.0))
         self.push_history()
         self._after_edit()
-        InfoBar.success(
-            "运镜已应用",
-            "%.2fs · %d 条路径（%s）" % (
+        TOAST.toast_ok(self, "运镜已应用", "%.2fs · %d 条路径（%s）" % (
                 t, n, "背景+立绘独立构图" if n > 1 else "单层"),
-            parent=self, position=InfoBarPosition.TOP, duration=2600)
+                 duration=2600)
 
     def _on_camera_preview(self, data):
         """运镜编辑器预览：把采样结果作用到实时预览的舞台上。
@@ -3284,18 +3132,12 @@ class VideoWorkbench(QWidget):
                "scaleY": float(sc.get("y", 1.0) or 1.0),
                "x": float(po.get("x", 0.0) or 0.0) / 1280.0 * 100.0,
                "y": float(po.get("y", 0.0) or 0.0) / 720.0 * 100.0}
-        try:
-            wv._send("setCamera", cam)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): wv._send("setCamera", cam)
 
     def _on_camera_reset(self):
         wv = getattr(self, "_webview", None)
         if wv is not None:
-            try:
-                wv._send("setCamera", {"active": False})
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): wv._send("setCamera", {"active": False})
     def _rebuild_transition_cards(self):
         """转场页：列出引擎真实支持的转场预设（点卡片=设为全片转场）。
 
@@ -3323,9 +3165,7 @@ class VideoWorkbench(QWidget):
         import transitions as TR
         t = TR.to_proj_transition(name)
         if t is None:
-            InfoBar.warning("转场不可用", "引擎不支持该转场动画。",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=2500)
+            TOAST.toast_warn(self, "转场不可用", "引擎不支持该转场动画。", duration=2500)
             return
         self.proj["transition"] = t
         self.push_history()
@@ -3333,12 +3173,10 @@ class VideoWorkbench(QWidget):
         # 转场页需要重刷高亮
         if self._asset_tab == "transition":
             self._rebuild_asset_cards()
-        InfoBar.success(
-            "转场已设置",
-            ("已恢复默认淡入淡出" if not t["enter"] and not t["exit"]
+        TOAST.toast_ok(self, "转场已设置", "已恢复默认淡入淡出" if not t["enter"] and not t["exit"]
              else "%s（%dms，WebGAL 导出与视频导出都会带上）"
-             % (name, t["duration_ms"])),
-            parent=self, position=InfoBarPosition.TOP, duration=2500)
+             % (name, t["duration_ms"]),
+                 duration=2500)
 
     # ---------- A4 模板页（三张卡片背后的动作） ----------
     @staticmethod
@@ -3390,14 +3228,12 @@ class VideoWorkbench(QWidget):
 
     def _src_for(self, path, kind="image"):
         """构造 source dict（尽量探测真实尺寸，探测不到用 0 兜底）。"""
-        try:
+        with contextlib.suppress(Exception):
             import video_source as VS
             src = VS.probe_source(path)
             if isinstance(src, dict) and src.get("path"):
                 src["kind"] = kind
                 return src
-        except Exception:
-            pass
         return V.new_source(kind, path)
 
     def _load_template_blank(self):
@@ -3444,8 +3280,7 @@ class VideoWorkbench(QWidget):
         self._seed_history()
         self.seek(0.0)
         self.push_history()
-        InfoBar.success("模板", "已载入「单背景+双立绘演示」", parent=self,
-                       position=InfoBarPosition.TOP, duration=2500)
+        TOAST.toast_ok(self, "模板", "已载入「单背景+双立绘演示」", duration=2500)
 
     def _import_webgal_dir(self):
         """导入 WebGAL game 目录：background→底轨，figure→上层轨（尽力而为）。"""
@@ -3494,13 +3329,11 @@ class VideoWorkbench(QWidget):
         gname = ""
         cfg = os.path.join(game, "config.txt")
         if os.path.isfile(cfg):
-            try:
+            with contextlib.suppress(Exception):
                 for line in open(cfg, encoding="utf8", errors="ignore"):
                     if line.startswith("Game_name:"):
                         gname = line.split(":", 1)[1].strip().rstrip(";")
                         break
-            except Exception:
-                pass
         self.proj = proj
         self.proj_dir = d
         self._loading = True
@@ -3509,16 +3342,14 @@ class VideoWorkbench(QWidget):
         self._seed_history()
         self.seek(0.0)
         self.push_history()
-        InfoBar.success("导入 WebGAL", "已导入 %d 个素材%s" % (
-            n, ("（%s）" % gname) if gname else ""),
-            parent=self, position=InfoBarPosition.TOP, duration=3000)
+        TOAST.toast_ok(self, "导入 WebGAL",
+                 "已导入 %d 个素材%s" % (
+            n, ("（%s）" % gname) if gname else ""))
 
     # ---------- E2：WebGAL 运行时状态卡动作 ----------
     def _runtime_online(self):
         """在线获取 -> 指引到资产管理「WebGAL 引擎运行时」条目（E1 已注册）。"""
-        InfoBar.info("WebGAL 运行时",
-                     "请到「资产管理」菜单的「WebGAL 引擎运行时」条目下载",
-                     parent=self, position=InfoBarPosition.TOP, duration=4000)
+        TOAST.toast_info(self, "WebGAL 运行时", "请到「资产管理」菜单的「WebGAL 引擎运行时」条目下载", duration=4000)
 
     def _runtime_import_confirm(self, zip_path, msg):
         """覆盖确认通过后，带 confirm=True 重跑 import_zip（后台线程）。"""
@@ -3535,11 +3366,9 @@ class VideoWorkbench(QWidget):
                 self._runtime_busy = False
                 if ok:
                     self._refresh_runtime_cards()
-                    InfoBar.success("运行时导入", msg2, parent=self,
-                                    position=InfoBarPosition.TOP, duration=4000)
+                    TOAST.toast_ok(self, "运行时导入", msg2, duration=4000)
                 else:
-                    InfoBar.warning("运行时导入", msg2, parent=self,
-                                    position=InfoBarPosition.TOP, duration=5000)
+                    TOAST.toast_warn(self, "运行时导入", msg2, duration=5000)
             from PySide6.QtCore import QTimer
             QTimer.singleShot(0, self, done)
 
@@ -3548,8 +3377,7 @@ class VideoWorkbench(QWidget):
     def _runtime_import_zip(self):
         """选 zip -> 后台导入；已装需确认覆盖 -> 主线程确认框后 confirm=True。"""
         if getattr(self, "_runtime_busy", False):
-            InfoBar.info("导入中", "请等待当前导入完成", parent=self,
-                         position=InfoBarPosition.TOP, duration=1800)
+            TOAST.toast_info(self, "导入中", "请等待当前导入完成", duration=1800)
             return
         zip_path, _ = QFileDialog.getOpenFileName(
             self, "选择 WebGAL 运行时压缩包", "", "WebGAL 运行时压缩包 (*.zip)")
@@ -3574,16 +3402,13 @@ class VideoWorkbench(QWidget):
                     if ret == QMessageBox.Yes:
                         self._runtime_import_confirm(zip_path, msg)
                     else:
-                        InfoBar.info("覆盖确认", "已取消覆盖", parent=self,
-                                    position=InfoBarPosition.TOP, duration=2000)
+                        TOAST.toast_info(self, "覆盖确认", "已取消覆盖", duration=2000)
                     return
                 if ok:
                     self._refresh_runtime_cards()
-                    InfoBar.success("运行时导入", msg, parent=self,
-                                    position=InfoBarPosition.TOP, duration=4000)
+                    TOAST.toast_ok(self, "运行时导入", msg, duration=4000)
                 else:
-                    InfoBar.warning("运行时导入", msg, parent=self,
-                                    position=InfoBarPosition.TOP, duration=5000)
+                    TOAST.toast_warn(self, "运行时导入", msg, duration=5000)
             from PySide6.QtCore import QTimer
             QTimer.singleShot(0, self, done)
 
@@ -3593,10 +3418,7 @@ class VideoWorkbench(QWidget):
         """刷新运行时状态卡（未在模板页则忽略）。"""
         card = getattr(self, "_runtime_card", None)
         if card is not None:
-            try:
-                card.refresh()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): card.refresh()
 
     def _show_script_editor(self, show):
         """文本 tab：显示剧情编辑器并隐藏素材库；其它 tab 反之。"""
@@ -3605,12 +3427,10 @@ class VideoWorkbench(QWidget):
             return
         se.setVisible(bool(show))
         # v3.6.2：批量操作条只在文本页出现（它作用于台词/片段，别的页没意义）
-        try:
+        with contextlib.suppress(Exception):
             bb = getattr(self, "_batch_bar", None)
             if bb is not None:
                 bb.setVisible(bool(show))
-        except Exception:
-            pass
         try:
             self.asset_scroll.setVisible(not show)
             self.asset_empty.setVisible(not show)
@@ -3674,8 +3494,7 @@ class VideoWorkbench(QWidget):
         ok, cid = V.add_clip(self.proj, tid, clip,
                              aid=getattr(self, "_cur_aid", None))
         if not ok:
-            InfoBar.warning("上轨失败", cid, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "上轨失败", cid, duration=2500)
             return
         self.push_history()
         self.timeline.refresh()
@@ -3704,12 +3523,10 @@ class VideoWorkbench(QWidget):
                         continue
                     if (c.get("source") or {}).get("kind") != "puppet":
                         continue
-                    try:
+                    with contextlib.suppress(Exception):
                         src = self._sources.get(c["source"])
                         src.set_preset(c.get("motion", ""),
                                        c.get("expression", ""))
-                    except Exception:
-                        pass
         except Exception:
             pass
 
@@ -3762,12 +3579,10 @@ class VideoWorkbench(QWidget):
             return False
 
     def _act_name(self, aid):
-        try:
+        with contextlib.suppress(Exception):
             a = V.find_act(self.proj, aid)
             if a:
                 return str(a.get("name") or aid)
-        except Exception:
-            pass
         return str(aid)
 
     def _refresh_act_bar(self):
@@ -3830,34 +3645,20 @@ class VideoWorkbench(QWidget):
     def _sync_act_buttons(self):
         """让当前幕的按钮处于选中态（其余取消）。"""
         for aid, b in (self._act_buttons or {}).items():
-            try:
+            with contextlib.suppress(Exception):
                 b.blockSignals(True)
                 b.setChecked(aid == self._cur_aid)
                 b.blockSignals(False)
-            except Exception:
-                pass
 
     def _apply_cur_act(self):
         """把当前幕游标同步给所有幕感知组件（时间轴/剧情编辑器/舞台）。"""
         aid = self._cur_aid
-        try:
-            self.timeline.set_act(aid)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.timeline.set_act(aid)
         # 剧情编辑器必须整表重刷：台词表与分支区都是按幕取的数据，
         # 只 render_frame 不够（那只刷高亮）——切幕后表格会停在旧幕内容。
-        try:
-            self.script_editor.refresh()
-        except Exception:
-            pass
-        try:
-            self.render_frame(self._t)
-        except Exception:
-            pass
-        try:
-            self._fill_clip_props()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.script_editor.refresh()
+        with contextlib.suppress(Exception): self.render_frame(self._t)
+        with contextlib.suppress(Exception): self._fill_clip_props()
 
     def _switch_act(self, aid):
         """切当前幕（时间轴/剧情编辑器/舞台都跟着切）。"""
@@ -3872,19 +3673,16 @@ class VideoWorkbench(QWidget):
         try:
             ok, msg, aid = V.add_act(self.proj, None, self._cur_aid)
         except Exception as e:
-            InfoBar.warning("新增幕", "失败：%s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "新增幕", "失败：%s" % e, duration=4000)
             return
         if not ok:
-            InfoBar.warning("新增幕", msg or "失败", parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "新增幕", msg or "失败", duration=4000)
             return
         self._cur_aid = aid
         self.push_history()
         self._refresh_act_bar()
         self._apply_cur_act()
-        InfoBar.success("新增幕", "已创建 %s" % aid, parent=self,
-                        position=InfoBarPosition.TOP, duration=3000)
+        TOAST.toast_ok(self, "新增幕", "已创建 %s" % aid)
 
     def _act_rename(self, aid=None):
         """重命名当前幕（弹简单输入框）。"""
@@ -3895,16 +3693,14 @@ class VideoWorkbench(QWidget):
             return
         name = dlg.value().strip()
         if not name:
-            InfoBar.warning("重命名幕", "幕名不能为空", parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "重命名幕", "幕名不能为空")
             return
         try:
             ok, msg = V.rename_act(self.proj, aid, name)
         except Exception as e:
             ok, msg = False, str(e)
         if not ok:
-            InfoBar.warning("重命名幕", msg or "失败", parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "重命名幕", msg or "失败", duration=4000)
             return
         self.push_history()
         self._refresh_act_bar()
@@ -3917,8 +3713,7 @@ class VideoWorkbench(QWidget):
         except Exception as e:
             ok, msg, new_aid = False, str(e), None
         if not ok:
-            InfoBar.warning("复制幕", msg or "失败", parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "复制幕", msg or "失败", duration=4000)
             return
         self._cur_aid = new_aid
         self.push_history()
@@ -3933,17 +3728,16 @@ class VideoWorkbench(QWidget):
         except Exception as e:
             ok, msg, cleared = False, str(e), None
         if not ok:
-            InfoBar.warning("删除幕", msg or "失败", parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "删除幕", msg or "失败", duration=4000)
             return
         self.push_history()
         self._refresh_act_bar()
         self._apply_cur_act()
         # remove_act 返回的是**清理了几处引用**（int），不是列表
         n = int(cleared or 0)
-        InfoBar.success("删除幕", ("已删除 %s" % aid) +
+        TOAST.toast_ok(self, "删除幕", ("已删除 %s" % aid) +
                         ("，并清理 %d 处引用" % n if n else ""),
-                        parent=self, position=InfoBarPosition.TOP, duration=4000)
+                 duration=4000)
 
     # ================= H3 实时预览（v3.5，设计 §5） =================
     def _preview_runtime_ready(self):
@@ -4017,10 +3811,8 @@ class VideoWorkbench(QWidget):
             v.pageReady.connect(self._on_preview_page_ready)
             # J3 §8-7：连续机制级 error 达阈值 -> 引擎自动降级，
             # UI 侧取消勾选 + 置灰（会话内不再弹，置灰保持）。
-            try:
+            with contextlib.suppress(Exception):
                 v.previewDisabled.connect(self._on_preview_disabled)
-            except Exception:
-                pass
             v.start()
             self._webview = v
             self._stack.addWidget(v)
@@ -4028,8 +3820,7 @@ class VideoWorkbench(QWidget):
             self._place_preview_badge()
             return v
         except Exception as e:
-            InfoBar.warning("实时预览", "初始化失败：%s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "实时预览", "初始化失败：%s" % e, duration=4000)
             return None
 
     def _on_preview_disabled(self):
@@ -4051,8 +3842,7 @@ class VideoWorkbench(QWidget):
             b.setEnabled(False)
             b.setToolTip("实时预览已自动停用：引擎连续报错（多半是模型文件缺失）"
                          "，修好模型后可重新开启")
-        InfoBar.warning("实时预览", "引擎连续报错，已自动停用实时预览",
-                        parent=self, position=InfoBarPosition.TOP, duration=8000)
+        TOAST.toast_warn(self, "实时预览", "引擎连续报错，已自动停用实时预览", duration=8000)
 
     def _on_preview_page_ready(self, ok):
         """宿主页 loadFinished：module script 还需一点时间求值，延迟推首帧。"""
@@ -4068,18 +3858,12 @@ class VideoWorkbench(QWidget):
             return
         # v3.5.2：同 _sync_real_preview —— 幕游标是 `_cur_aid` 不是 `_aid`
         aid = getattr(self, "_cur_aid", None)
-        try:
-            v._aid = aid
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): v._aid = aid
         try:
             view = V.act_view(self.proj, aid)
             v.apply_state(view, self._t, force=force)
         except TypeError:
-            try:
-                v.apply_state(self.proj, self._t, force=force)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): v.apply_state(self.proj, self._t, force=force)
         except Exception:
             pass
 
@@ -4103,10 +3887,7 @@ class VideoWorkbench(QWidget):
                 btn.blockSignals(True)
                 btn.setChecked(False)
                 btn.blockSignals(False)
-            InfoBar.info("实时预览",
-                         "实时预览不可用：需要 WebEngine 能力包与 WebGAL 运行时",
-                         parent=self, position=InfoBarPosition.TOP,
-                         duration=4000)
+            TOAST.toast_info(self, "实时预览", "实时预览不可用：需要 WebEngine 能力包与 WebGAL 运行时", duration=4000)
             return
         self._preview_real = True
         self._stack.setCurrentIndex(1)
@@ -4137,10 +3918,7 @@ class VideoWorkbench(QWidget):
             view = V.act_view(self.proj, aid)
             self._webview.apply_state(view, t)
         except TypeError:
-            try:
-                self._webview.apply_state(self.proj, t)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self._webview.apply_state(self.proj, t)
         except Exception:
             pass
 
@@ -4261,7 +4039,7 @@ class VideoWorkbench(QWidget):
         self._mix_result = None            # 后台线程写这里：(path, fp)
 
         def work():
-            try:
+            with contextlib.suppress(Exception):
                 import video_export as _VE
                 buf = _VE.mix_audio(self.proj, 44100)
                 if buf is not None and len(buf) > 0:
@@ -4270,8 +4048,6 @@ class VideoWorkbench(QWidget):
                     if os.path.isfile(p) and os.path.getsize(p) > 44:
                         self._mix_result = (p, fp)
                         return
-            except Exception:
-                pass
             self._mix_result = ("", fp)
 
         import threading
@@ -4320,13 +4096,11 @@ class VideoWorkbench(QWidget):
         pl = self._ensure_mix_player()
         if pl is None:
             return
-        try:
+        with contextlib.suppress(Exception):
             from PySide6.QtCore import QUrl
             pl.setSource(QUrl.fromLocalFile(self._mix_file))
             pl.setPosition(int(round(self._t * 1000)))
             pl.play()
-        except Exception:
-            pass
 
     def _sync_mix(self):
         """画面与音频对齐（seek 后调用）。"""
@@ -4342,10 +4116,7 @@ class VideoWorkbench(QWidget):
 
     def _stop_mix(self):
         if self._mix_player is not None:
-            try:
-                self._mix_player.stop()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self._mix_player.stop()
 
     # ================= 时间轴联动 =================
     def _on_selection(self, clip_id):
@@ -4394,13 +4165,11 @@ class VideoWorkbench(QWidget):
 
     def _set_combo_by_data(self, combo, val, ids):
         """按 id（并行列表）设置下拉当前项，不触发信号。"""
-        try:
+        with contextlib.suppress(Exception):
             combo.blockSignals(True)
             if val and val in ids:
                 combo.setCurrentIndex(ids.index(val))
             combo.blockSignals(False)
-        except Exception:
-            pass
 
     # ---------- A2 StageView 联动 ----------
     def _on_stage_select(self, clip_id):
@@ -4409,10 +4178,7 @@ class VideoWorkbench(QWidget):
         self._sel_clip = cid
         setter = getattr(self.timeline, "_set_sel", None)
         if setter is not None:
-            try:
-                setter(cid)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): setter(cid)
         self._fill_clip_props()
         self.timeline.refresh()
 
@@ -4420,10 +4186,7 @@ class VideoWorkbench(QWidget):
         """StageView 拖拽/手柄改布局后：压历史 + 重渲染 + 刷新时间轴。"""
         self.push_history()
         self.render_frame(self._t)
-        try:
-            self.timeline.refresh()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.timeline.refresh()
 
     def _layout_spin_changed(self, key):
         """属性面板改布局：layout_at 读 -> 原地写 clip["layout"] -> 压历史。"""
@@ -4545,8 +4308,7 @@ class VideoWorkbench(QWidget):
             ok, msg = V.trim_clip(self.proj, self._sel_clip, "end",
                                   c["start"] + self.spin_dur.value())
         if not ok:
-            InfoBar.warning("修改被拒", msg, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "修改被拒", msg, duration=2500)
             self._fill_clip_props()
             return
         self.push_history()
@@ -4580,10 +4342,7 @@ class VideoWorkbench(QWidget):
         self._update_transport()
         self._fill_clip_props()
         # v3.6.2：滤镜/特效列表跟着工程变（插入特效、套滤镜、删片段都要刷）
-        try:
-            self._refresh_fx_panel()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self._refresh_fx_panel()
         if not self._playing:
             self.render_frame(self._t)
 
@@ -4601,9 +4360,7 @@ class VideoWorkbench(QWidget):
                 return
             # v3.5.8：自定义帧率非法时阻止导出
             if not dlg._fps_valid():
-                InfoBar.warning("帧率无效", "帧率需为 1-120 的整数，请修正后再导出",
-                                parent=self, position=InfoBarPosition.TOP,
-                                duration=4000)
+                TOAST.toast_warn(self, "帧率无效", "帧率需为 1-120 的整数，请修正后再导出", duration=4000)
                 return
             path, scale, fps, workers, animate = dlg.result_values()
             self._start_export(path, scale, fps, workers, animate)
@@ -4616,14 +4373,10 @@ class VideoWorkbench(QWidget):
         """
         import video_export as VE
         if not path:
-            InfoBar.warning("路径为空", "请先填写保存路径",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "路径为空", "请先填写保存路径")
             return
-        try:
+        with contextlib.suppress(Exception):
             os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
-        except Exception:
-            pass
         aid = getattr(self, "_cur_aid", None)
         try:
             if kind == "srt":
@@ -4634,17 +4387,11 @@ class VideoWorkbench(QWidget):
         except Exception as e:
             ok, msg = False, "导出失败：%s" % e
         if ok:
-            InfoBar.success("导出完成", "%s\n%s" % (msg, path),
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=5000)
-            try:
+            TOAST.toast_ok(self, "导出完成", "%s\n%s" % (msg, path), duration=5000)
+            with contextlib.suppress(Exception):
                 os.startfile(os.path.dirname(os.path.abspath(path)))
-            except Exception:
-                pass
         else:
-            InfoBar.warning("未导出", msg,
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=5000)
+            TOAST.toast_warn(self, "未导出", msg, duration=5000)
 
     def _start_export(self, path, scale, fps=None, workers=None, animate=None):
         self.stop_play()
@@ -4662,10 +4409,7 @@ class VideoWorkbench(QWidget):
         except Exception:
             n_states = 0
         if n_states:
-            InfoBar.info("立绘已预渲染",
-                         "%d 个立绘状态已就绪（导出视频含完整 L2D）" % n_states,
-                         parent=self, position=InfoBarPosition.TOP,
-                         duration=4000)
+            TOAST.toast_info(self, "立绘已预渲染", "%d 个立绘状态已就绪（导出视频含完整 L2D）" % n_states, duration=4000)
         # 逐帧动画（方案 A）：泵必须在**主线程**起 —— QTimer 要活在有事件
         # 循环的线程里，而 VideoExportWorker.run() 在 QThread，那儿起不了。
         # 上面的定格预渲染在动画模式下**照旧执行**：它是泵的兜底，某帧泵
@@ -4683,11 +4427,9 @@ class VideoWorkbench(QWidget):
                 pm.configure(True, eff_fps, VE.normalize_workers(workers))
                 self._export_animate = bool(pm.start())
                 if not self._export_animate:
-                    InfoBar.warning("逐帧动画未启用",
-                                    "渲染泵起不来（%s），本次导出改用定格立绘"
+                    TOAST.toast_warn(self, "逐帧动画未启用", "渲染泵起不来（%s），本次导出改用定格立绘"
                                     % pm.reason(),
-                                    parent=self, position=InfoBarPosition.TOP,
-                                    duration=5000)
+                               duration=5000)
             except Exception:
                 self._export_animate = False
         # v3.5.8：导出进度计时（滑动平均估速 -> 剩余时间）
@@ -4734,16 +4476,13 @@ class VideoWorkbench(QWidget):
     def _export_done(self, ok, msg):
         for _k in ("_export_t0", "_export_last_t", "_export_last_pct",
                    "_export_rates"):
-            try:
-                delattr(self, _k)
-            except AttributeError:
-                pass
+            with contextlib.suppress(AttributeError): delattr(self, _k)
         # 逐帧动画：收泵。stop() 会停 QTimer、把页面时钟交回墙上时间，并
         # 唤醒还在等的线程 —— 不 stop 的话下次预览/导出会接手一个被暂停
         # 的 ticker 和残留 slot。
         if getattr(self, "_export_animate", False):
             self._export_animate = False
-            try:
+            with contextlib.suppress(Exception):
                 import l2d_pump as LPM
                 pm = LPM.pump()
                 st = dict(pm.stats)
@@ -4753,8 +4492,6 @@ class VideoWorkbench(QWidget):
                 if bad:
                     msg = "%s（立绘动画 %d 帧，其中 %d 帧超时/失败已回落定格）" % (
                         msg, st.get("frames", 0), bad)
-            except Exception:
-                pass
         self.act_export.setEnabled(True)
         self.act_export.setText("导出")
         (InfoBar.success if ok else InfoBar.error)(
@@ -4849,11 +4586,9 @@ class _ExportDialog(MessageBoxBase):
         self.ed_fps = LineEdit(self)
         self.ed_fps.setPlaceholderText("1-120")
         self.ed_fps.setMaximumWidth(72)
-        try:
+        with contextlib.suppress(Exception):
             from PySide6.QtGui import QIntValidator
             self.ed_fps.setValidator(QIntValidator(1, 120, self.ed_fps))
-        except Exception:
-            pass
         self.ed_fps.editingFinished.connect(self._validate_fps)
         r3.addWidget(self.ed_fps)
         self.ed_fps.setVisible(False)
@@ -5010,9 +4745,7 @@ class _ExportDialog(MessageBoxBase):
 
     def _validate_fps(self):
         if self._fps_custom() and not self._fps_valid():
-            InfoBar.warning("帧率无效", "帧率需为 1-120 的整数",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=3000)
+            TOAST.toast_warn(self, "帧率无效", "帧率需为 1-120 的整数")
 
     def _refresh_estimate(self):
         """按当前分辨率+帧率估算「预计约 X 分钟（N 帧）」。

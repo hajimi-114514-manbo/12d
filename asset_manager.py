@@ -22,6 +22,7 @@ from qfluentwidgets import (PushButton, PrimaryPushButton, TableWidget,
                             InfoBar, InfoBarPosition, FluentIcon)
 
 import ui_theme as TH
+import ui_toast as TOAST
 
 # base_dir = 本文件所在目录（与 l2d_rig_qt.V2 同义，但不用 import 主模块）
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -53,8 +54,7 @@ def _human(n):
         n = float(n or 0)
     except (TypeError, ValueError):
         return "-"
-    if n <= 0:
-        return "-"
+    if n <= 0: return "-"
     for u in ("B", "KB", "MB", "GB"):
         if n < 1024 or u == "GB":
             return ("%.0f %s" % (n, u)) if u in ("B", "KB") else ("%.1f %s" % (n, u))
@@ -209,14 +209,10 @@ class AssetManagerDialog(QDialog):
                 _KIND_CN.get(it["kind"], it["kind"])))
             self.table.setItem(r, 2, QTableWidgetItem(_human(it["size"])))
 
-            if it["installed"]:
-                st = "已安装（%s）" % _human(it["inst_size"])
-            elif it["missing"]:
-                st = "文件不完整"
-            elif it["id"] in self._busy:
-                st = "下载中…"
-            else:
-                st = "未安装"
+            if it["installed"]: st = "已安装（%s）" % _human(it["inst_size"])
+            elif it["missing"]: st = "文件不完整"
+            elif it["id"] in self._busy: st = "下载中…"
+            else: st = "未安装"
             self.table.setItem(r, 3, QTableWidgetItem(st))
 
             # 操作列：放按钮
@@ -236,19 +232,15 @@ class AssetManagerDialog(QDialog):
     def _start_download(self, it):
         a = it["asset"]
         aid = it["id"]
-        if aid in self._busy:
-            return
+        if aid in self._busy: return
         url = a.get("url") or ""
         if not url and not a.get("parts"):
-            InfoBar.warning("资产下载", "%s 还没有配置下载地址" % it["name"],
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=4000)
+            TOAST.toast_warn(self, "资产下载", "%s 还没有配置下载地址" % it["name"], duration=4000)
             return
         try:
             AD = _downloader()
         except Exception as e:
-            InfoBar.warning("资产下载", "下载模块缺失: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "资产下载", "下载模块缺失: %s" % e, duration=4000)
             return
 
         # 防重入：和资产菜单同款判断，避免双线程抢同一个 .part
@@ -259,8 +251,7 @@ class AssetManagerDialog(QDialog):
         if prog is not None:
             got, total = prog
             pct = (" %d%%" % max(0, min(100, int(got * 100 / total)))) if total else ""
-            InfoBar.info("资产下载", "%s 已在下载中%s" % (it["name"], pct),
-                         parent=self, position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_info(self, "资产下载", "%s 已在下载中%s" % (it["name"], pct), duration=4000)
             return
 
         self._busy.add(aid)
@@ -270,8 +261,7 @@ class AssetManagerDialog(QDialog):
             dlg.start()
             dlg.exec()
         except Exception as e:
-            InfoBar.warning("资产下载", "启动失败: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "资产下载", "启动失败: %s" % e, duration=4000)
         finally:
             self._busy.discard(aid)
             # 下载窗口关掉后刷新状态（可能刚装好，也可能失败）

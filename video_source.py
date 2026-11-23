@@ -35,6 +35,7 @@ from collections import OrderedDict
 import numpy as np
 import cv2
 from PIL import Image
+import contextlib
 
 # 应用目录（本文件所在处）。FFMPEG_CANDIDATES 值复制自 l2d_rig_qt.py:119
 # ——规格要求"复制常量不要 import"，两处若挪动需同步。
@@ -247,10 +248,7 @@ class VideoSource(FrameSource):
     def close(self):
         if not self._closed:
             self._closed = True
-            try:
-                self._cap.release()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self._cap.release()
         self._cache = OrderedDict()
         self._last_good = None
 
@@ -602,15 +600,13 @@ class PuppetSource(FrameSource):
             if img is not None and getattr(img, "size", 0):
                 return img
         if self._l2d_prefetch is not None:
-            try:
+            with contextlib.suppress(Exception):
                 img = self._l2d_prefetch.get(
                     self.path, self._motion_id, self._expression_id)
                 if img is not None and getattr(img, "size", 0):
                     return img
                 if not self._l2d_miss_logged:
                     self._l2d_miss_logged = True
-            except Exception:
-                pass
             # 未命中（该状态没预渲染到）：回退占位卡，绝不阻断导出
             if self._atlas is not None:
                 return self._atlas
@@ -697,10 +693,7 @@ def _run_no_pipe(argv, stdout_file=None, timeout=60):
         return None
     finally:
         if stdout_file:
-            try:
-                fh.close()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): fh.close()
 
 
 def _ffprobe_duration(path):
@@ -715,17 +708,12 @@ def _ffprobe_duration(path):
             if rc != 0:
                 continue
             txt = open(tmp, encoding="utf8", errors="ignore").read().strip()
-            try:
+            with contextlib.suppress(ValueError):
                 d = float(txt)
                 if np.isfinite(d) and d >= 0:
                     return d
-            except ValueError:
-                pass
         finally:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
+            with contextlib.suppress(OSError): os.remove(tmp)
     return 0.0
 
 
@@ -837,18 +825,13 @@ class AudioLoader(object):
         try:
             os.remove(tmp)                  # 让 ffmpeg -y 自己创建，避免句柄占用
             if AudioLoader._ffmpeg_wav(path, tmp):
-                try:
-                    return AudioLoader._read_wav(tmp)
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception): return AudioLoader._read_wav(tmp)
         except Exception:
             pass
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 if os.path.isfile(tmp):
                     os.remove(tmp)
-            except OSError:
-                pass
         return None, 0
 
 

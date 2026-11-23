@@ -24,8 +24,7 @@ import threading
 import numpy as np
 
 _V_DIR = os.path.dirname(os.path.abspath(__file__))
-if _V_DIR not in sys.path:
-    sys.path.insert(0, _V_DIR)
+if _V_DIR not in sys.path: sys.path.insert(0, _V_DIR)
 
 
 class L2DPrefetch(object):
@@ -65,8 +64,7 @@ class L2DPrefetch(object):
         返回 成功渲染的状态数；渲染器不可用时返回 0（导出侧自动回退
         占位卡/原有路径，不阻断导出）。
         """
-        if self._built and not force:
-            return self.stats["states"]
+        if self._built and not force: return self.stats["states"]
         import time
         t0 = time.time()
         keys = self.collect_states(proj)
@@ -89,8 +87,7 @@ class L2DPrefetch(object):
         for model_path, motion, expression in keys:
             try:
                 ref = rd.register(model_path)
-                if not ref:
-                    continue
+                if not ref: continue
                 img = rd.render({"ref": ref, "motion": motion,
                                  "expression": expression})
                 if img is not None and getattr(img, "size", 0):
@@ -113,35 +110,26 @@ class L2DPrefetch(object):
         try:
             tracks = proj.get("tracks") or []
             for tr in tracks:
-                if not isinstance(tr, dict):
-                    continue
-                if not str(tr.get("name") or "").startswith("FIG"):
-                    continue
+                if not isinstance(tr, dict): continue
+                if not str(tr.get("name") or "").startswith("FIG"): continue
                 for c in (tr.get("clips") or []):
-                    if not isinstance(c, dict):
-                        continue
+                    if not isinstance(c, dict): continue
                     k = L2DPrefetch.clip_key(c)
                     if not k[0]:            # 无路径，跳过
                         continue
-                    if k in seen_set:
-                        continue
+                    if k in seen_set: continue
                     seen_set.add(k)
                     seen.append(k)
             # 多幕工程：每幕的 tracks
             for act in (proj.get("acts") or []):
-                if not isinstance(act, dict):
-                    continue
+                if not isinstance(act, dict): continue
                 for tr in (act.get("tracks") or []):
-                    if not isinstance(tr, dict):
-                        continue
-                    if not str(tr.get("name") or "").startswith("FIG"):
-                        continue
+                    if not isinstance(tr, dict): continue
+                    if not str(tr.get("name") or "").startswith("FIG"): continue
                     for c in (tr.get("clips") or []):
-                        if not isinstance(c, dict):
-                            continue
+                        if not isinstance(c, dict): continue
                         k = L2DPrefetch.clip_key(c)
-                        if not k[0] or k in seen_set:
-                            continue
+                        if not k[0] or k in seen_set: continue
                         seen_set.add(k)
                         seen.append(k)
         except Exception:
@@ -182,8 +170,7 @@ def prefetch():
     """进程级预渲染缓存单例。"""
     global _PREFETCH
     with _PREFETCH_LOCK:
-        if _PREFETCH is None:
-            _PREFETCH = L2DPrefetch()
+        if _PREFETCH is None: _PREFETCH = L2DPrefetch()
         return _PREFETCH
 
 

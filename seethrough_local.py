@@ -44,14 +44,12 @@ def pick_device():
     """MUPPET_FORCE_DEVICE=cuda|cpu 强制优先；否则自动探测。
     CPU 分支用纯 torch fp32 + nf4 反量化，A 卡/无卡机器可跑（慢，见 decompose 预警）。"""
     force = os.environ.get("MUPPET_FORCE_DEVICE", "").strip().lower()
-    if force in ("cuda", "cpu"):
-        return force
+    if force in ("cuda", "cpu"): return force
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def _empty_cache():
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    if torch.cuda.is_available(): torch.cuda.empty_cache()
 
 
 # ---------------- CPU 兜底档确认门（四档优先级链，task-15） ----------------
@@ -81,8 +79,7 @@ def reset_cpu_engine_confirm():
 
 def cpu_engine_confirmed():
     """CPU 兜底档是否放行：会话确认过 或 逃生阀环境变量。"""
-    if _cpu_confirmed[0]:
-        return True
+    if _cpu_confirmed[0]: return True
     return os.environ.get(CPU_ALLOW_ENV, "").strip() == "1"
 
 
@@ -117,10 +114,8 @@ def _import_core():
         for key in list(sys.modules.keys()):
             if key == prefix or key.startswith(prefix + "."):
                 backup[key] = sys.modules.pop(key)
-    if ST_COMMON not in sys.path:
-        sys.path.insert(0, ST_COMMON)
-    if ST_CORE not in sys.path:
-        sys.path.insert(1, ST_CORE)
+    if ST_COMMON not in sys.path: sys.path.insert(0, ST_COMMON)
+    if ST_CORE not in sys.path: sys.path.insert(1, ST_CORE)
     import cv2  # noqa
     from modules.layerdiffuse.diffusers_kdiffusion_sdxl import KDiffusionStableDiffusionXLPipeline
     from modules.layerdiffuse.layerdiff3d import UNetFrameConditionModel
@@ -129,8 +124,7 @@ def _import_core():
     from utils.cv import center_square_pad_resize, img_alpha_blending, smart_resize
     from utils.torchcv import cluster_inpaint_part
     for key, mod in backup.items():
-        if key not in sys.modules:
-            sys.modules[key] = mod
+        if key not in sys.modules: sys.modules[key] = mod
     return dict(cv2=cv2, KDiffusionStableDiffusionXLPipeline=KDiffusionStableDiffusionXLPipeline,
                 UNetFrameConditionModel=UNetFrameConditionModel, TransparentVAE=TransparentVAE,
                 MarigoldDepthPipeline=MarigoldDepthPipeline,
@@ -158,22 +152,18 @@ def _cast_non_quantized_params(model, dtype):
     except ImportError:
         bnb_types = ()
     for module in model.modules():
-        if bnb_types and isinstance(module, bnb_types):
-            continue
+        if bnb_types and isinstance(module, bnb_types): continue
         for param in module.parameters(recurse=False):
-            if param.data.is_floating_point():
-                param.data = param.data.to(dtype=dtype)
+            if param.data.is_floating_point(): param.data = param.data.to(dtype=dtype)
         for buf in module.buffers(recurse=False):
-            if buf.data.is_floating_point():
-                buf.data = buf.data.to(dtype=dtype)
+            if buf.data.is_floating_point(): buf.data = buf.data.to(dtype=dtype)
 
 
 def seed_everything(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available(): torch.cuda.manual_seed_all(seed)
 
 
 # ---------------- CPU 分支：nf4 反量化加载器 ----------------
@@ -201,8 +191,7 @@ def _load_state_dir(d):
     if os.path.isfile(index):
         with open(index, encoding="utf8") as f:
             shards = sorted(set(json.load(f)["weight_map"].values()))
-    else:
-        shards = sorted(fn for fn in os.listdir(d) if fn.endswith(".safetensors"))
+    else: shards = sorted(fn for fn in os.listdir(d) if fn.endswith(".safetensors"))
     for sh in shards:
         sd.update(load_file(os.path.join(d, sh)))
     return sd
@@ -213,8 +202,7 @@ def _dequant_state_dict(sd):
     out = {}
     skip_suffix = (".absmax", ".quant_map", ".original_shape", ".original_dtype")
     for k, v in sd.items():
-        if k.endswith(skip_suffix) or ".quant_state." in k:
-            continue
+        if k.endswith(skip_suffix) or ".quant_state." in k: continue
         if k + ".absmax" in sd and k + ".quant_map" in sd:
             qs_key = k + ".quant_state.bitsandbytes__nf4"
             shape = None
@@ -225,8 +213,7 @@ def _dequant_state_dict(sd):
                     shape = None
             flat = _dequant_nf4(v, sd[k + ".absmax"], sd[k + ".quant_map"])
             out[k] = flat.reshape(shape).float() if shape else flat.float()
-        else:
-            out[k] = v.float() if v.is_floating_point() else v
+        else: out[k] = v.float() if v.is_floating_point() else v
     return out
 
 
@@ -246,13 +233,10 @@ def _load_component_cpu(dirpath, verbose):
         from modules.layerdiffuse.layerdiff3d import UNetFrameConditionModel as Cls
     elif cls_name == "TransparentVAE":
         from modules.layerdiffuse.vae import TransparentVAE as Cls
-    elif cls_name == "AutoencoderKL":
-        from diffusers import AutoencoderKL as Cls
-    else:
-        raise RuntimeError("CPU 分支不识别组件类: %s (%s)" % (cls_name, dirpath))
+    elif cls_name == "AutoencoderKL": from diffusers import AutoencoderKL as Cls
+    else: raise RuntimeError("CPU 分支不识别组件类: %s (%s)" % (cls_name, dirpath))
     sd = _dequant_state_dict(_load_state_dir(dirpath))
-    if model is None:
-        model = Cls.from_config(cfg)
+    if model is None: model = Cls.from_config(cfg)
     _fit_state_dict(model, sd, dirpath)
     return model.to(torch.float32)
 
@@ -321,8 +305,7 @@ def _load_pipeline_cpu(verbose):
     scls_name = scfg.get("_class_name", "DDIMScheduler")
     import diffusers as _D
     SchedCls = getattr(_D, scls_name, None)
-    if SchedCls is None:
-        raise RuntimeError("CPU 分支不识别调度器: %s" % scls_name)
+    if SchedCls is None: raise RuntimeError("CPU 分支不识别调度器: %s" % scls_name)
     d_sched = SchedCls.from_config(scfg)
     marigold = K["MarigoldDepthPipeline"](
         unet=d_unet, vae=d_vae, text_encoder=d_te,
@@ -335,15 +318,13 @@ def _load_pipeline_cpu(verbose):
 
 def _resolve(model_name):
     p = os.path.join(MODELS_DIR, model_name.replace("/", os.sep))
-    if os.path.isdir(p):
-        return p
+    if os.path.isdir(p): return p
     raise FileNotFoundError("模型目录不存在: %s（请先复制 nf4 模型到 %s）" % (p, MODELS_DIR))
 
 
 # ---------------- 模型加载 ----------------
 def load_models(verbose=print):
-    if pick_device() == "cpu":
-        return _load_pipeline_cpu(verbose)
+    if pick_device() == "cpu": return _load_pipeline_cpu(verbose)
     K = _import_core()
     dev = torch.device("cuda")
     dtype = torch.bfloat16
@@ -425,8 +406,7 @@ def generate_layers(pipeline, K, img_np, seed, resolution, steps, verbose):
     verbose("分层推理开始 tag=%s res=%d steps=%d" % (tag_version, resolution, steps))
 
     has_cached = len(pipeline._cached_prompt_embeds) > 0
-    if has_cached:
-        encode_fn = pipeline.encode_cropped_prompt_77tokens_cached
+    if has_cached: encode_fn = pipeline.encode_cropped_prompt_77tokens_cached
     else:
         pipeline.text_encoder.to(dev)
         pipeline.text_encoder_2.to(dev)
@@ -440,8 +420,7 @@ def generate_layers(pipeline, K, img_np, seed, resolution, steps, verbose):
                      "eyelash", "eyewear", "ears", "earwear", "nose", "mouth"]
         body_embeds, body_pooled = encode_fn(body_tags)
         head_embeds, head_pooled = encode_fn(head_tags)
-    else:
-        prompt_embeds, pooled = encode_fn(VALID_BODY_PARTS_V2)
+    else: prompt_embeds, pooled = encode_fn(VALID_BODY_PARTS_V2)
     if not has_cached:
         pipeline.text_encoder.to(offload)
         pipeline.text_encoder_2.to(offload)
@@ -520,8 +499,7 @@ def generate_depth(marigold, K, layers, seed, resolution_depth, verbose):
             ta = layer_dict[tag].copy()
             ta[..., -1][ta[..., -1] < 15] = 0
             img_list.append(ta)
-        else:
-            img_list.append(empty.copy())
+        else: img_list.append(empty.copy())
     compose_dict = {}
     for c, clist in compose_list.items():
         imlist, taglist = [], []
@@ -546,8 +524,7 @@ def generate_depth(marigold, K, layers, seed, resolution_depth, verbose):
     if resolution_depth > 0 and resolution_depth != resolution:
         dres = max(64, (resolution_depth // 8) * 8)
         inputs = [K["smart_resize"](im, (dres, dres)) for im in img_list]
-    else:
-        inputs, dres = img_list, resolution
+    else: inputs, dres = img_list, resolution
 
     marigold.unet.to(dev)
     marigold.vae.to(dev)
@@ -572,12 +549,10 @@ def generate_depth(marigold, K, layers, seed, resolution_depth, verbose):
                 depth_local = np.full((resolution, resolution), 1.0, dtype=np.float32)
                 depth_local[mask_local] = depth[mask_local]
                 vis = mask_local & ~mask_invis
-                if np.any(vis):
-                    depth_local[mask_invis] = np.median(depth[vis])
+                if np.any(vis): depth_local[mask_invis] = np.median(depth[vis])
                 mask_accum = mask_accum | mask_local
                 depth_dict[t] = depth_local
-        else:
-            depth_dict[tag] = np.clip(depth, 0, 1).astype(np.float32)
+        else: depth_dict[tag] = np.clip(depth, 0, 1).astype(np.float32)
     verbose("深度完成 %d 张" % len(depth_dict))
     return LayersDepthData(layer_dict, depth_dict, fullpage, resolution)
 
@@ -588,8 +563,7 @@ def _label_lr_split(labels, stats, id1, id2):
     label2 = (labels == id2).astype(np.uint8) * 255
     x1 = stats[id1][0] + stats[id1][2] / 2
     x2 = stats[id2][0] + stats[id2][2] / 2
-    if x2 < x1:
-        return label2, label1, stats[id2], stats[id1]
+    if x2 < x1: return label2, label1, stats[id2], stats[id1]
     return label1, label2, stats[id1], stats[id2]
 
 
@@ -606,8 +580,7 @@ def _process_cuts(img, depth, src_xyxy, tgt_bbox, mask=None):
         mask = cv2.dilate(mask, element)
         img[..., -1] *= mask
         depth = 1 - (1 - depth) * mask
-        if np.any(mask):
-            depth_median = float(np.median(depth[mask > 0]))
+        if np.any(mask): depth_median = float(np.median(depth[mask > 0]))
     fxyxy = [tx1 + src_xyxy[0], ty1 + src_xyxy[1], tx2 + src_xyxy[0], ty2 + src_xyxy[1]]
     return img, depth, fxyxy, depth_median
 
@@ -629,14 +602,12 @@ def _part_lr_split(tag, part_info):
                                              part_info["xyxy"], sr, mask=mr)
         tag2pinfo["%s-l" % tag] = {"img": img, "xyxy": xyxy, "depth": depth,
                                    "depth_median": dm, "tag": "%s-l" % tag}
-    else:
-        tag2pinfo[tag] = part_info
+    else: tag2pinfo[tag] = part_info
     return tag2pinfo
 
 
 def _tag_lr_split(tag, tag2pinfo):
-    if tag in tag2pinfo:
-        tag2pinfo.update(_part_lr_split(tag, tag2pinfo.pop(tag)))
+    if tag in tag2pinfo: tag2pinfo.update(_part_lr_split(tag, tag2pinfo.pop(tag)))
 
 
 def _compute_depth_median(pdict):
@@ -655,8 +626,7 @@ def _compute_depth_median(pdict):
         if "xyxy" in pdict:
             ox, oy = pdict["xyxy"][0], pdict["xyxy"][1]
             pdict["xyxy"] = [ox + cx1, oy + cy1, ox + cx2, oy + cy2]
-        else:
-            pdict["xyxy"] = [cx1, cy1, cx2, cy2]
+        else: pdict["xyxy"] = [cx1, cy1, cx2, cy2]
     depth = np.round(np.clip(depth, 0, 1) * 255).astype(np.uint8)
     pdict["depth_median"] = depth_median
     pdict["img"] = img
@@ -671,11 +641,9 @@ def post_process(ld, K, verbose, tblr_split=True, use_lama=False):
     tag2pinfo = {}
     for tag in layer_dict:
         img = layer_dict[tag]
-        if tag not in depth_dict:
-            continue
+        if tag not in depth_dict: continue
         mask = img[..., -1] > 10
-        if not np.any(mask):
-            continue
+        if not np.any(mask): continue
         tag2pinfo[tag] = {"img": img, "depth": depth_dict[tag],
                           "xyxy": [0, 0, resolution, resolution], "mask": mask, "tag": tag}
 
@@ -697,8 +665,7 @@ def post_process(ld, K, verbose, tblr_split=True, use_lama=False):
                 tag2pinfo["browr"] = {"img": img, "xyxy": xyxy, "depth": depth}
                 img, depth, xyxy, _ = _process_cuts(pi["img"], pi["depth"], pi["xyxy"], sr)
                 tag2pinfo["browl"] = {"img": img, "xyxy": xyxy, "depth": depth}
-        else:
-            tag2pinfo["eyes"] = pi
+        else: tag2pinfo["eyes"] = pi
 
     if tblr_split:
         _tag_lr_split("handwear", tag2pinfo)
@@ -721,8 +688,7 @@ def post_process(ld, K, verbose, tblr_split=True, use_lama=False):
             pi = tag2pinfo[rt]
             sh, sw = pi["img"].shape[:2]
             fh, fw = fullpage.shape[:2]
-            if sh == fh and sw == fw:
-                pi["img"][..., :3] = fullpage[..., :3]
+            if sh == fh and sw == fw: pi["img"][..., :3] = fullpage[..., :3]
             else:
                 x1, y1 = pi["xyxy"][0], pi["xyxy"][1]
                 crop = fullpage[y1:min(y1 + sh, fh), x1:min(x1 + sw, fw), :3]
@@ -730,8 +696,7 @@ def post_process(ld, K, verbose, tblr_split=True, use_lama=False):
 
     for tag in list(tag2pinfo.keys()):
         pi = tag2pinfo[tag]
-        if "img" in pi and "depth" in pi:
-            _compute_depth_median(pi)
+        if "img" in pi and "depth" in pi: _compute_depth_median(pi)
         pi["tag"] = tag
 
     if "face" in tag2pinfo:
@@ -740,8 +705,7 @@ def post_process(ld, K, verbose, tblr_split=True, use_lama=False):
             if t in tag2pinfo and tag2pinfo[t]["depth_median"] > fdm:
                 tag2pinfo[t]["depth_median"] = fdm - 0.001
         for t in ["earr", "earl", "ears"]:
-            if t in tag2pinfo:
-                tag2pinfo[t]["depth_median"] = fdm + 0.001
+            if t in tag2pinfo: tag2pinfo[t]["depth_median"] = fdm + 0.001
 
     verbose("后处理完成 %d 层" % len(tag2pinfo))
     return {"tag2pinfo": tag2pinfo, "frame_size": fullpage.shape[:2]}
@@ -758,8 +722,7 @@ def save_parts(parts, out_dir, K, verbose):
     for tag in order:
         pi = tag2pinfo[tag]
         img = pi.get("img")
-        if img is None:
-            continue
+        if img is None: continue
         x1, y1, x2, y2 = [int(v) for v in pi.get("xyxy", [0, 0, img.shape[1], img.shape[0]])]
         fn = "layer_%s.png" % tag.replace(" ", "_")
         Image.fromarray(img).save(os.path.join(out_dir, fn))
@@ -770,8 +733,7 @@ def save_parts(parts, out_dir, K, verbose):
             dfn = "layer_%s_depth.png" % tag.replace(" ", "_")
             if dep.ndim == 2:
                 Image.fromarray(dep, mode="L").save(os.path.join(out_dir, dfn))
-            else:
-                Image.fromarray(dep).save(os.path.join(out_dir, dfn))
+            else: Image.fromarray(dep).save(os.path.join(out_dir, dfn))
             e["depth_filename"] = dfn
         entries.append(e)
     meta = {"prefix": "st_local", "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
@@ -801,11 +763,9 @@ def decompose(img_path, out_dir, resolution=1024, depth_resolution=768, steps=30
     这里：未确认则抛 CpuConfirmationRequired（UI 弹框确认或
     MUPPET_ALLOW_CPU_ENGINE=1 放行，无 UI 的 CLI 保持拒绝）。"""
     if pick_device() == "cpu":
-        if not cpu_engine_confirmed():
-            raise CpuConfirmationRequired(CPU_GATE_MESSAGE)
+        if not cpu_engine_confirmed(): raise CpuConfirmationRequired(CPU_GATE_MESSAGE)
         verbose("[!] CPU 兜底档（已确认）：fp32 反量化慢速通道，实测约 2-3 小时/张，内存需求 ~10GB。")
-    if not os.path.exists(img_path):
-        raise FileNotFoundError(img_path)
+    if not os.path.exists(img_path): raise FileNotFoundError(img_path)
     img = np.asarray(Image.open(img_path).convert("RGB"))
     pipeline = marigold = None
     try:

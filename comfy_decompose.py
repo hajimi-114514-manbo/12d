@@ -32,6 +32,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import contextlib
 
 DEFAULT_API_PORTS = (8188, 8000, 8189)
 PLUGIN_NODES = (
@@ -176,8 +177,7 @@ def submit(api, img_name, graph_kw, client_id="muppet-studio", timeout=120):
             for it in j.get("node_errors", {}).values():
                 for err in it.get("errors", []):
                     errs.append("%s: %s" % (err.get("type"), err.get("detail", "")))
-            if j.get("error"):
-                errs.append(j["error"].get("message", ""))
+            if j.get("error"): errs.append(j["error"].get("message", ""))
             detail = "; ".join(x for x in errs if x) or detail[:300]
         except Exception:
             detail = detail[:300]
@@ -185,16 +185,12 @@ def submit(api, img_name, graph_kw, client_id="muppet-studio", timeout=120):
 
 
 def queue_position(api, pid, timeout=15):
-    try:
+    with contextlib.suppress(Exception):
         q = get_json(api, "/queue", timeout=timeout)
         for i, item in enumerate(q.get("queue_running", []) or []):
-            if item[1] == pid:
-                return "running", 0
+            if item[1] == pid: return "running", 0
         for i, item in enumerate(q.get("queue_pending", []) or []):
-            if item[1] == pid:
-                return "pending", i + 1
-    except Exception:
-        pass
+            if item[1] == pid: return "pending", i + 1
     return None, None
 
 
@@ -219,10 +215,8 @@ def wait_done(api, pid, timeout=3600, verbose=print, on_progress=None,
                 return None
             return it
         state, pos = queue_position(api, pid)
-        if state == "pending":
-            verbose("排队中（前面还有 %d 个任务）…" % pos)
-        elif on_progress:
-            on_progress(int((time.time() - t0)))
+        if state == "pending": verbose("排队中（前面还有 %d 个任务）…" % pos)
+        elif on_progress: on_progress(int((time.time() - t0)))
         time.sleep(poll)
     verbose("等待超时（A 卡首跑要下 12.5GB 模型，可重跑续上）")
     return None
@@ -284,13 +278,11 @@ def collect(api, out_dir, prefix="muppet", verbose=print, hist=None, since=None)
     # 归属校验二：时间戳不早于本次提交（json 里形如 20261110_001902_uid）
     ts = str(meta.get("timestamp", ""))
     if since and len(ts) >= 15:
-        try:
+        with contextlib.suppress(ValueError):
             t = time.mktime(time.strptime(ts[:15], "%Y%m%d_%H%M%S"))
             if t < since - 120:
                 verbose("清单时间 %s 早于本次提交，判定为陈旧结果" % ts)
                 return None
-        except ValueError:
-            pass
     layers = meta.get("layers", [])
     if not layers:
         verbose("%s 里没有层" % info_name)
@@ -302,8 +294,7 @@ def collect(api, out_dir, prefix="muppet", verbose=print, hist=None, since=None)
     for it in layers:
         for key, suffix in (("filename", ""), ("depth_filename", "_depth")):
             src_name = it.get(key)
-            if not src_name:
-                continue
+            if not src_name: continue
             dst = os.path.join(out_dir, src_name)
             if os.path.exists(dst) and os.path.getsize(dst) > 0:
                 n += 1
@@ -361,8 +352,7 @@ def decompose(img_path, out_dir, quant="none", resolution=1024, depth_res=768,
     verbose("已提交 prompt_id=%s" % pid[:12])
     hist = wait_done(api, pid, timeout=timeout, verbose=verbose,
                      on_progress=on_progress)
-    if hist is None:
-        return None
+    if hist is None: return None
     return collect(api, out_dir, prefix=prefix, verbose=verbose,
                    hist=hist, since=since)
 

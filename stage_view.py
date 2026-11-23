@@ -106,8 +106,7 @@ class StageView(QWidget):
 
     def _flush_frame(self):
         """延时补建：把节流期间攒下的最新帧画出来。"""
-        if not getattr(self, "_pending_frame", False):
-            return
+        if not getattr(self, "_pending_frame", False): return
         self._pending_frame = False
         self._last_build = time.perf_counter()
         self._build_pixmap()
@@ -118,8 +117,7 @@ class StageView(QWidget):
 
         必须走 act_view：v2 多幕工程顶层没有 tracks/dialogue，
         直接 proj.get("tracks") 会让舞台预览全空。"""
-        if not self.proj:
-            return {"tracks": [], "dialogue": []}
+        if not self.proj: return {"tracks": [], "dialogue": []}
         try:
             return V.act_view(self.proj, getattr(self, "_aid", None))
         except Exception:
@@ -143,8 +141,7 @@ class StageView(QWidget):
         #   1) numpy 步进降采样到「显示尺寸附近」——纯 stride 切片，零拷贝
         #   2) QImage 只包一层视图（不 copy），fromImage 时 Qt 自己拷
         step = self._downscale_step(w, h)
-        if step > 1:
-            small = self._block_downscale(self._frame, step)
+        if step > 1: small = self._block_downscale(self._frame, step)
         else:
             small = (self._frame if self._frame.flags["C_CONTIGUOUS"]
                      else np.ascontiguousarray(self._frame))
@@ -166,8 +163,7 @@ class StageView(QWidget):
         """
         h, w = arr.shape[:2]
         h2, w2 = (h // step) * step, (w // step) * step
-        if h2 <= 0 or w2 <= 0:
-            return arr
+        if h2 <= 0 or w2 <= 0: return arr
         core = arr[:h2, :w2]
         return np.ascontiguousarray(core[::step, ::step])
 
@@ -178,8 +174,7 @@ class StageView(QWidget):
         降采样。用整数步长（1/2/3/4）而不是精确缩放：便宜且够清晰，
         paintEvent 再用 SmoothPixmapTransform 轻微拉伸补足。"""
         tw, th = self._target_px()
-        if tw <= 0 or th <= 0:
-            return 1
+        if tw <= 0 or th <= 0: return 1
         step = 1
         while (w // (step + 1) >= tw and h // (step + 1) >= th):
             step += 1
@@ -200,19 +195,16 @@ class StageView(QWidget):
         except Exception:
             return (0, 0)
         cw, ch = self.width(), self.height()
-        if W <= 0 or H <= 0 or cw < 8 or ch < 8:
-            return (0, 0)
+        if W <= 0 or H <= 0 or cw < 8 or ch < 8: return (0, 0)
         s = min(cw / float(W), ch / float(H))
         return (max(1, int(W * s)), max(1, int(H * s)))
 
     def _geom(self):
         """fit：画布像素 -> widget 像素。返回 (ox, oy, scale, dw, dh)。"""
         cw, ch = self.width(), self.height()
-        if self.proj is None or self._pixmap is None:
-            return (0, 0, 0.0, 0, 0)
+        if self.proj is None or self._pixmap is None: return (0, 0, 0.0, 0, 0)
         W, H = int(self.proj["width"]), int(self.proj["height"])
-        if W <= 0 or H <= 0 or cw < 4 or ch < 4:
-            return (0, 0, 0.0, 0, 0)
+        if W <= 0 or H <= 0 or cw < 4 or ch < 4: return (0, 0, 0.0, 0, 0)
         s = min(cw / W, ch / H)
         dw, dh = int(W * s), int(H * s)
         return ((cw - dw) // 2, (ch - dh) // 2, s, dw, dh)
@@ -223,8 +215,7 @@ class StageView(QWidget):
 
     def _w2c(self, wx, wy):
         ox, oy, s, _, _ = self._geom()
-        if s <= 0:
-            return (0.0, 0.0)
+        if s <= 0: return (0.0, 0.0)
         return ((wx - ox) / s, (wy - oy) / s)
 
     # ---------- 命中 ----------
@@ -232,11 +223,9 @@ class StageView(QWidget):
         """t 时刻生效的视频 clip，按叠放顺序自顶向下（topmost 优先）。"""
         eps = 1e-6
         out = []
-        if not self.proj:
-            return out
+        if not self.proj: return out
         for ti, tr in enumerate(self._view()["tracks"]):
-            if tr.get("kind") != "video" or tr.get("hidden"):
-                continue
+            if tr.get("kind") != "video" or tr.get("hidden"): continue
             for c in tr.get("clips", []):
                 if c["start"] - eps <= self.t < c["start"] + c["dur"] - eps:
                     out.append((ti, c["start"], c))
@@ -249,26 +238,22 @@ class StageView(QWidget):
         A4：dialogue = [{"t","dur","who","text"}]，WebGAL 导出与字幕共用。"""
         eps = 1e-6
         out = []
-        if not self.proj:
-            return out
+        if not self.proj: return out
         for d in (self._view()["dialogue"] or []):
-            if not isinstance(d, dict):
-                continue
+            if not isinstance(d, dict): continue
             try:
                 t = float(d.get("t"))
                 dur = float(d.get("dur"))
             except Exception:
                 continue
-            if t - eps <= self.t < t + dur - eps:
-                out.append(d)
+            if t - eps <= self.t < t + dur - eps: out.append(d)
         return out
 
     def _rect_widget(self, c):
         lay = V.layout_at(c)
         src = c.get("source") or {}
         w, h = int(src.get("w") or 0), int(src.get("h") or 0)
-        if w <= 0 or h <= 0 or not self.proj:
-            return None
+        if w <= 0 or h <= 0 or not self.proj: return None
         px, py, pw, ph = VE.layer_rect(w, h, int(self.proj["width"]),
                                        int(self.proj["height"]), lay)
         x0, y0 = self._c2w(px, py)
@@ -276,29 +261,23 @@ class StageView(QWidget):
         return (x0, y0, x1, y1)
 
     def _clip(self, cid):
-        if not self.proj:
-            return None
+        if not self.proj: return None
         for tr in self._view()["tracks"]:
             for c in tr.get("clips", []):
-                if c.get("id") == cid:
-                    return c
+                if c.get("id") == cid: return c
         return None
 
     def _hit(self, wx, wy):
         for c in self._active_clips():
             r = self._rect_widget(c)
-            if r is None:
-                continue
-            if r[0] <= wx <= r[2] and r[1] <= wy <= r[3]:
-                return c["id"]
+            if r is None: continue
+            if r[0] <= wx <= r[2] and r[1] <= wy <= r[3]: return c["id"]
         return None
 
     def _is_handle(self, wx, wy):
-        if not self._selected:
-            return False
+        if not self._selected: return False
         r = self._rect_widget(self._clip(self._selected))
-        if r is None:
-            return False
+        if r is None: return False
         return (abs(wx - r[2]) <= self._HANDLE and
                 abs(wy - r[3]) <= self._HANDLE)
 
@@ -308,17 +287,14 @@ class StageView(QWidget):
     # ---------- 写回 ----------
     def _write_layout(self, cid, lay):
         c = self._clip(cid)
-        if c is None:
-            return
-        if not isinstance(c.get("layout"), dict):
-            c["layout"] = V.default_layout()
+        if c is None: return
+        if not isinstance(c.get("layout"), dict): c["layout"] = V.default_layout()
         for k in ("x", "y", "scale", "rot"):
             c["layout"][k] = lay.get(k, c["layout"].get(k))
 
     # ---------- 鼠标 ----------
     def mousePressEvent(self, e):
-        if e.button() != Qt.LeftButton or self._busy():
-            return
+        if e.button() != Qt.LeftButton or self._busy(): return
         wx, wy = e.position().x(), e.position().y()
         if self._is_handle(wx, wy):
             c = self._clip(self._selected)
@@ -343,12 +319,10 @@ class StageView(QWidget):
         e.accept()
 
     def mouseMoveEvent(self, e):
-        if not self._drag or self._busy():
-            return
+        if not self._drag or self._busy(): return
         wx, wy = e.position().x(), e.position().y()
         c = self._clip(self._drag["clip_id"])
-        if c is None:
-            return
+        if c is None: return
         lay = dict(self._drag["start_lay"])
         cx, cy = self._w2c(wx, wy)
         if self._drag["mode"] == "move":
@@ -394,8 +368,7 @@ class StageView(QWidget):
         cw = max(1, self.width())
         px = max(14, min(32, cw // 38))
         cache = getattr(self, "_font_cache", None)
-        if cache is not None and cache[0] == px:
-            return cache[1]
+        if cache is not None and cache[0] == px: return cache[1]
         f = QFont("Microsoft YaHei", px)
         self._font_cache = (px, f)
         return f
@@ -407,14 +380,12 @@ class StageView(QWidget):
         v3.5.2：结果按 (text, max_w, fontpx) 缓存。台词 300 字时原实现
         每帧要做 300 次 horizontalAdvance（字体度量不便宜）；拖动播放头/
         播放时同一句台词会被重算几十次。缓存后只在换句或改窗口宽时重算。"""
-        if not text:
-            return [""]
+        if not text: return [""]
         fm = painter.fontMetrics()
         fpx = self._dialog_font().pointSize()
         key = (text, int(max_w), fpx)
         cache = getattr(self, "_wrap_cache", None)
-        if cache is not None and cache[0] == key:
-            return cache[1]
+        if cache is not None and cache[0] == key: return cache[1]
         lines, cur, cur_w = [], "", 0
         for ch in text:
             w = fm.horizontalAdvance(ch)
@@ -448,16 +419,14 @@ class StageView(QWidget):
           - 静态整行绘制，同台词行数逐帧不变 -> 不抖
         """
         items = self._active_dialogues()
-        if not items:
-            return
+        if not items: return
         try:
             d = items[-1]
             who = str(d.get("who") or "")
             text = str(d.get("text") or "")
         except Exception:
             return
-        if not text:
-            return
+        if not text: return
         painter.setFont(self._dialog_font())
         fm = painter.fontMetrics()
         line_h = fm.height()
@@ -477,8 +446,7 @@ class StageView(QWidget):
             rect = QRectF(pad_x, y, cw - 2 * pad_x, line_h)
             for dx in (-outline, 0, outline):
                 for dy in (-outline, 0, outline):
-                    if dx == 0 and dy == 0:
-                        continue
+                    if dx == 0 and dy == 0: continue
                     painter.setPen(QColor(0, 0, 0, 235))
                     painter.drawText(rect.translated(dx, dy),
                                      Qt.AlignLeft | Qt.AlignVCenter, ln)

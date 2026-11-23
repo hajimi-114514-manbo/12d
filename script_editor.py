@@ -25,6 +25,8 @@ from qfluentwidgets import (PushButton, StrongBodyLabel, CaptionLabel,
 
 import video_model as V
 import ui_theme as TH
+import contextlib
+import ui_toast as TOAST
 
 try:
     import motion_table as MT
@@ -73,10 +75,7 @@ def _refresh_colors():
     _PANEL_QSS = _panel_qss()
     _EDITOR_QSS = _editor_qss()
     for w in list(_WIDGETS):
-        try:
-            w._apply_theme()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): w._apply_theme()
 
 
 TH.register(_refresh_colors)
@@ -235,8 +234,7 @@ class ScriptEditor(QWidget):
 
     def _valid(self, item):
         """与 video_model._sanitize_dialogue 同规则的单条校验，返回清洗后 dict。"""
-        if not isinstance(item, dict):
-            return None
+        if not isinstance(item, dict): return None
         cleaned = V._sanitize_dialogue([item])
         return cleaned[0] if cleaned else None
 
@@ -248,30 +246,24 @@ class ScriptEditor(QWidget):
     def _catalog_choices(kind):
         """(id, name) 候选；motion_table 不可用时回退空列表。"""
         try:
-            if MT is None:
-                return []
+            if MT is None: return []
             cat = MT.catalog()
-            if kind == "motion":
-                return [(m["id"], m["name"]) for m in cat["motions"]]
+            if kind == "motion": return [(m["id"], m["name"]) for m in cat["motions"]]
             return [(e["id"], e["name"]) for e in cat["expressions"]]
         except Exception:
             return []
 
     def _set_combo_by_data(self, combo, val, ids):
         """按 id（并行列表）设置下拉当前项，不触发信号。"""
-        try:
+        with contextlib.suppress(Exception):
             combo.blockSignals(True)
-            if val and val in ids:
-                combo.setCurrentIndex(ids.index(val))
+            if val and val in ids: combo.setCurrentIndex(ids.index(val))
             combo.blockSignals(False)
-        except Exception:
-            pass
 
     def _cur_choice(self, combo, ids):
         """取当前下拉对应 id（越界回空串）。"""
         idx = combo.currentIndex()
-        if 0 <= idx < len(ids):
-            return ids[idx]
+        if 0 <= idx < len(ids): return ids[idx]
         return ""
 
     def refresh(self):
@@ -282,8 +274,7 @@ class ScriptEditor(QWidget):
         rows = []
         for it in self._dialogue():
             o = self._valid_obj(it)
-            if o is not None:
-                rows.append(o)
+            if o is not None: rows.append(o)
         rows.sort(key=lambda x: (float(x["t"]), float(x["dur"])))
         self._rows = rows
         self.table.setRowCount(len(rows))
@@ -300,10 +291,7 @@ class ScriptEditor(QWidget):
         names = sorted({str(r.get("who")) for r in rows if r.get("who")})
         self.cpl_who.setModel(QStringListModel(names, self.cpl_who))
         # F2-L5：分支区跟着刷（切幕/增删幕后会变）
-        try:
-            self.branch_panel.refresh()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.branch_panel.refresh()
         self.refresh_highlight()
 
     def refresh_highlight(self):
@@ -317,8 +305,7 @@ class ScriptEditor(QWidget):
             color = QColor(_HL_COLOR) if active else QColor(0, 0, 0, 0)
             for c in range(_NCOL):
                 it = self.table.item(i, c)
-                if it is not None:
-                    it.setBackground(color)
+                if it is not None: it.setBackground(color)
 
     def active_row_index(self):
         """当前 _t 生效行在 self._rows 中的下标；无则 -1。"""
@@ -327,21 +314,18 @@ class ScriptEditor(QWidget):
         except Exception:
             t = 0.0
         for i, r in enumerate(self._rows):
-            if float(r["t"]) <= t < float(r["t"]) + float(r["dur"]):
-                return i
+            if float(r["t"]) <= t < float(r["t"]) + float(r["dur"]): return i
         return -1
 
     # ---------- 行操作 ----------
     def _row_obj(self, row):
-        if 0 <= row < len(self._rows):
-            return self._rows[row]
+        if 0 <= row < len(self._rows): return self._rows[row]
         return None
 
     def _selected_row(self):
         """当前行；无 current 则取第一个选中行。"""
         row = self.table.currentRow()
-        if row >= 0:
-            return row
+        if row >= 0: return row
         rs = self.table.selectedRows()
         return rs[0].row() if rs else -1
 
@@ -351,10 +335,7 @@ class ScriptEditor(QWidget):
     def _seek_row(self, row):
         obj = self._row_obj(row)
         if obj is not None:
-            try:
-                self.wb.seek(float(obj["t"]))
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self.wb.seek(float(obj["t"]))
 
     def _on_double_click(self, row, _col):
         self._begin_edit(row)
@@ -371,11 +352,9 @@ class ScriptEditor(QWidget):
         self.spin_dur.setValue(3.0)
 
     def _begin_edit(self, row=None):
-        if row is None:
-            row = self._selected_row()
+        if row is None: row = self._selected_row()
         obj = self._row_obj(row)
-        if obj is None:
-            return False
+        if obj is None: return False
         self._editing_obj = obj
         self._mode_lbl.setText("编辑模式（保存=原位替换）")
         self.ed_who.setText(str(obj.get("who") or ""))
@@ -393,13 +372,10 @@ class ScriptEditor(QWidget):
         cleaned = self._valid(raw)
         if cleaned is None:
             # 添加时空 text 拒收；其它脏值也拒
-            if not text.strip():
-                self._warn("台词内容不能为空")
-            else:
-                self._warn("台词字段非法（t/dur 需非负、who/text 需字符串）")
+            if not text.strip(): self._warn("台词内容不能为空")
+            else: self._warn("台词字段非法（t/dur 需非负、who/text 需字符串）")
             return False
-        if self._editing_obj is None:
-            return self.add_row(who, text, dur, t)
+        if self._editing_obj is None: return self.add_row(who, text, dur, t)
         return self.update_row(self._editing_obj, who, text, dur, t)
 
     def add_row(self, who, text, dur, t):
@@ -420,8 +396,7 @@ class ScriptEditor(QWidget):
             return False
         dlg = self._dialogue()
         idx = self._index_of(dlg, obj)
-        if idx < 0:
-            return False
+        if idx < 0: return False
         dlg[idx] = dict(cleaned)
         self._editing_obj = None
         self._after_write()
@@ -430,12 +405,10 @@ class ScriptEditor(QWidget):
     def delete_selected(self):
         row = self._selected_row()
         obj = self._row_obj(row)
-        if obj is None:
-            return False
+        if obj is None: return False
         dlg = self._dialogue()
         idx = self._index_of(dlg, obj)
-        if idx < 0:
-            return False
+        if idx < 0: return False
         del dlg[idx]
         self._editing_obj = None
         self._after_write()
@@ -444,28 +417,18 @@ class ScriptEditor(QWidget):
     @staticmethod
     def _index_of(lst, obj):
         for i, x in enumerate(lst):
-            if x is obj:
-                return i
+            if x is obj: return i
         return -1
 
     def _after_write(self):
-        try:
-            self.wb.push_history()
-        except Exception:
-            pass
-        try:
-            self.wb.render_frame(self.wb._t)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.wb.push_history()
+        with contextlib.suppress(Exception): self.wb.render_frame(self.wb._t)
         self.refresh()
 
     def _warn(self, msg):
-        try:
+        with contextlib.suppress(Exception):
             from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.warning("剧情编辑", msg, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
-        except Exception:
-            pass
+            TOAST.toast_warn(self, "剧情编辑", msg, duration=2500)
 
     def seek_row_index(self, row):
         """供测试/外部：按行下标 seek（点行联动）。"""
@@ -543,10 +506,7 @@ class _BranchPanel(QWidget):
             lbl = CaptionLabel(label, self)
             lbl.setFixedWidth(58)
             r.addWidget(lbl)
-            try:
-                widget.setFixedHeight(_ED_H)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): widget.setFixedHeight(_ED_H)
             r.addWidget(widget, 1)
             return r
 
@@ -647,8 +607,7 @@ class _BranchPanel(QWidget):
         """当前幕 dict（v2 多幕才有；v1 返回 None）。"""
         try:
             aid = getattr(self.wb, "_cur_aid", None)
-            if not aid or not V.is_multi_act(self.wb.proj):
-                return None
+            if not aid or not V.is_multi_act(self.wb.proj): return None
             return V.find_act(self.wb.proj, aid)
         except Exception:
             return None
@@ -662,12 +621,10 @@ class _BranchPanel(QWidget):
     def _act_names(self):
         """[(aid, 幕名)] —— 下拉用。"""
         out = []
-        try:
+        with contextlib.suppress(Exception):
             for a in (self.wb.proj.get("acts") or []):
                 if isinstance(a, dict):
                     out.append((str(a.get("aid")), str(a.get("name") or a.get("aid"))))
-        except Exception:
-            pass
         return out
 
     def _fill_target_combo(self, combo, cur=None):
@@ -677,7 +634,7 @@ class _BranchPanel(QWidget):
         「幕一（a1）」，可数据其实是 None（幕尾=播完即停 / 尚未选目标），
         用户会误以为已经设成 a1 而直接点保存。空值必须回落 placeholder。
         """
-        try:
+        with contextlib.suppress(Exception):
             combo.blockSignals(True)
             combo.clear()
             for aid, name in self._act_names():
@@ -685,8 +642,6 @@ class _BranchPanel(QWidget):
             idx = combo.findData(cur) if cur else -1
             combo.setCurrentIndex(idx if idx >= 0 else -1)
             combo.blockSignals(False)
-        except Exception:
-            pass
 
     # ---------- 渲染 ----------
     def refresh(self):
@@ -708,8 +663,7 @@ class _BranchPanel(QWidget):
         opt_rows = []
         for ci, ch in enumerate(choices):
             for oi, o in enumerate(ch.get("options") or []):
-                if isinstance(o, dict):
-                    opt_rows.append((ci, oi, ch, o))
+                if isinstance(o, dict): opt_rows.append((ci, oi, ch, o))
         self.tbl.setRowCount(len(opt_rows))
         for i, (ci, oi, ch, o) in enumerate(opt_rows):
             prompt = str(ch.get("prompt") or "") if oi == 0 else ""
@@ -739,20 +693,13 @@ class _BranchPanel(QWidget):
 
     # ---------- 写 ----------
     def _after_write(self):
-        try:
-            self.wb.push_history()
-        except Exception:
-            pass
-        try:
-            self.wb.render_frame(self.wb._t)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.wb.push_history()
+        with contextlib.suppress(Exception): self.wb.render_frame(self.wb._t)
         self.refresh()
 
     def _add_choice(self):
         act = self._act()
-        if act is None:
-            return
+        if act is None: return
         choices = act.setdefault("choices", [])
         if len(choices) >= V.MAX_CHOICES_PER_ACT:
             self._warn("本幕选择点已达上限 %d" % V.MAX_CHOICES_PER_ACT)
@@ -764,8 +711,7 @@ class _BranchPanel(QWidget):
 
     def _del_choice(self):
         act = self._act()
-        if act is None:
-            return
+        if act is None: return
         row = self.tbl.currentRow()
         try:
             ci, oi, ch, o = self._opt_rows[row]
@@ -779,8 +725,7 @@ class _BranchPanel(QWidget):
 
     def _save_option(self):
         act = self._act()
-        if act is None:
-            return
+        if act is None: return
         sel = getattr(self, "_sel", None)
         if sel is None:
             self._warn("先在表里点一行选中要编辑的选项")
@@ -790,22 +735,17 @@ class _BranchPanel(QWidget):
         o["target"] = str(self.cmb_target.currentData() or "")
         ch["prompt"] = self.ed_prompt.text().strip()
         sv = self.ed_set.text().strip()
-        if sv:
-            o["set"] = [x.strip() for x in sv.split(";") if x.strip()]
-        else:
-            o.pop("set", None)
+        if sv: o["set"] = [x.strip() for x in sv.split(";") if x.strip()]
+        else: o.pop("set", None)
         w = self.ed_when.text().strip()
-        if w:
-            o["when"] = w
-        else:
-            o.pop("when", None)
+        if w: o["when"] = w
+        else: o.pop("when", None)
         self._sanitize_act(act)
         self._after_write()
 
     def _add_jump(self):
         act = self._act()
-        if act is None:
-            return
+        if act is None: return
         when = self.ed_jwhen.text().strip()
         tgt = str(self.cmb_jtarget.currentData() or "")
         if not when or not tgt:
@@ -819,19 +759,16 @@ class _BranchPanel(QWidget):
 
     def _del_jump(self):
         act = self._act()
-        if act is None:
-            return
+        if act is None: return
         js = act.get("jumps") or []
-        if not js:
-            return
+        if not js: return
         js.pop()
         self._sanitize_act(act)
         self._after_write()
 
     def _set_next(self):
         act = self._act()
-        if act is None:
-            return
+        if act is None: return
         tgt = str(self.cmb_next.currentData() or "")
         act["next"] = tgt or None
         self._sanitize_act(act)
@@ -839,21 +776,16 @@ class _BranchPanel(QWidget):
 
     def _sanitize_act(self, act):
         """按 video_model 的契约清洗当前幕的分支数据（防脏值进工程）。"""
-        try:
+        with contextlib.suppress(Exception):
             aids = self._act_ids()
             warn = []
             act["choices"] = V._sanitize_choices(act.get("choices"), aids, warn)
             act["jumps"] = V._sanitize_jumps(act.get("jumps"), aids, warn)
-        except Exception:
-            pass
 
     def _warn(self, msg):
-        try:
+        with contextlib.suppress(Exception):
             from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.warning("分支编辑", msg, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
-        except Exception:
-            pass
+            TOAST.toast_warn(self, "分支编辑", msg, duration=2500)
 
 
 # 注：窗口壳（FluentWindow 包装）在 l2d_rig_qt.FluentShellWindow 里做，

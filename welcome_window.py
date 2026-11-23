@@ -13,6 +13,7 @@
 约定：本模块**不 import l2d_rig_qt**（脚本直跑时 __main__ 双实例问题），
 最近列表 / 版本号 / 图标路径全部由 run_app 传进来；交互结果用信号发出。
 """
+import contextlib
 import json
 import os
 import time
@@ -39,16 +40,14 @@ _WELCOME_WIDGETS = []
 def _refresh_themed():
     """切主题时由 TH.register 调用：重刷所有存活欢迎页控件。"""
     for w in list(_WELCOME_WIDGETS):
-        try:
-            w._apply_theme()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): w._apply_theme()
 
 
 TH.register(_refresh_themed)
 
 # 更新检查（task-13）：只依赖它自己的 QtCore，方向单向，无循环 import
 import update_checker as _UC
+import ui_toast as TOAST
 
 # git 源码同步（task-71）：**仅在用户点击检查更新时才被 import/调用**，
 # 模块 import 本体零网络零 git（见 git_sync 模块 docstring 第 3 条）。
@@ -66,11 +65,9 @@ MAX_PER_TYPE = 50       # 每种类型（图片/视频）最多展示工程数
 
 def is_project_dir(d):
     """工程目录判定：layers_meta.json / ComfyUI *_layers.json / video_project.json。"""
-    if not d or not os.path.isdir(d):
-        return False
+    if not d or not os.path.isdir(d): return False
     for fn in ("layers_meta.json", "video_project.json"):
-        if os.path.isfile(os.path.join(d, fn)):
-            return True
+        if os.path.isfile(os.path.join(d, fn)): return True
     try:
         return any(f.endswith("_layers.json") for f in os.listdir(d))
     except OSError:
@@ -79,17 +76,12 @@ def is_project_dir(d):
 
 def _rel_time(ts):
     """时间戳 -> AE 风格相对时间（刚刚 / X分钟前 / X小时前 / X天前 / 日期）。"""
-    if not ts:
-        return "—"
+    if not ts: return "—"
     d = max(0, time.time() - ts)
-    if d < 60:
-        return "刚刚"
-    if d < 3600:
-        return "%d分钟前" % int(d // 60)
-    if d < 86400:
-        return "%d小时前" % int(d // 3600)
-    if d < 30 * 86400:
-        return "%d天前" % int(d // 86400)
+    if d < 60: return "刚刚"
+    if d < 3600: return "%d分钟前" % int(d // 60)
+    if d < 86400: return "%d小时前" % int(d // 3600)
+    if d < 30 * 86400: return "%d天前" % int(d // 86400)
     return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
@@ -97,14 +89,8 @@ def _proj_mtime(d):
     """工程"最近使用"时间：meta/工程 json/目录三者取最新 mtime。"""
     best = 0.0
     for fn in ("layers_meta.json", "rig_project.json", "video_project.json"):
-        try:
-            best = max(best, os.path.getmtime(os.path.join(d, fn)))
-        except OSError:
-            pass
-    try:
-        best = max(best, os.path.getmtime(d))
-    except OSError:
-        pass
+        with contextlib.suppress(OSError): best = max(best, os.path.getmtime(os.path.join(d, fn)))
+    with contextlib.suppress(OSError): best = max(best, os.path.getmtime(d))
     return best
 
 
@@ -114,34 +100,26 @@ def _dir_size(d):
     try:
         for root, _dirs, files in os.walk(d):
             for fn in files:
-                try:
-                    tot += os.path.getsize(os.path.join(root, fn))
-                except OSError:
-                    pass
+                with contextlib.suppress(OSError): tot += os.path.getsize(os.path.join(root, fn))
     except OSError:
         pass
     return tot
 
 
 def _human_size(n):
-    if n <= 0:
-        return "—"
+    if n <= 0: return "—"
     for unit, div in (("GB", 2 ** 30), ("MB", 2 ** 20), ("KB", 2 ** 10)):
-        if n >= div:
-            return "%.1f %s" % (n / div, unit)
+        if n >= div: return "%.1f %s" % (n / div, unit)
     return "%d B" % n
 
 
 def _proj_display_name(d, fallback=""):
     """工程名：优先 rig_project.json 的 name，否则目录名（与 Workbench 同规则）。"""
-    try:
+    with contextlib.suppress(Exception):
         p = json.load(open(os.path.join(d, "rig_project.json"),
                            encoding="utf8"))
         nm = (p.get("name") or "").strip()
-        if nm:
-            return nm
-    except Exception:
-        pass
+        if nm: return nm
     return fallback or os.path.basename(d)
 
 
@@ -257,8 +235,7 @@ class WelcomeWindow(QWidget):
         super().__init__(parent)
         self.setObjectName("welcomeRoot")
         self.setWindowTitle("木偶工作室" + (" v" + version if version else ""))
-        if icon_path and os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+        if icon_path and os.path.exists(icon_path): self.setWindowIcon(QIcon(icon_path))
         self.items = [it for it in (items or [])
                       if it.get("dir") and os.path.isdir(it["dir"])]
         self._tab = "all"          # all | image | video
@@ -462,17 +439,14 @@ class WelcomeWindow(QWidget):
         pool = []
         for it in self.items:
             d = it.get("dir") or ""
-            if not d or not os.path.isdir(d):
-                continue
+            if not d or not os.path.isdir(d): continue
             vid = self._is_video(d)
             if vid:
                 vi += 1
-                if vi > MAX_PER_TYPE:
-                    continue
+                if vi > MAX_PER_TYPE: continue
             else:
                 ii += 1
-                if ii > MAX_PER_TYPE:
-                    continue
+                if ii > MAX_PER_TYPE: continue
             pool.append((it, vid))
         return pool
 
@@ -480,21 +454,17 @@ class WelcomeWindow(QWidget):
         t = self._filt.strip().casefold()
         out = []
         for it, vid in self._typed_pool():
-            if self._tab == "video" and not vid:
-                continue
-            if self._tab == "image" and vid:
-                continue
+            if self._tab == "video" and not vid: continue
+            if self._tab == "image" and vid: continue
             if t:
                 nm = _proj_display_name(
                     it["dir"], it.get("name") or "").casefold()
-                if t not in nm:
-                    continue
+                if t not in nm: continue
             out.append((it, vid))
         return out
 
     def _set_tab(self, key):
-        if self._tab == key:
-            return
+        if self._tab == key: return
         self._tab = key
         for k, tb in self._tabs.items():
             tb.blockSignals(True)
@@ -540,19 +510,15 @@ class WelcomeWindow(QWidget):
             if self._filt.strip():
                 self.empty_lbl.setText("没有匹配「%s」的项目"
                                        % self._filt.strip())
-            elif self._tab != "all":
-                self.empty_lbl.setText("该类型还没有工程 —— 点击左侧「新建项目」开始")
-            else:
-                self.empty_lbl.setText("暂无历史项目 —— 点击左侧「新建项目」开始")
+            elif self._tab != "all": self.empty_lbl.setText("该类型还没有工程 —— 点击左侧「新建项目」开始")
+            else: self.empty_lbl.setText("暂无历史项目 —— 点击左侧「新建项目」开始")
         self.empty_lbl.setVisible(not rows)
 
     # ---------------- 交互 ----------------
     def _open_row(self, r):
-        if r < 0 or r >= len(self._rows):
-            return
+        if r < 0 or r >= len(self._rows): return
         d = self._rows[r]
-        if not os.path.isdir(d):
-            return
+        if not os.path.isdir(d): return
         self.open_requested.emit(d)
 
     def _on_dbl(self, item):
@@ -560,25 +526,20 @@ class WelcomeWindow(QWidget):
 
     def _on_new(self):
         dlg = _TypeDialog(self)
-        if dlg.exec():
-            self.new_requested.emit(dlg.chosen)
+        if dlg.exec(): self.new_requested.emit(dlg.chosen)
 
     def _on_browse(self):
         """「打开项目」：在欢迎页内弹目录框，选**且校验通过**才发 open_requested；
         取消/非法目录都留在本页——绝不先把用户换进工作台。"""
         start = os.path.join(_V2, "projects")
-        if not os.path.isdir(start):
-            start = _V2
+        if not os.path.isdir(start): start = _V2
         d = QFileDialog.getExistingDirectory(
             self, "打开工程（选择含 layers_meta.json 的文件夹）", start)
-        if not d:
-            return
+        if not d: return
         if not is_project_dir(d):
-            InfoBar.error("不是工程目录",
-                          "所选文件夹里没有 layers_meta.json"
+            TOAST.toast_err(self, "不是工程目录", "所选文件夹里没有 layers_meta.json"
                           "（也没有 ComfyUI 的 *_layers.json）：\n%s" % d,
-                          parent=self, position=InfoBarPosition.TOP,
-                          duration=5000)
+                      duration=5000)
             return
         self.open_requested.emit(os.path.normpath(d))
 
@@ -596,15 +557,13 @@ class WelcomeWindow(QWidget):
         try:
             import asset_manager as AM
         except Exception as e:
-            InfoBar.warning("资产管理", "模块加载失败: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=5000)
+            TOAST.toast_warn(self, "资产管理", "模块加载失败: %s" % e, duration=5000)
             return
         try:
             dlg = AM.AssetManagerDialog(self)
             dlg.exec()
         except Exception as e:
-            InfoBar.warning("资产管理", "打开失败: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=5000)
+            TOAST.toast_warn(self, "资产管理", "打开失败: %s" % e, duration=5000)
 
     # ---------------- 检查更新（task-13，点击才发网络请求，不阻塞启动） ----------------
     def _on_check_update(self):
@@ -618,9 +577,7 @@ class WelcomeWindow(QWidget):
             return
         p = _UC.pending_installer()
         if p:
-            InfoBar.success("新版已下载", "退出后自动安装\n%s" % p,
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=6000)
+            TOAST.toast_ok(self, "新版已下载", "退出后自动安装\n%s" % p, duration=6000)
             return
         # task-71：点更新按钮时，**先**比 git 源码版本（本地 VERSION vs 远端），
         # 远端更新才提示拉取；这一层是纯本地+一次 fetch，失败自动静默跳过，
@@ -687,12 +644,10 @@ class WelcomeWindow(QWidget):
         if dirty:
             names = "、".join(os.path.basename(x) for x in dirty[:5])
             more = " 等 %d 个文件" % len(dirty) if len(dirty) > 5 else ""
-            InfoBar.warning(
-                "源码有新版本 v%s，但本地有未提交改动" % (rv or "?"),
-                "检测到 %d 个未提交改动（%s%s）。\n"
+            TOAST.toast_warn(self, "源码有新版本 v%s，但本地有未提交改动" % (rv or "?"), "检测到 %d 个未提交改动（%s%s）。\n"
                 "为保护在途工作，未做任何覆盖。请先提交或暂存后再更新。"
                 % (len(dirty), names, more),
-                parent=self, position=InfoBarPosition.TOP, duration=10000)
+                       duration=10000)
             self.update_lbl.setText("源码有新版本，本地有未提交改动")
             QTimer.singleShot(6000, lambda: self.update_lbl.setText(""))
             self._start_package_update()
@@ -726,13 +681,9 @@ class WelcomeWindow(QWidget):
         def on_pulled(ok, msg, rep):
             self.update_lbl.setText("")
             if ok:
-                InfoBar.success(
-                    "源码已更新到 v%s" % (rv or "?"), msg + "\n重启应用后生效",
-                    parent=self, position=InfoBarPosition.TOP, duration=10000)
+                TOAST.toast_ok(self, "源码已更新到 v%s" % (rv or "?"), msg + "\n重启应用后生效", duration=10000)
             else:
-                InfoBar.error("源码更新未完成", msg,
-                              parent=self, position=InfoBarPosition.TOP,
-                              duration=10000)
+                TOAST.toast_err(self, "源码更新未完成", msg, duration=10000)
             # 源码更新与安装包更新互不冲突，继续走安装包检查
             self._start_package_update()
 
@@ -787,9 +738,7 @@ class WelcomeWindow(QWidget):
         self.upd_pct_lbl.setText("100%")
         gen = self._upd_gen
         QTimer.singleShot(1500, lambda: self._hide_upd_bar(gen))
-        InfoBar.success("新版已下载", "退出后自动安装\n%s" % path,
-                        parent=self, position=InfoBarPosition.TOP,
-                        duration=8000)
+        TOAST.toast_ok(self, "新版已下载", "退出后自动安装\n%s" % path, duration=8000)
 
     # ---------------- 增量包就绪（v3.5.3 单跳 / v3.5.8 链式） ----------------
     def _on_upd_patch_ready(self, path, to_ver, hops=None):
@@ -809,13 +758,11 @@ class WelcomeWindow(QWidget):
             size = _UC.human_size(os.path.getsize(path))
         except OSError:
             size = "?"
-        InfoBar.success("增量包已下载",
-                        "更新到 v%s（%s%s），重启应用即生效\n"
+        TOAST.toast_ok(self, "增量包已下载", "更新到 v%s（%s%s），重启应用即生效\n"
                         "点右下角更新按钮可随时重启应用更新"
                         % (to_ver or "?", size,
                            "，%d 个包" % n if n > 1 else ""),
-                        parent=self, position=InfoBarPosition.TOP,
-                        duration=8000)
+                 duration=8000)
         st = hops or _UC.pending_patch() or []
         self._ask_apply_patch(st, to_ver, size)
 
@@ -830,11 +777,9 @@ class WelcomeWindow(QWidget):
                 total = 0
                 ok = False
                 for h in hops:
-                    try:
+                    with contextlib.suppress(OSError):
                         total += os.path.getsize(h.get("zip") or "")
                         ok = True
-                    except OSError:
-                        pass
                 size = _UC.human_size(total) if ok else "?"
         else:
             to_ver = to_ver or "?"
@@ -859,8 +804,7 @@ class WelcomeWindow(QWidget):
                 "是否现在重启应用？" % (to_ver, size, n_files))
         box.yesButton.setText("立即重启更新")
         box.cancelButton.setText("稍后（退出时自动更新）")
-        if box.exec():
-            self._restart_to_apply()
+        if box.exec(): self._restart_to_apply()
         else:
             self.update_lbl.setText("增量包已下载，退出时自动更新")
             self.btn_update.setToolTip("检查更新")
@@ -869,10 +813,7 @@ class WelcomeWindow(QWidget):
         """拉起退出后覆盖的脚本并关闭应用（脚本会在覆盖完成后自动重启程序）。"""
         if not _UC.launch_patch(_V2):
             # 脚本没起来：保留待应用状态，退出时 _run_pending_update 会再试一次
-            InfoBar.warning("重启更新未完成",
-                            "覆盖脚本拉起失败，退出程序时会再试一次",
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=8000)
+            TOAST.toast_warn(self, "重启更新未完成", "覆盖脚本拉起失败，退出程序时会再试一次", duration=8000)
             return
         # 已交给脚本：清掉待应用状态，免得退出钩子重复拉起第二个脚本
         _UC.clear_pending_patch()
@@ -885,8 +826,7 @@ class WelcomeWindow(QWidget):
         self._hide_upd_bar()
         self.update_lbl.setText("")
         self.btn_update.setToolTip("检查更新")
-        InfoBar.warning("检查更新", msg, parent=self,
-                        position=InfoBarPosition.TOP, duration=5000)
+        TOAST.toast_warn(self, "检查更新", msg, duration=5000)
 
     def _reset_upd_bar(self):
         """新一轮检查开始：进度条清零隐藏，旧 ready 的延迟隐藏定时器作废。"""

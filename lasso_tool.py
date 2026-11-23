@@ -35,8 +35,7 @@ def polygon_mask(points, w, h):
     points: [(x, y), ...] 图像坐标；w/h: 掩码尺寸
     返回 None 表示参数无效（点数不足 / 无 cv2）。
     """
-    if cv2 is None or not points or len(points) < 3 or w <= 0 or h <= 0:
-        return None
+    if cv2 is None or not points or len(points) < 3 or w <= 0 or h <= 0: return None
     pts = np.array([[int(round(x)), int(round(y))] for x, y in points], np.int32)
     mask = np.zeros((h, w), np.uint8)
     cv2.fillPoly(mask, [pts], 255)
@@ -51,8 +50,7 @@ def expand_curve_points(points, samples=14):
     填出的选区边界就是光滑曲线。控制点 <= 2 时原样返回（无法成曲线）。
     """
     n = len(points)
-    if n < 3:
-        return list(points)
+    if n < 3: return list(points)
     arr = np.array([[float(x), float(y)] for x, y in points], np.float64)
     out = []
     for i in range(n):
@@ -81,8 +79,7 @@ def selection_points(sel):
     用的是同一份边界（曾出现预览是曲线、掩码还是折线的不一致）。
     """
     pts = sel.get("points") or []
-    if sel.get("curve"):
-        return expand_curve_points(pts)
+    if sel.get("curve"): return expand_curve_points(pts)
     return pts
 
 
@@ -95,17 +92,13 @@ def combine_masks(add_masks, sub_masks, w, h, feather=0, invert=False):
             选区边界之外全部选中。羽化在反选**之后**做，边缘才自然。
     返回 uint8 掩码（0..255，软边时中间值）。
     """
-    if not add_masks:
-        return None
+    if not add_masks: return None
     acc = np.zeros((h, w), np.uint8)
     for m in add_masks:
-        if m is not None:
-            acc = np.maximum(acc, m)
+        if m is not None: acc = np.maximum(acc, m)
     for m in sub_masks or []:
-        if m is not None:
-            acc = cv2.subtract(acc, m)
-    if invert:
-        acc = invert_mask(acc)
+        if m is not None: acc = cv2.subtract(acc, m)
+    if invert: acc = invert_mask(acc)
     if feather and feather > 0 and cv2 is not None:
         k = int(feather) * 2 + 1
         acc = cv2.GaussianBlur(acc, (k, k), feather)
@@ -115,8 +108,7 @@ def combine_masks(add_masks, sub_masks, w, h, feather=0, invert=False):
 def invert_mask(mask):
     """掩码取反（0<->255），用于"减去选区"（PS 的剪切语义：
     保留选区**外**的内容，移除选区内的）。"""
-    if mask is None:
-        return None
+    if mask is None: return None
     return (255 - mask).astype(np.uint8)
 
 
@@ -130,20 +122,15 @@ def clip_layer_by_mask(layer, mask, origin=(0, 0), invert=False):
     - 不修改入参 layer（返回新 dict）
     """
     img = layer.get("img")
-    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4:
-        return None
+    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4: return None
     bbox = layer.get("bbox")
-    if not bbox:
-        return None
+    if not bbox: return None
     x0, y0, x1, y1 = [int(v) for v in bbox]
     h, w = img.shape[:2]
-    if mask.shape[:2] != (h, w):
-        return None
-    if invert:
-        mask = invert_mask(mask)
+    if mask.shape[:2] != (h, w): return None
+    if invert: mask = invert_mask(mask)
     keep = mask > 0
-    if not keep.any():
-        return None                                  # 选区与图层无交集
+    if not keep.any(): return None                                  # 选区与图层无交集
     ys, xs = np.nonzero(keep)
     nx0, ny0 = int(xs.min()), int(ys.min())
     nx1, ny1 = int(xs.max()) + 1, int(ys.max()) + 1
@@ -162,19 +149,15 @@ def clip_layer_by_mask(layer, mask, origin=(0, 0), invert=False):
 def clip_layer_by_polygon(layer, points, feather=0):
     """L1 兼容入口：单多边形裁剪（feather=0 时与原实现一致）。"""
     img = layer.get("img")
-    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4:
-        return None
+    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4: return None
     bbox = layer.get("bbox")
-    if not bbox:
-        return None
+    if not bbox: return None
     x0, y0, x1, y1 = [int(v) for v in bbox]
     h, w = img.shape[:2]
     local = [(px - x0, py - y0) for px, py in points]
     mask = polygon_mask(local, w, h)
-    if mask is None:
-        return None
-    if feather and feather > 0:
-        mask = combine_masks([mask], [], w, h, feather)
+    if mask is None: return None
+    if feather and feather > 0: mask = combine_masks([mask], [], w, h, feather)
     return clip_layer_by_mask(layer, mask)
 
 
@@ -189,11 +172,9 @@ def extract_selection(layer, selections, feather=0, invert=False):
     invert=True 时取选区之外的内容（配合"反选"）。
     """
     img = layer.get("img")
-    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4:
-        return None
+    if img is None or getattr(img, "ndim", 0) != 3 or img.shape[2] < 4: return None
     bbox = layer.get("bbox")
-    if not bbox:
-        return None
+    if not bbox: return None
     x0, y0, x1, y1 = [int(v) for v in bbox]
     h, w = img.shape[:2]
     add_masks, sub_masks = [], []
@@ -202,23 +183,19 @@ def extract_selection(layer, selections, feather=0, invert=False):
         op = sel.get("op", "add")
         local = [(px - x0, py - y0) for px, py in pts]
         m = polygon_mask(local, w, h)
-        if m is None:
-            continue
+        if m is None: continue
         (sub_masks if op == "sub" else add_masks).append(m)
     mask = combine_masks(add_masks, sub_masks, w, h, feather=feather, invert=invert)
-    if mask is None:
-        return None
+    if mask is None: return None
     keep = mask > 0
-    if not keep.any():
-        return None
+    if not keep.any(): return None
     ys, xs = np.nonzero(keep)
     nx0, ny0 = int(xs.min()), int(ys.min())
     nx1, ny1 = int(xs.max()) + 1, int(ys.max()) + 1
     sub = img[ny0:ny1, nx0:nx1].copy()
     m2 = mask[ny0:ny1, nx0:nx1]
     sub[:, :, 3] = ((sub[:, :, 3].astype(np.uint16) * m2.astype(np.uint16)) // 255).astype(np.uint8)
-    if not (sub[:, :, 3] > 0).any():
-        return None
+    if not (sub[:, :, 3] > 0).any(): return None
     return np.ascontiguousarray(sub), x0 + nx0, y0 + ny0
 
 
@@ -239,25 +216,19 @@ def inpaint_holes(img_rgba, radius=3, method="telea", holes=None):
     alpha 分开，inpaint 只填 RGB，alpha 直接置 255（洞边界自然过渡可不管，
     调用方会先做闭运算决定洞范围）。
     """
-    if cv2 is None:
-        return np.array(img_rgba, copy=True)
+    if cv2 is None: return np.array(img_rgba, copy=True)
     arr = np.asarray(img_rgba)
-    if arr.ndim != 3 or arr.shape[2] != 4:
-        return np.array(img_rgba, copy=True)
-    if arr.dtype != np.uint8:
-        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    if arr.ndim != 3 or arr.shape[2] != 4: return np.array(img_rgba, copy=True)
+    if arr.dtype != np.uint8: arr = np.clip(arr, 0, 255).astype(np.uint8)
     out = arr.copy()
-    if holes is None:
-        hole = arr[:, :, 3] == 0
+    if holes is None: hole = arr[:, :, 3] == 0
     else:
         hm = np.asarray(holes)
         if hm.ndim != 2 or hm.shape != arr.shape[:2]:
             return out                      # 掩码尺寸不符：原样返回副本
-        if hm.dtype != np.uint8:
-            hm = np.clip(hm, 0, 255).astype(np.uint8)
+        if hm.dtype != np.uint8: hm = np.clip(hm, 0, 255).astype(np.uint8)
         hole = hm > 0
-    if not hole.any():
-        return out
+    if not hole.any(): return out
     h, w = arr.shape[:2]
     n = int(hole.sum())
     if n >= h * w or n < 4:

@@ -14,6 +14,7 @@
 """
 import os
 import sys
+import contextlib
 
 # 1MB 阈值（exe 完整性判定）
 _EXE_MIN = 1024 * 1024
@@ -266,14 +267,11 @@ def runtime_root(base_dir):
     再回退 sys.executable 自身所在（开发机直跑场景）。"""
     try:
         r = os.environ.get("MUPPET_RUNTIME_ROOT", "").strip()
-        if r and os.path.isdir(r):
-            return r
+        if r and os.path.isdir(r): return r
         cand = os.path.join(base_dir or "", "runtime")
-        if os.path.isdir(os.path.join(cand, "Lib", "site-packages")):
-            return cand
+        if os.path.isdir(os.path.join(cand, "Lib", "site-packages")): return cand
         exe = os.path.dirname(sys.executable)
-        if os.path.isdir(os.path.join(exe, "Lib", "site-packages")):
-            return exe
+        if os.path.isdir(os.path.join(exe, "Lib", "site-packages")): return exe
         return cand
     except Exception:
         return ""
@@ -288,13 +286,10 @@ def parts_target_dir(asset, base_dir):
     """
     try:
         t = (asset.get("target") or "site-packages").strip()
-        if t == "dest":
-            return installed_path(asset, base_dir)
+        if t == "dest": return installed_path(asset, base_dir)
         rr = runtime_root(base_dir)
-        if not rr:
-            return ""
-        if t == "site-packages":
-            return os.path.join(rr, "Lib", "site-packages")
+        if not rr: return ""
+        if t == "site-packages": return os.path.join(rr, "Lib", "site-packages")
         return os.path.join(rr, _norm(t))
     except Exception:
         return ""
@@ -306,8 +301,7 @@ def _parts_installed(asset, base_dir):
         dm = asset.get("done_marker") or {}
         d = os.path.join(parts_target_dir(asset, base_dir),
                          _norm(dm.get("dir", "")))
-        if not os.path.isdir(d):
-            return False
+        if not os.path.isdir(d): return False
         pref = dm.get("prefix", "")
         return any(f.startswith(pref) for f in os.listdir(d))
     except Exception:
@@ -317,8 +311,7 @@ def _parts_installed(asset, base_dir):
 def installed_path(asset, base_dir):
     """资产装好后应处的目录/文件路径：os.path.join(base_dir, dest)。"""
     try:
-        if not isinstance(asset, dict) or not base_dir:
-            return ""
+        if not isinstance(asset, dict) or not base_dir: return ""
         return os.path.join(base_dir, _norm(asset.get("dest", "")))
     except Exception:
         return ""
@@ -329,8 +322,7 @@ def _check_path(asset, base_dir):
     try:
         chk = asset.get("check") or {}
         ctype = chk.get("type")
-        if ctype == "exe":
-            return os.path.join(base_dir, _norm(chk.get("path", "")))
+        if ctype == "exe": return os.path.join(base_dir, _norm(chk.get("path", "")))
         # files：marker 相对 dest
         return os.path.join(base_dir, _norm(asset.get("dest", "")),
                             _norm(chk.get("marker", "")))
@@ -341,8 +333,7 @@ def _check_path(asset, base_dir):
 def is_installed(asset, base_dir):
     """是否已下载完整（bool）。任何异常都返回 False。"""
     try:
-        if not isinstance(asset, dict) or not base_dir:
-            return False
+        if not isinstance(asset, dict) or not base_dir: return False
         # parts/wheel 两种模式共用 done_marker 纯文件探测
         # （parts=CUDA 分卷，wheel=python_pack 单包；都是解压进 site-packages）
         if asset.get("mode") in ("parts", "wheel"):
@@ -350,13 +341,10 @@ def is_installed(asset, base_dir):
         chk = asset.get("check") or {}
         ctype = chk.get("type")
         p = _check_path(asset, base_dir)
-        if not p or not os.path.isfile(p):
-            return False
+        if not p or not os.path.isfile(p): return False
         n = os.path.getsize(p)
-        if ctype == "exe":
-            return n > _EXE_MIN
-        if ctype == "files":
-            return n >= int(chk.get("min_bytes", 0))
+        if ctype == "exe": return n > _EXE_MIN
+        if ctype == "files": return n >= int(chk.get("min_bytes", 0))
         return False
     except Exception:
         return False
@@ -365,11 +353,9 @@ def is_installed(asset, base_dir):
 def installed_size(asset, base_dir):
     """已占用字节数（int）。未装 / 异常返回 0。"""
     try:
-        if not isinstance(asset, dict) or not base_dir:
-            return 0
+        if not isinstance(asset, dict) or not base_dir: return 0
         if asset.get("mode") in ("parts", "wheel"):
-            if not _parts_installed(asset, base_dir):
-                return 0
+            if not _parts_installed(asset, base_dir): return 0
             # 统计标志目录（避免 site-packages 全量 walk 太慢）：
             # parts=CUDA -> torch\；wheel=WebEngine -> PySide6\
             d = os.path.join(parts_target_dir(asset, base_dir),
@@ -378,13 +364,10 @@ def installed_size(asset, base_dir):
             total = 0
             for root, _dirs, files in os.walk(d):
                 for f in files:
-                    try:
+                    with contextlib.suppress(Exception):
                         total += os.path.getsize(os.path.join(root, f))
-                    except Exception:
-                        pass
             return total
-        if not is_installed(asset, base_dir):
-            return 0
+        if not is_installed(asset, base_dir): return 0
         chk = asset.get("check") or {}
         if chk.get("type") == "exe":
             p = _check_path(asset, base_dir)
@@ -394,10 +377,7 @@ def installed_size(asset, base_dir):
         total = 0
         for root, _dirs, files in os.walk(d):
             for f in files:
-                try:
-                    total += os.path.getsize(os.path.join(root, f))
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception): total += os.path.getsize(os.path.join(root, f))
         return total
     except Exception:
         return 0
@@ -415,8 +395,7 @@ def asset_by_id(aid):
     """按 id 查资产；找不到返回 None。"""
     try:
         for a in ASSETS:
-            if a.get("id") == aid:
-                return a
+            if a.get("id") == aid: return a
     except Exception:
         return None
     return None
@@ -431,8 +410,7 @@ def asset_urls(asset):
     返回空列表表示未配置。
     """
     try:
-        if not isinstance(asset, dict):
-            return []
+        if not isinstance(asset, dict): return []
         files = asset.get("files") or []
         repo = asset.get("repo") or ""
         if files and repo:
@@ -448,8 +426,7 @@ def asset_urls(asset):
             out = []
             for i, p in enumerate(parts):
                 u = (p.get("url") or "").strip()
-                if u:
-                    out.append(("part%02d" % (i + 1), [u, GH_MIRROR + u]))
+                if u: out.append(("part%02d" % (i + 1), [u, GH_MIRROR + u]))
             return out
         url = (asset.get("url") or "").strip()
         if url:
@@ -460,11 +437,9 @@ def asset_urls(asset):
             # 顺序：官方直连在前、镜像兜底在后；未声明 mirrors 的资产行为不变。
             for m in (asset.get("mirrors") or []):
                 m = str(m or "").strip()
-                if not m:
-                    continue
+                if not m: continue
                 cand = m + url if m.endswith("/") else m
-                if cand not in urls:
-                    urls.append(cand)
+                if cand not in urls: urls.append(cand)
             return [("", urls)]
         return []
     except Exception:
@@ -478,17 +453,14 @@ def asset_files_missing(asset, base_dir):
     """
     try:
         files = asset.get("files") or []
-        if not files:
-            return [], []
+        if not files: return [], []
         root = installed_path(asset, base_dir)
         present, missing = [], []
         for f in files:
             p = os.path.join(root, _norm(f))
             try:
-                if os.path.isfile(p) and os.path.getsize(p) > 0:
-                    present.append(f)
-                else:
-                    missing.append(f)
+                if os.path.isfile(p) and os.path.getsize(p) > 0: present.append(f)
+                else: missing.append(f)
             except Exception:
                 missing.append(f)
         return present, missing

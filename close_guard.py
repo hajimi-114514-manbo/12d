@@ -27,10 +27,8 @@ def handle_choice(which, do_save):
              返回 True 才算保存成功，异常按失败处理。
     返回 "save_exit" / "exit" / "cancel"。
     """
-    if which == "exit":
-        return EXIT
-    if which == "cancel":
-        return CANCEL
+    if which == "exit": return EXIT
+    if which == "cancel": return CANCEL
     # save
     try:
         ok = bool(do_save())
@@ -81,10 +79,8 @@ class UnsavedCloseDialog(MessageBoxBase):
         深色 = 原配色（#b3261e 底/#d33a31 hover，暗底上不刺眼）；
         浅色 = 压深一档（#a01d16 底/#b33028 hover，白底上对比更清晰）。"""
         try:
-            if TH.is_light():
-                base, hover = "#a01d16", "#b33028"
-            else:
-                base, hover = "#b3261e", "#d33a31"
+            if TH.is_light(): base, hover = "#a01d16", "#b33028"
+            else: base, hover = "#b3261e", "#d33a31"
             self.btn_exit.setStyleSheet(
                 "#exitButton{background:%s;color:#ffffff;"
                 "border-radius:6px;}"
@@ -118,8 +114,7 @@ def decide(parent, dirty_check, do_save):
         dirty = bool(dirty_check())
     except Exception:
         dirty = False
-    if not dirty:
-        return EXIT
+    if not dirty: return EXIT
     dlg = UnsavedCloseDialog(parent)
     dlg.exec()
     return handle_choice(dlg.choice, do_save)

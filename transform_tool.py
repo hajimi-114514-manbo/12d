@@ -66,11 +66,9 @@ def hit(st, x, y, thr):
     """命中测试 -> ("handle", name) / ("move", None) / ("rotate", None) / None
     thr：图像坐标下的命中半径（调用方按缩放换算成 widget 像素）"""
     for name, hx, hy in handle_points(st):
-        if (hx - x) ** 2 + (hy - y) ** 2 <= thr * thr:
-            return ("handle", name)
+        if (hx - x) ** 2 + (hy - y) ** 2 <= thr * thr: return ("handle", name)
     lx, ly = to_local(st, x, y)
-    if abs(lx) <= st["hw"] and abs(ly) <= st["hh"]:
-        return ("move", None)
+    if abs(lx) <= st["hw"] and abs(ly) <= st["hh"]: return ("move", None)
     # 框外一点 = 旋转（PS 自由变换：鼠标移到框角外侧出现弧形箭头）
     if abs(lx) <= st["hw"] * 1.35 and abs(ly) <= st["hh"] * 1.35:
         return ("rotate", None)
@@ -130,12 +128,10 @@ def warp_state(orig_img, orig_bbox, st):
     源 = 原 bbox 的矩形，目标 = 状态四角（平行四边形），三点定仿射。
     输出画布取目标四角的外接矩形（留 1px 余量），warp 后按 alpha 收紧。
     """
-    if cv2 is None or orig_img is None or orig_img.ndim != 3:
-        return None
+    if cv2 is None or orig_img is None or orig_img.ndim != 3: return None
     x0, y0, x1, y1 = [int(v) for v in orig_bbox]
     w, h = x1 - x0, y1 - y0
-    if w <= 0 or h <= 0 or st["hw"] < 1.0 or st["hh"] < 1.0:
-        return None
+    if w <= 0 or h <= 0 or st["hw"] < 1.0 or st["hh"] < 1.0: return None
     pts = corners(st)
     src = np.float32([[0, 0], [w, 0], [w, h]])
     dst = np.float32([pts[0], pts[1], pts[2]])
@@ -155,8 +151,7 @@ def warp_state(orig_img, orig_bbox, st):
                          borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
     a = out[:, :, 3]
     ys, xs = np.nonzero(a > 0)
-    if len(xs) == 0:
-        return None
+    if len(xs) == 0: return None
     nx0, ny0 = int(xs.min()), int(ys.min())
     nx1, ny1 = int(xs.max()) + 1, int(ys.max()) + 1
     sub = np.ascontiguousarray(out[ny0:ny1, nx0:nx1])
@@ -186,8 +181,7 @@ def mesh_init(st, n=None):
 
 
 def _mesh_n(st, n):
-    if n is not None:
-        return int(n)
+    if n is not None: return int(n)
     return int(st.get("mesh_n") or GRID_N)
 
 
@@ -201,8 +195,7 @@ def _local_off(st, is_, js, n):
     """网格点 (is,js) 的局部偏移（用户拖动量）"""
     mesh = st.get("mesh") or []
     k = js * (n + 1) + is_
-    if 0 <= k < len(mesh):
-        return float(mesh[k][0]), float(mesh[k][1])
+    if 0 <= k < len(mesh): return float(mesh[k][0]), float(mesh[k][1])
     return 0.0, 0.0
 
 
@@ -264,20 +257,17 @@ def warp_mesh(orig_img, orig_bbox, st, n=None):
     （即 0..w-1, 0..h-1），不能混入世界/画布偏移 ox,oy；ox,oy 只用于
     决定输出画布尺寸和最后把 bbox 还原成图像坐标。
     """
-    if cv2 is None or orig_img is None or orig_img.ndim != 3:
-        return None
+    if cv2 is None or orig_img is None or orig_img.ndim != 3: return None
     n = _mesh_n(st, n)
     st = mesh_init(st, n)
     x0, y0, x1, y1 = [int(v) for v in orig_bbox]
     w, h = x1 - x0, y1 - y0
-    if w <= 0 or h <= 0 or st["hw"] < 1.0 or st["hh"] < 1.0:
-        return None
+    if w <= 0 or h <= 0 or st["hw"] < 1.0 or st["hh"] < 1.0: return None
     dst_world = np.array(mesh_points(st, n), np.float64)    # 变形后世界坐标
     ox, oy = int(math.floor(dst_world[:, 0].min())), int(math.floor(dst_world[:, 1].min()))
     ow = max(1, int(math.ceil(dst_world[:, 0].max())) - ox)
     oh = max(1, int(math.ceil(dst_world[:, 1].max())) - oy)
-    if ow * oh > 80_000_000:
-        return None
+    if ow * oh > 80_000_000: return None
     dst = dst_world - np.array([ox, oy], np.float64)        # 输出画布局部坐标
     # 源图里每个网格点的位置（源图 = orig_img，0..w-1 / 0..h-1）
     src = np.array([[w * a / float(n), h * b / float(n)]
@@ -294,16 +284,14 @@ def warp_mesh(orig_img, orig_bbox, st, n=None):
             d10 = dst[idx(is_ + 1, js)]
             d11 = dst[idx(is_ + 1, js + 1)]
             d01 = dst[idx(is_, js + 1)]
-            if not (np.isfinite([d00, d10, d11, d01]).all()):
-                continue
+            if not (np.isfinite([d00, d10, d11, d01]).all()): continue
             xs_ = (d00[0], d10[0], d11[0], d01[0])
             ys_ = (d00[1], d10[1], d11[1], d01[1])
             bx0 = max(0, int(math.floor(min(xs_))))
             bx1 = min(ow, int(math.ceil(max(xs_))) + 1)
             by0 = max(0, int(math.floor(min(ys_))))
             by1 = min(oh, int(math.ceil(max(ys_))) + 1)
-            if bx1 <= bx0 or by1 <= by0:
-                continue
+            if bx1 <= bx0 or by1 <= by0: continue
             # 每块拆两个三角形，各自仿射（输出局部坐标 -> 源图坐标）
             for tri in ((0, 1, 2), (0, 2, 3)):
                 dsel = np.float32([d00, d10, d11, d01])[list(tri)]
@@ -316,8 +304,7 @@ def warp_mesh(orig_img, orig_bbox, st, n=None):
                 subpx = px[by0:by1, bx0:bx1]
                 subpy = py[by0:by1, bx0:bx1]
                 inside = _in_tri(subpx, subpy, dsel[0], dsel[1], dsel[2])
-                if not inside.any():
-                    continue
+                if not inside.any(): continue
                 sx = M[0, 0] * subpx + M[0, 1] * subpy + M[0, 2]
                 sy = M[1, 0] * subpx + M[1, 1] * subpy + M[1, 2]
                 mx = map_x[by0:by1, bx0:bx1]
@@ -328,8 +315,7 @@ def warp_mesh(orig_img, orig_bbox, st, n=None):
                     borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
     a = out[:, :, 3]
     ys2, xs2 = np.nonzero(a > 0)
-    if len(xs2) == 0:
-        return None
+    if len(xs2) == 0: return None
     nx0, ny0 = int(xs2.min()), int(ys2.min())
     nx1, ny1 = int(xs2.max()) + 1, int(ys2.max()) + 1
     sub = np.ascontiguousarray(out[ny0:ny1, nx0:nx1])

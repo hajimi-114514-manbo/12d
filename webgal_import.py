@@ -52,6 +52,7 @@ import json
 import os
 import re
 import sys
+import contextlib
 
 # 命令白名单：含冒号行中，head 命中这些才算命令，否则按台词。
 _COMMANDS = frozenset((
@@ -100,33 +101,27 @@ _AUD_EXT = (".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac")
 
 def _kind_of(path):
     low = str(path or "").lower()
-    if low.endswith(_VID_EXT):
-        return "video"
-    if low.endswith(_AUD_EXT):
-        return "audio"
+    if low.endswith(_VID_EXT): return "video"
+    if low.endswith(_AUD_EXT): return "audio"
     return "image"
 
 
 def _resolve(game_dir, rel):
     """资源路径：绝对路径原样，相对路径按 game_dir 解析成绝对路径。"""
     p = str(rel or "").strip()
-    if not p:
-        return p
-    if os.path.isabs(p):
-        return os.path.normpath(p)
+    if not p: return p
+    if os.path.isabs(p): return os.path.normpath(p)
     return os.path.normpath(os.path.join(str(game_dir or ""), p))
 
 
 def _probe(path, kind):
     """探测素材尺寸/时长；video_source 不可用或失败 -> 0 兜底，不抛。"""
-    try:
+    with contextlib.suppress(Exception):
         import video_source as VS
         src = VS.probe_source(path)
         if isinstance(src, dict) and src.get("path"):
             src["kind"] = kind
             return src
-    except Exception:
-        pass
     return {"kind": kind, "path": str(path), "w": 0, "h": 0,
             "fps": 0.0, "src_dur": 0.0}
 
@@ -167,8 +162,7 @@ def asset_index_path():
         here = os.path.dirname(os.path.abspath(__file__))
         if env:
             p = os.path.normpath(env)
-            if os.path.isdir(p):
-                p = os.path.join(p, "asset_index.json")
+            if os.path.isdir(p): p = os.path.join(p, "asset_index.json")
             return p
         return os.path.normpath(os.path.join(
             here, "..", "webgal_games", "asset_library", "asset_index.json"))
@@ -191,8 +185,7 @@ def load_asset_index():
     try:
         with open(p, "r", encoding="utf-8") as f:
             items = json.load(f)
-        if not isinstance(items, list):
-            raise ValueError("asset_index.json 顶层不是列表")
+        if not isinstance(items, list): raise ValueError("asset_index.json 顶层不是列表")
     except Exception as e:
         return False, "素材索引读取失败: %s: %s" % (type(e).__name__,
                                                    str(e)[:120]), None
@@ -219,12 +212,10 @@ def _lib_maps(items):
     """构建/取用三档匹配索引 {exact:{k:e}, ci:{k:e}, san:{k:e}}。
     键 = 条目 name 与 file/file_rel 的无扩展名 basename；同键先到先得。"""
     c = _LIB_CACHE
-    if c.get("maps") is not None:
-        return c["maps"]
+    if c.get("maps") is not None: return c["maps"]
     exact, ci, san = {}, {}, {}
     for e in items:
-        if not isinstance(e, dict):
-            continue
+        if not isinstance(e, dict): continue
         keys = [str(e.get("name") or "")]
         for fld in ("file", "file_rel"):
             v = str(e.get(fld) or "")
@@ -233,13 +224,11 @@ def _lib_maps(items):
                     os.path.basename(v.replace("\\", "/")))[0])
         for k in keys:
             k = k.strip()
-            if not k:
-                continue
+            if not k: continue
             exact.setdefault(k, e)
             ci.setdefault(k.lower(), e)
             s = _lib_sanitize(k)
-            if s:
-                san.setdefault(s, e)
+            if s: san.setdefault(s, e)
     maps = {"exact": exact, "ci": ci, "san": san}
     c["maps"] = maps
     return maps
@@ -257,35 +246,29 @@ def _lib_lookup(rel):
     导出的工程时回退才能命中 model 条目。"""
     norm = str(rel or "").replace("\\", "/").rstrip("/")
     ok, _msg, items = load_asset_index()
-    if not ok or not items:
-        return None
+    if not ok or not items: return None
     # ---- 第 0 档：全路径比对 file / file_rel ----
     cand = norm[5:] if norm.lower().startswith("game/") else norm
-    if cand.lower().endswith("/model.json"):
-        cand = cand[: -len("/model.json")]
+    if cand.lower().endswith("/model.json"): cand = cand[: -len("/model.json")]
     cand_ci = cand.lower()
     for e in items:
         for f in (e.get("file"), e.get("file_rel")):
-            if f and str(f).replace("\\", "/").rstrip("/").lower() == cand_ci:
-                return e
+            if f and str(f).replace("\\", "/").rstrip("/").lower() == cand_ci: return e
     key = os.path.basename(norm)
     stem = os.path.splitext(key)[0]
     keys = [stem, key]
     if stem.lower() == "model":
         parent = os.path.basename(os.path.dirname(norm))
-        if parent:
-            keys = [parent, os.path.splitext(parent)[0]] + keys
+        if parent: keys = [parent, os.path.splitext(parent)[0]] + keys
     maps = _lib_maps(items)
     for tier in (maps["exact"], maps["ci"], maps["san"]):
         for k in keys:
-            if not k:
-                continue
+            if not k: continue
             k2 = (k if tier is maps["exact"]
                   else k.lower() if tier is maps["ci"] else _lib_sanitize(k))
             if k2:
                 e = tier.get(k2)
-                if e is not None:
-                    return e
+                if e is not None: return e
     return None
 
 
@@ -305,11 +288,9 @@ def _resolve_asset(game_dir, rel):
     <asset_library>/<file>；model -> dirname(orig)）；库路径也不存在 ->
     维持 game_dir 解析结果（现行为，交给下游警告/占位处理）。"""
     p = _resolve(game_dir, rel)
-    if p and os.path.exists(p):
-        return p, None
+    if p and os.path.exists(p): return p, None
     e = _lib_lookup(rel)
-    if e is None:
-        return p, None
+    if e is None: return p, None
     kind = str(e.get("kind") or "")
     if kind == "model":
         orig = str(e.get("orig") or "")
@@ -318,8 +299,7 @@ def _resolve_asset(game_dir, rel):
         f = str(e.get("file") or "")
         cand = os.path.normpath(os.path.join(_lib_root(), f.replace("/", os.sep))) \
             if f else ""
-    if cand and os.path.exists(cand):
-        return cand, e
+    if cand and os.path.exists(cand): return cand, e
     return p, None
 
 
@@ -334,33 +314,27 @@ def assets_query(kind=None, tags=None, limit=30):
               motions/expressions 前 8 键名。
     索引缺失/损坏 -> (False, 原因, None)。"""
     ok, msg, items = load_asset_index()
-    if not ok:
-        return False, msg, None
+    if not ok: return False, msg, None
     kind = str(kind).strip() if kind not in (None, "") else None
-    if isinstance(tags, str):
-        tags = [tags]
+    if isinstance(tags, str): tags = [tags]
     want_tags = None
     if tags:
         try:
             want_tags = [str(t).strip().lower() for t in tags if str(t).strip()]
         except TypeError:
             return False, "tags 必须是字符串或字符串列表", None
-        if not want_tags:
-            want_tags = None
+        if not want_tags: want_tags = None
     try:
         limit = 30 if limit is None else int(limit)
     except (TypeError, ValueError):
         return False, "limit 必须是整数", None
     out = []
     for e in items:
-        if not isinstance(e, dict):
-            continue
-        if kind is not None and e.get("kind") != kind:
-            continue
+        if not isinstance(e, dict): continue
+        if kind is not None and e.get("kind") != kind: continue
         if want_tags is not None:
             low = {str(t).lower() for t in (e.get("tags") or [])}
-            if not all(t in low for t in want_tags):
-                continue
+            if not all(t in low for t in want_tags): continue
         meta_full = e.get("meta") or {}
         if e.get("kind") == "model":
             meta = {"motions": (meta_full.get("motions") or [])[:8],
@@ -377,8 +351,7 @@ def assets_query(kind=None, tags=None, limit=30):
                     "file": e.get("file") or "", "meta": meta}
         out.append(item)
     total = len(out)
-    if limit > 0:
-        out = out[:limit]
+    if limit > 0: out = out[:limit]
     return True, "", {"total": total, "items": out}
 
 
@@ -436,16 +409,12 @@ def _parse_literal(v):
     导出端写的默认值形态：`"stay"`（带引号字符串）/ `0` / `1.5`。
     其它一律按去引号字符串保留（表达式不求值——A4 放弃项）。"""
     s = str(v or "").strip()
-    if not s:
-        return ""
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
-        return s[1:-1]
+    if not s: return ""
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'": return s[1:-1]
     low = s.lower()
-    if low in ("true", "false"):
-        return 1 if low == "true" else 0
+    if low in ("true", "false"): return 1 if low == "true" else 0
     try:
-        if "." in s or "e" in low:
-            return float(s)
+        if "." in s or "e" in low: return float(s)
         return int(s)
     except (TypeError, ValueError):
         return s
@@ -478,8 +447,7 @@ def _strip_say_args(rest):
     # 还原导出端的零宽保护符
     s = s.replace("\u200b", "")
     m = re.search(r" -", s)
-    if not m:
-        return s.strip(), {}
+    if not m: return s.strip(), {}
     body = s[:m.start()]
     argpart = s[m.start():]
     # 逐段判定：只有合法参数形态才剥离；其余并回正文
@@ -487,8 +455,7 @@ def _strip_say_args(rest):
     tail = []
     for seg in argpart.split(" -"):
         seg = seg.strip()
-        if not seg:
-            continue
+        if not seg: continue
         mm = re.match(r"^([A-Za-z_]\w*)(?:=(.*))?$", seg, re.S)
         if mm is None:
             # 不是合法参数 -> 属于正文（引擎会吞字，我们不吞）
@@ -497,27 +464,18 @@ def _strip_say_args(rest):
         k, v = mm.group(1), mm.group(2)
         if v is not None:
             v = v.strip()
-            if v.endswith(";"):
-                v = v[:-1].strip()
-            if len(v) >= 2 and v[0] == '"' and v[-1] == '"':
-                v = v[1:-1]
-            if v.lower() == "true":
-                v = True
-            elif v.lower() == "false":
-                v = False
+            if v.endswith(";"): v = v[:-1].strip()
+            if len(v) >= 2 and v[0] == '"' and v[-1] == '"': v = v[1:-1]
+            if v.lower() == "true": v = True
+            elif v.lower() == "false": v = False
             else:
                 try:
                     v = int(v)
                 except (TypeError, ValueError):
-                    try:
-                        v = float(v)
-                    except (TypeError, ValueError):
-                        pass
-        else:
-            v = True
+                    with contextlib.suppress((TypeError, ValueError)): v = float(v)
+        else: v = True
         args[k] = v
-    if tail:
-        body = body + " - " + " - ".join(tail)
+    if tail: body = body + " - " + " - ".join(tail)
     return body.strip(), args
 
 
@@ -533,12 +491,9 @@ def _escape_say_body(text):
 def _split_line(raw):
     """一行 -> (head, rest, err)。注释/空行/无冒号行分别处理。"""
     line = raw.strip()
-    if not line or line.startswith("//"):
-        return None, None, "skip"
-    if line.endswith(";"):
-        line = line[:-1]
-    if ":" not in line:
-        return None, None, "no-colon"
+    if not line or line.startswith("//"): return None, None, "skip"
+    if line.endswith(";"): line = line[:-1]
+    if ":" not in line: return None, None, "no-colon"
     head, rest = line.split(":", 1)
     return head.strip(), rest.strip(), None
 
@@ -556,16 +511,11 @@ def _comment_text(raw):
     导出器自加的提示注释（含 skin/live2d marker）不回收——它们由导出端
     每次自动前置，收进 comments 会导致往返重复叠加（回环不稳实测根因）。"""
     line = str(raw).strip()
-    if not line:
-        return None
-    if line.startswith("//"):
-        text = line[2:].strip() or None
-    elif line.startswith(";"):
-        text = line.strip(";").strip() or None
-    else:
-        return None
-    if text and any(mk in text for mk in _EXPORT_HINT_MARKS):
-        return None
+    if not line: return None
+    if line.startswith("//"): text = line[2:].strip() or None
+    elif line.startswith(";"): text = line.strip(";").strip() or None
+    else: return None
+    if text and any(mk in text for mk in _EXPORT_HINT_MARKS): return None
     return text
 
 
@@ -581,19 +531,14 @@ def _parse_change_figure(arg):
     fid = None
     transform = None
     toks = str(arg or "").split()
-    if not toks:
-        return path, slot, motion, expression, fid, transform
+    if not toks: return path, slot, motion, expression, fid, transform
     path = toks[0]
     for tk in toks[1:]:
         tk_clean = tk[1:] if tk.startswith("-") else tk
-        if tk_clean in _SLOT_X:
-            slot = tk_clean
-        elif tk.startswith("-motion="):
-            motion = tk[len("-motion="):]
-        elif tk.startswith("-expression="):
-            expression = tk[len("-expression="):]
-        elif tk.startswith("-id="):
-            fid = tk[len("-id="):]
+        if tk_clean in _SLOT_X: slot = tk_clean
+        elif tk.startswith("-motion="): motion = tk[len("-motion="):]
+        elif tk.startswith("-expression="): expression = tk[len("-expression="):]
+        elif tk.startswith("-id="): fid = tk[len("-id="):]
         elif tk.startswith("-transform="):
             try:
                 transform = json.loads(tk[len("-transform="):])
@@ -614,11 +559,9 @@ def _parse_file(arg):
     """
     s = str(arg or "").strip()
     m = re.search(r"\s+-", s)
-    if m:
-        s = s[:m.start()]
+    if m: s = s[:m.start()]
     s = s.strip()
-    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-        s = s[1:-1]
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"': s = s[1:-1]
     return s
 
 
@@ -647,11 +590,9 @@ def _who_of(path):
       空/异常输入                    -> "fig"（兜底单轨，不抛）
     """
     p = str(path or "").replace("\\", "/").rstrip("/")
-    if not p:
-        return "fig"
+    if not p: return "fig"
     segs = [s for s in p.split("/") if s]
-    if not segs:
-        return "fig"
+    if not segs: return "fig"
     last = segs[-1]
     if last.lower() == "model.json" and len(segs) >= 2:
         segs = segs[:-1]
@@ -662,12 +603,10 @@ def _who_of(path):
     if "figure" in low:
         fi = len(low) - 1 - low[::-1].index("figure")
         rest = segs[fi + 1:]
-        if rest:
-            return rest[0]                # <ch>（双层）或 <of>（单层退化）
+        if rest: return rest[0]                # <ch>（双层）或 <of>（单层退化）
     # K1：无 figure 锚点的裸角色引用（导出回环的 "soyo/casual-2023"
     # 形态）——两级以上取倒数第二级为角色，单级取自身。
-    if len(segs) >= 2:
-        return segs[-2]
+    if len(segs) >= 2: return segs[-2]
     return last or "fig"
 
 
@@ -720,8 +659,7 @@ class _Builder:
             if not ok:
                 self.warnings.append("建轨失败 %s: %s" % (name, msg))
                 tid = None
-            else:
-                self._tid[name] = tid
+            else: self._tid[name] = tid
         return tid
 
     def _close(self, tid):
@@ -763,8 +701,7 @@ class _Builder:
         raw = _parse_file(arg)
         if str(raw).strip().lower() in _COLOR_BG_KEYWORDS:
             bt = self._track("BG", "video")
-            if bt is None:
-                return
+            if bt is None: return
             self._close(bt)
             src = {"kind": "image",
                    "path": "color:%s" % str(raw).strip().lower(),
@@ -779,8 +716,7 @@ class _Builder:
             return
         path, k = self._locate(game_dir, raw)
         bt = self._track("BG", "video")
-        if bt is None:
-            return
+        if bt is None: return
         self._close(bt)
         src = _probe(path, k)
         clip = self._new_clip(bt, src, self.t)
@@ -794,16 +730,14 @@ class _Builder:
     def do_change_figure(self, game_dir, arg):
         path, slot, motion, expression, fid, transform = \
             _parse_change_figure(arg)
-        if not path:
-            return
+        if not path: return
         if not str(path).lower().endswith(("none",)):
             # K1（task-69）：按角色（who）分轨——同角色换装/更新关旧开新，
             # 不同角色各占一轨，绝不再互相挤掉（旧版按 basename 分轨，
             # model.json 撞名全员挤一轨 = 互藏 bug 导入侧根因）。
             who = _who_of(path)
             ft = self._track("FIG-%s" % who, "video")
-            if ft is None:
-                return
+            if ft is None: return
             self._close(ft)
             self._fig.pop(who, None)
             p2, k2 = self._locate(game_dir, path)
@@ -813,8 +747,7 @@ class _Builder:
             if not os.path.exists(p2) and not str(path).replace(
                     "\\", "/").startswith("figure/"):
                 alt = _resolve(game_dir, "figure/" + str(path))
-                if os.path.exists(alt):
-                    p2 = alt
+                if os.path.exists(alt): p2 = alt
             # K1（task-69）：model.json 引用 = Cubism2 模型（整合包/H1 形态）
             # ——升级为 puppet 并指向含 model.json 的目录，导出走 Cubism2
             # 分支（角色目录引用天然稳定，杜绝 model.json 裸名撞车丢角色）。
@@ -826,8 +759,7 @@ class _Builder:
                 k2 = "puppet"
             src = _probe(p2, k2)
             clip = self._new_clip(ft, src, self.t)
-            if clip is None:
-                return
+            if clip is None: return
             lay = dict(self.VM.default_layout())
             lay["x"] = _SLOT_X.get(slot, 0.5) if slot else 0.5
             lay["y"] = 0.7
@@ -849,65 +781,52 @@ class _Builder:
                     lay["y"] = max(0.0, min(1.0,
                                             0.5 - float(pos["y"]) / _H))
             clip["layout"] = lay
-            if motion is not None:
-                clip["motion"] = motion
-            if expression is not None:
-                clip["expression"] = expression
+            if motion is not None: clip["motion"] = motion
+            if expression is not None: clip["expression"] = expression
             self._open[ft] = clip
             self._fig[who] = (ft, clip)
-            if fid:
-                self._id_fig[fid] = who
-            if slot in self._slot_fig:
-                self._slot_fig[slot] = who
+            if fid: self._id_fig[fid] = who
+            if slot in self._slot_fig: self._slot_fig[slot] = who
         else:
             # changeFigure:none -槽位 / -id=xxx：显式退场（K1 两种句柄形态）
             who = self._id_fig.get(fid) if fid else None
-            if who is None:
-                who = self._slot_fig.get(slot)
+            if who is None: who = self._slot_fig.get(slot)
             if who and who in self._fig:
                 ft, _c = self._fig.pop(who)
                 self._close(ft)
-                if slot in self._slot_fig:
-                    self._slot_fig[slot] = None
+                if slot in self._slot_fig: self._slot_fig[slot] = None
                 for k in [k for k, v in self._id_fig.items() if v == who]:
                     self._id_fig.pop(k, None)
 
     def do_video(self, game_dir, arg):
         path, k = self._locate(game_dir, _parse_file(arg))
         vt = self._track("VID", "video")
-        if vt is None:
-            return
+        if vt is None: return
         src = _probe(path, k)
         clip = self._new_clip(vt, src, self.t)
-        if clip is not None:
-            clip["dur"] = 5.0
+        if clip is not None: clip["dur"] = 5.0
         self.t += 5.0
 
     def do_bgm(self, game_dir, arg):
         path, k = self._locate(game_dir, _parse_file(arg))
         at = self._track("BGM", "audio")
-        if at is None:
-            return
+        if at is None: return
         self._close(at)
         src = _probe(path, k)
         clip = self._new_clip(at, src, self.t)
-        if clip is not None:
-            self._open[at] = clip
+        if clip is not None: self._open[at] = clip
 
     def do_play_effect(self, game_dir, arg):
         path, k = self._locate(game_dir, _parse_file(arg))
         at = self._track("SFX", "audio")
-        if at is None:
-            return
+        if at is None: return
         src = _probe(path, k)
         clip = self._new_clip(at, src, self.t)
-        if clip is not None:
-            clip["dur"] = 2.0
+        if clip is not None: clip["dur"] = 2.0
 
     def do_intro(self, _game_dir, arg):
         text = str(arg or "").strip()
-        if not text:
-            return
+        if not text: return
         dur = max(2.5, 0.4 * len(text))
         self.proj["dialogue"].append(
             {"t": round(self.t, 3), "dur": round(dur, 3),
@@ -929,8 +848,7 @@ class _Builder:
         parts = _split_unescaped(str(arg or ""), "|")
         for p in parts:
             p = p.strip()
-            if not p:
-                continue
+            if not p: continue
             # 按未转义的 : 切成 文本:目标（只切第一个）
             seg = _split_unescaped(p, ":", maxsplit=1)
             if len(seg) < 2:
@@ -938,8 +856,7 @@ class _Builder:
                 continue
             txt = _unesc_choose(seg[0].strip())
             tgt = seg[1].strip()
-            if txt:
-                opts.append({"text": txt, "target": tgt})
+            if txt: opts.append({"text": txt, "target": tgt})
         if not opts:
             self.warnings.append("choose 无可解析选项，已跳过")
             return
@@ -951,11 +868,9 @@ class _Builder:
 
     def do_choose_prompt(self, text):
         """choose 前一行旁白若是提示语，挂到最近一个选择点上。"""
-        if not self._choices:
-            return False
+        if not self._choices: return False
         t = str(text or "").strip()
-        if not t:
-            return False
+        if not t: return False
         self._choices[-1]["prompt"] = t
         return True
 
@@ -968,15 +883,12 @@ class _Builder:
         name, val = s.split("=", 1)
         name = name.strip()
         val = val.strip()
-        if not name:
-            return
+        if not name: return
         # -global 选项：剥掉（我们统一工程级，无作用域概念）
         for flag in ("-global", "-local"):
-            if val.endswith(flag):
-                val = val[:-len(flag)].strip()
+            if val.endswith(flag): val = val[:-len(flag)].strip()
         for v in self._vars:
-            if v["name"] == name:
-                return                     # 已声明：不覆盖（首声明=默认值）
+            if v["name"] == name: return                     # 已声明：不覆盖（首声明=默认值）
         self._vars.append({"name": name, "default": _parse_literal(val)})
         # 伪幕识别：本文件若只含 setVar + changeScene，则这些 setVar 属于
         # 某个 option.set 副作用 -> 由 _finalize 吸收回 option.set
@@ -991,8 +903,7 @@ class _Builder:
             return
         cond = seg[0].strip()
         tgt = seg[1].strip()
-        if not cond or not tgt:
-            return
+        if not cond or not tgt: return
         self._jumps.append({"t": round(self.t, 3), "when": cond, "target": tgt})
         self._branch_end = True
 
@@ -1030,10 +941,8 @@ class _Builder:
                 self.comments.append({"t": round(self.t, 3), "text": ct})
                 continue
             head, rest, err = _split_line(raw)
-            if err:
-                continue
-            if head is None:
-                continue
+            if err: continue
+            if head is None: continue
             self.stmt_n += 1
             if head in _COMMANDS:
                 fn = {"changeBg": self.do_change_bg,
@@ -1063,10 +972,8 @@ class _Builder:
                             self.effects.append(
                                 {"t": round(self.t, 3), "cmd": cmd})
                         continue
-                    if head in _UNSUPPORTED:
-                        self.warnings.append("跳过不支持的语句: %s" % head)
-                    else:
-                        self.warnings.append("跳过无法识别的命令: %s" % head)
+                    if head in _UNSUPPORTED: self.warnings.append("跳过不支持的语句: %s" % head)
+                    else: self.warnings.append("跳过无法识别的命令: %s" % head)
                     continue
                 try:
                     fn(game_dir, rest)
@@ -1075,26 +982,22 @@ class _Builder:
             else:
                 # 台词行：按引擎规则剥离行尾参数（-fontSize=small 等）
                 self.do_dialogue(head, _strip_say_args(rest)[0])
-        if self.stmt_n == 0:
-            return False, "脚本为空或无可识别语句: %s" % script_path, None
+        if self.stmt_n == 0: return False, "脚本为空或无可识别语句: %s" % script_path, None
 
         # 脚本结束：闭合所有未结束的 clip
         for tid in list(self._open):
             self._close(tid)
 
         # I3（task-67）：注释载体落工程（sanitize 白名单保留，导出转 ;xxx;）
-        if self.comments:
-            self.proj["comments"] = list(self.comments)
+        if self.comments: self.proj["comments"] = list(self.comments)
         # v3.5：画面特效落工程（导出端按 t emit，否则滤镜在往返中丢失）
-        if self.effects:
-            self.proj["effects"] = list(self.effects)
+        if self.effects: self.proj["effects"] = list(self.effects)
 
         # K1（task-69）：同屏人数上限撤销——>3 扫描/警告整体移除。
 
         # 回环校验
         ok, msg = self._finalize()
-        if not ok:
-            return False, msg, None
+        if not ok: return False, msg, None
         # F2-L3：v2 多幕工程里 tracks/dialogue 在 acts[0] 内（顶层不再有），
         # 统计必须走 act_view 投影，否则 KeyError（旧断言炸过）。
         view = self.VM.act_view(self.proj)
@@ -1112,18 +1015,14 @@ class _Builder:
         if self.lib_hits:
             # G4 信息计数（不是警告）：素材库回退让脚本引用的缺失资源落了地
             full += "；素材库回退命中 %d" % self.lib_hits
-        if self.warnings:
-            full += "：" + "；".join(self.warnings)
+        if self.warnings: full += "：" + "；".join(self.warnings)
         # K2（task-73）：素材体检摘要——**纯尾部追加**且仅在有缺失时出现
         # （无缺失 msg 逐字节=现状，前半段格式是回归锚不许动）。体检自身
         # 异常静默，绝不影响导入结果。
-        try:
+        with contextlib.suppress(Exception):
             import asset_audit as _A
             _hint = _A.audit_hint(self.proj, game_dir)
-            if _hint:
-                full += "；" + _hint
-        except Exception:
-            pass
+            if _hint: full += "；" + _hint
         return True, full, self.proj
 
     def _finalize(self):
@@ -1141,8 +1040,7 @@ class _Builder:
             proj = VM.sanitize_project(self.proj)
         except Exception as e:
             return False, "video_model 校验失败: %r" % e
-        if proj is None:
-            return False, "产出工程不合法（sanitize_project 返回 None）"
+        if proj is None: return False, "产出工程不合法（sanitize_project 返回 None）"
         self.proj = proj
         return True, ""
 
@@ -1155,13 +1053,10 @@ class _Builder:
         def _map_target(t):
             """scene 文件名 -> 幕 aid；映射不到就保留原名（往返不丢）。"""
             t = str(t or "").strip()
-            if not t:
-                return ""
-            if t in s2a:
-                return s2a[t]
+            if not t: return ""
+            if t in s2a: return s2a[t]
             for k, v in s2a.items():
-                if os.path.basename(k).lower() == os.path.basename(t).lower():
-                    return v
+                if os.path.basename(k).lower() == os.path.basename(t).lower(): return v
             return t
 
         # 升级成 v2（把顶层 tracks/dialogue 收进 acts[0]）
@@ -1187,14 +1082,11 @@ class _Builder:
                 key = os.path.basename(tgt.replace("\\", "/")).lower()
                 if key in pm:
                     psets, preal = pm[key]
-                    if psets:
-                        setexpr = ";".join(psets)
+                    if psets: setexpr = ";".join(psets)
                     tgt = preal or tgt
                 e = {"text": o.get("text"), "target": _map_target(tgt)}
-                if setexpr:
-                    e["set"] = setexpr
-                if o.get("when"):
-                    e["when"] = o["when"]
+                if setexpr: e["set"] = setexpr
+                if o.get("when"): e["when"] = o["when"]
                 clean_opts.append(e)
             act.setdefault("choices", []).append(
                 {"cid": ch.get("cid"), "t": ch.get("t"),
@@ -1203,8 +1095,7 @@ class _Builder:
             act.setdefault("jumps", []).append(
                 {"t": j.get("t"), "when": j.get("when"),
                  "target": _map_target(j.get("target"))})
-        if self._next:
-            act["next"] = _map_target(self._next)
+        if self._next: act["next"] = _map_target(self._next)
         if self._vars:
             existing = self.proj.get("vars") or []
             names = {v.get("name") for v in existing if isinstance(v, dict)}
@@ -1243,37 +1134,29 @@ def _scan_branch_targets(script_path):
     except OSError:
         return targets, sets, False
     for raw in lines:
-        if _comment_text(raw) is not None:
-            continue
+        if _comment_text(raw) is not None: continue
         head, rest, err = _split_line(raw)
-        if err or head is None:
-            continue
+        if err or head is None: continue
         if head == "choose":
             for p in _split_unescaped(str(rest or ""), "|"):
                 seg = _split_unescaped(p.strip(), ":", maxsplit=1)
                 if len(seg) >= 2:
                     t = seg[1].strip()
-                    if t and t.lower().endswith(".txt"):
-                        targets.add(t)
+                    if t and t.lower().endswith(".txt"): targets.add(t)
             other_stmts += 1
         elif head == "if":
             seg = _split_unescaped(str(rest or ""), ":", maxsplit=1)
             if len(seg) >= 2:
                 t = seg[1].strip()
-                if t and t.lower().endswith(".txt"):
-                    targets.add(t)
+                if t and t.lower().endswith(".txt"): targets.add(t)
             other_stmts += 1
         elif head == "changeScene":
             t = str(rest or "").strip()
-            if t:
-                targets.add(t)
+            if t: targets.add(t)
             # changeScene 不算"其它内容"（伪幕识别用）
-        elif head == "setVar":
-            sets.append(str(rest or "").strip())
-        elif head in ("intro", "setTextbox"):
-            other_stmts += 1
-        else:
-            other_stmts += 1
+        elif head == "setVar": sets.append(str(rest or "").strip())
+        elif head in ("intro", "setTextbox"): other_stmts += 1
+        else: other_stmts += 1
     only_set_scene = (other_stmts == 0 and bool(sets))
     return targets, sets, only_set_scene
 
@@ -1295,10 +1178,8 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
         game_dir, entry.replace("/", os.sep))
     if not os.path.isfile(entry_path):
         alt = os.path.join(game_dir, "scene", os.path.basename(entry_path))
-        if os.path.isfile(alt):
-            entry_path = alt
-        else:
-            return False, "入口脚本不存在: %s" % entry_path, None
+        if os.path.isfile(alt): entry_path = alt
+        else: return False, "入口脚本不存在: %s" % entry_path, None
 
     scene_root = os.path.dirname(entry_path)
 
@@ -1315,16 +1196,14 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
     while queue:
         p = queue.pop(0)
         key = os.path.normcase(os.path.abspath(p))
-        if key in visited:
-            continue
+        if key in visited: continue
         visited.add(key)
         order.append(p)
         tgts, sets, only_sets = _scan_branch_targets(p)
         pending[p] = {"targets": tgts, "sets": sets, "only_sets": only_sets}
         for t in tgts:
             rp = _resolve_target(t)
-            if rp:
-                queue.append(rp)
+            if rp: queue.append(rp)
 
     # ---- 2. 伪幕识别 ----
     # 被 choose 指向 + 只含 setVar/changeScene -> 伪幕（吸收成 option.set）
@@ -1332,15 +1211,13 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
     for p, info in pending.items():
         for t in info["targets"]:
             rp = _resolve_target(t)
-            if rp:
-                pointed.add(os.path.normcase(os.path.abspath(rp)))
+            if rp: pointed.add(os.path.normcase(os.path.abspath(rp)))
     pseudo = {p for p in order
               if pending[p]["only_sets"]
               and os.path.normcase(os.path.abspath(p)) in pointed}
 
     real_scenes = [p for p in order if p not in pseudo]
-    if not real_scenes:
-        return False, "没有任何可导入的幕文件", None
+    if not real_scenes: return False, "没有任何可导入的幕文件", None
 
     # ---- 3. 每文件一幕 ----
     scene_to_aid = {}
@@ -1362,16 +1239,13 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
     for pp in pseudo:
         info = pending.get(pp) or {}
         real = None
-        try:
+        with contextlib.suppress(OSError):
             for raw in open(pp, encoding="utf-8", errors="ignore").readlines():
                 h2, r2, e2 = _split_line(raw)
-                if e2 or h2 is None:
-                    continue
+                if e2 or h2 is None: continue
                 if h2 == "changeScene":
                     real = str(r2 or "").strip()
                     break
-        except OSError:
-            pass
         pseudo_map[os.path.basename(pp).lower()] = (info.get("sets") or [], real)
 
     builders = []
@@ -1390,8 +1264,7 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
         builders.append(b)
         all_warn.extend(b.warnings)
 
-    if not builders:
-        return False, "没有成功导入任何幕", None
+    if not builders: return False, "没有成功导入任何幕", None
 
     # ---- 4. 合并成 v2 ----
     VM = None
@@ -1427,30 +1300,25 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
         for ch in (a.get("choices") or []):
             for o in (ch.get("options") or []):
                 t = str(o.get("target") or "")
-                if t in scene_to_aid:
-                    o["target"] = scene_to_aid[t]
+                if t in scene_to_aid: o["target"] = scene_to_aid[t]
                 elif os.path.basename(t) in scene_to_aid:
                     o["target"] = scene_to_aid[os.path.basename(t)]
         for j in (a.get("jumps") or []):
             t = str(j.get("target") or "")
-            if t in scene_to_aid:
-                j["target"] = scene_to_aid[t]
+            if t in scene_to_aid: j["target"] = scene_to_aid[t]
             elif os.path.basename(t) in scene_to_aid:
                 j["target"] = scene_to_aid[os.path.basename(t)]
         nx = a.get("next")
         if nx:
-            if nx in scene_to_aid:
-                a["next"] = scene_to_aid[nx]
+            if nx in scene_to_aid: a["next"] = scene_to_aid[nx]
             elif os.path.basename(str(nx)) in scene_to_aid:
                 a["next"] = scene_to_aid[os.path.basename(str(nx))]
 
     ok, msg = True, ""
     try:
         fixed = VM.sanitize_project(proj)
-        if fixed is None:
-            ok, msg = False, "合并后工程不合法"
-        else:
-            proj = fixed
+        if fixed is None: ok, msg = False, "合并后工程不合法"
+        else: proj = fixed
     except Exception as e:
         ok, msg = False, "合并校验失败: %r" % e
 
@@ -1459,11 +1327,9 @@ def import_project_dir(game_dir, entry="game/scene/start.txt",
     # K2（task-73）：素材体检摘要——**纯尾部追加**且仅在有缺失时出现
     # （msg 前半段格式是回归锚不许动）；体检异常静默不影响导入结果。
     _hint = ""
-    try:
+    with contextlib.suppress(Exception):
         import asset_audit as _A
         _hint = _A.audit_hint(proj, game_dir)
-    except Exception:
-        pass
     return ok, "导入 %d 幕%s，警告 %d%s" % (
         n_act, ("（吸收 %d 个伪幕）" % n_pseudo) if n_pseudo else "",
         len(all_warn), ("；" + _hint) if _hint else ""), proj
@@ -1498,5 +1364,4 @@ def main(argv=None):
     return 0
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == "__main__": sys.exit(main())

@@ -57,6 +57,7 @@ import string
 import struct
 import sys
 import zlib
+import contextlib
 
 AUDIO_BGM_MIN = 3.0          # 秒：>=3s 视作 bgm，否则音效
 # v3.5.13：「该角色紧接着回到同一槽位」的判定窗口（秒）。
@@ -124,8 +125,7 @@ def _escape_say_body(text):
     引擎处理，不该出现在正文），剩下的才是真正文，再加保护。
     """
     s = str(text or "")
-    if _ZWSP in s:
-        return s                      # 已保护过，不重复插
+    if _ZWSP in s: return s                      # 已保护过，不重复插
     # 存量脏数据：正文里混着合法参数 -> 先剥离（引擎会自己读参数）
     s = _strip_known_say_args(s)
     return re.sub(r"(?<!\\) -", " " + _ZWSP + "-", s)
@@ -141,19 +141,16 @@ def _strip_known_say_args(text):
     """
     s = str(text or "")
     m = re.search(r" -", s)
-    if not m:
-        return s
+    if not m: return s
     head, argpart = s[:m.start()], s[m.start():]
     keep = []
     for seg in argpart.split(" -"):
         seg = seg.strip()
-        if not seg:
-            continue
+        if not seg: continue
         if re.match(r"^[A-Za-z_]\w*(?:=.*)?$", seg):
             continue                  # 合法参数 -> 丢掉（交给引擎）
         keep.append(seg)
-    if not keep:
-        return head
+    if not keep: return head
     return head + " - " + " - ".join(keep)
 
 
@@ -168,10 +165,8 @@ def _comment(text):
     所以必须 `;xxx;`。注释体内 ASCII 分号转全角（防切句错位），ASCII
     冒号也转全角（防我方 import 端往返时误判台词行）。"""
     t = str(text).strip().replace("\n", " ")
-    if t.startswith("//"):
-        t = t[2:].strip()
-    if t.startswith(";"):
-        t = t[1:].strip()
+    if t.startswith("//"): t = t[2:].strip()
+    if t.startswith(";"): t = t[1:].strip()
     t = t.rstrip(";").replace(";", "；").replace(":", "：")
     return ";%s;" % t
 
@@ -186,8 +181,7 @@ _COMMENT = re.compile(r"^//.*$")
 def _f(x, d=0.0):
     try:
         v = float(x)
-        if v != v or v in (float("inf"), float("-inf")):
-            return d
+        if v != v or v in (float("inf"), float("-inf")): return d
         return v
     except (TypeError, ValueError):
         return d
@@ -199,8 +193,7 @@ def _layout(c, t=None):
     try:
         import video_model as VM
         lay = VM.layout_at(c, t)
-        if not isinstance(lay, dict):
-            raise TypeError("layout_at 返回非 dict")
+        if not isinstance(lay, dict): raise TypeError("layout_at 返回非 dict")
     except Exception:
         lay = DEFAULT_LAYOUT
     return lay
@@ -209,10 +202,8 @@ def _layout(c, t=None):
 def _slot(x):
     """lay.x 三分位 -> WebGAL 立绘槽位。"""
     x = _f(x, 0.5)
-    if x < 1.0 / 3.0:
-        return "left"
-    if x > 2.0 / 3.0:
-        return "right"
+    if x < 1.0 / 3.0: return "left"
+    if x > 2.0 / 3.0: return "right"
     return "center"
 
 
@@ -247,18 +238,13 @@ def _filter_stmt(filt, target):
 
     只保留**引擎认识的键**且值为数字/布尔；脏键、脏值一律丢弃
     （引擎收到不认识的键会报 unknown，或静默忽略导致用户以为生效）。"""
-    if not isinstance(filt, dict) or not filt:
-        return None
+    if not isinstance(filt, dict) or not filt: return None
     clean = {}
     for k, v in filt.items():
-        if k not in _FILTER_ALLOWED:
-            continue
-        if isinstance(v, bool):
-            clean[k] = v
-        elif isinstance(v, (int, float)):
-            clean[k] = v
-    if not clean:
-        return None
+        if k not in _FILTER_ALLOWED: continue
+        if isinstance(v, bool): clean[k] = v
+        elif isinstance(v, (int, float)): clean[k] = v
+    if not clean: return None
     try:
         body = json.dumps(clean, ensure_ascii=False, separators=(",", ":"))
     except Exception:
@@ -333,8 +319,7 @@ class _NamePool:
     def alloc(self, cat, filename):
         used = self._used.setdefault(cat, set())
         base, ext = os.path.splitext(filename)
-        if not base:
-            base = "asset"
+        if not base: base = "asset"
         name = filename
         i = 2
         while name.lower() in used:
@@ -350,10 +335,8 @@ def _abs_path(p, proj_dir):
     # 不能拼 proj_dir —— 拼了会变成 D:\...\color:black，于是 "文件缺失"
     # 警告 + 背景被跳过（实测导出的包开场没背景）。原样返回，交给调用方
     # 按前缀识别。
-    if p.startswith("color:"):
-        return p
-    if not p or os.path.isabs(p):
-        return p
+    if p.startswith("color:"): return p
+    if not p or os.path.isabs(p): return p
     return os.path.join(proj_dir, p) if proj_dir else p
 
 
@@ -387,12 +370,9 @@ def _save_arr_png(img, out_png):
     if not isinstance(img, Image.Image):
         import numpy as np
         a = np.asarray(img)
-        if a.ndim == 2:
-            a = np.dstack([a, a, a])
-        if a.shape[2] == 3:
-            a = np.dstack([a, np.full(a.shape[:2], 255, np.uint8)])
-        elif a.shape[2] > 4:
-            a = a[:, :, :4]
+        if a.ndim == 2: a = np.dstack([a, a, a])
+        if a.shape[2] == 3: a = np.dstack([a, np.full(a.shape[:2], 255, np.uint8)])
+        elif a.shape[2] > 4: a = a[:, :, :4]
         img = Image.fromarray(a.astype("uint8"), "RGBA")
     img.convert("RGBA").save(out_png, "PNG")
 
@@ -415,21 +395,16 @@ def _emit_puppet_png(clip, src_path, out_png):
         try:
             img = s.frame(max(0.0, _f(clip.get("src_in"))))   # clip 起始=首帧
         finally:
-            try:
-                s.close()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): s.close()
         _save_arr_png(img, out_png)
         return "rendered"
     except Exception:
         pass
-    try:
+    with contextlib.suppress(Exception):
         from PIL import Image
         with Image.open(src_path) as im:
             im.convert("RGBA").save(out_png, "PNG")
         return "pil"
-    except Exception:
-        pass
     _placeholder_png(out_png)
     return "placeholder"
 
@@ -440,8 +415,7 @@ def _has_alpha(path):
     try:
         from PIL import Image
         with Image.open(path) as im:
-            if "A" not in im.getbands() and "transparency" not in im.info:
-                return False
+            if "A" not in im.getbands() and "transparency" not in im.info: return False
             ex = im.getextrema()
             ai = im.getbands().index("A") if "A" in im.getbands() else None
             if ai is not None and isinstance(ex, tuple) and len(ex) > ai:
@@ -455,11 +429,9 @@ def _has_alpha(path):
 def _is_fullscreen(lay, src, W, H):
     """满幅：布局居中且 scale 接近 1，fit 后覆盖 >=97% 画布；尺寸未知回信默认布局。"""
     x, y, sc = _f(lay.get("x"), 0.5), _f(lay.get("y"), 0.5), _f(lay.get("scale"), 1.0)
-    if abs(x - 0.5) > Y_DEV or abs(y - 0.5) > Y_DEV or sc < 0.95:
-        return False
+    if abs(x - 0.5) > Y_DEV or abs(y - 0.5) > Y_DEV or sc < 0.95: return False
     w, h = _f(src.get("w")), _f(src.get("h"))
-    if w <= 0 or h <= 0 or W <= 0 or H <= 0:
-        return True
+    if w <= 0 or h <= 0 or W <= 0 or H <= 0: return True
     s0 = min(W / w, H / h)
     return (w * s0 * sc) >= W * 0.97 and (h * s0 * sc) >= H * 0.97
 
@@ -472,8 +444,7 @@ def _cubism_hint_dir(src_path):
         parent = os.path.dirname(p) if not os.path.isdir(p) else p
         # 目录型 puppet：模型文件通常就在工程目录内，本级与上级都查
         for d in (parent, os.path.dirname(parent)):
-            if not d or not os.path.isdir(d):
-                continue
+            if not d or not os.path.isdir(d): continue
             try:
                 entries = os.listdir(d)
             except OSError:
@@ -525,16 +496,12 @@ def _cubism2_role_root(model_dir):
     motions 键引用 ../.mtn_exp/xxx.mtn —— 即动作在 path 父级的父级
     （角色根 anon/）下。角色根判定：path 父级的父级含 .mtn_exp 目录；
     找不到则返回 model_dir 本身（退化：无 .mtn_exp 的工程也能导）。"""
-    try:
+    with contextlib.suppress(Exception):
         d = os.path.abspath(model_dir)
         parent = os.path.dirname(d)
         grand = os.path.dirname(parent)
-        if grand and os.path.isdir(os.path.join(grand, _C2_MTN_EXP)):
-            return grand
-        if parent and os.path.isdir(os.path.join(parent, _C2_MTN_EXP)):
-            return parent
-    except Exception:
-        pass
+        if grand and os.path.isdir(os.path.join(grand, _C2_MTN_EXP)): return grand
+        if parent and os.path.isdir(os.path.join(parent, _C2_MTN_EXP)): return parent
     return os.path.abspath(model_dir)
 
 
@@ -553,20 +520,16 @@ def _parse_cubism2_json(model_json_path):
     try:
         with open(model_json_path, "r", encoding="utf-8") as f:
             obj = json.load(f)
-        if not isinstance(obj, dict):
-            return out
+        if not isinstance(obj, dict): return out
         fr = obj.get("FileReferences") or {}
         mo = fr.get("Motions")
-        if isinstance(mo, dict):
-            out["motions"] = [str(k) for k in mo.keys()]
+        if isinstance(mo, dict): out["motions"] = [str(k) for k in mo.keys()]
         ex = fr.get("Expressions")
-        if isinstance(ex, dict):
-            out["expressions"] = [str(k) for k in ex.keys()]
+        if isinstance(ex, dict): out["expressions"] = [str(k) for k in ex.keys()]
         # ---- 扁平格式回退（标准形态缺席/为空才读）----
         if not out["motions"]:
             mo2 = obj.get("motions")
-            if isinstance(mo2, dict):
-                out["motions"] = [str(k) for k in mo2.keys()]
+            if isinstance(mo2, dict): out["motions"] = [str(k) for k in mo2.keys()]
             elif isinstance(mo2, list):      # [{name,file}] 变体
                 out["motions"] = [str(m["name"]) for m in mo2
                                   if isinstance(m, dict) and m.get("name")]
@@ -603,25 +566,20 @@ def _match_motion_name(want, names):
     这里补一条：**去掉角色前缀后按末段名再匹配一次**（"soyo/default"
     -> "default" 命中 "anon/default"）。未命中返回 None。"""
     want = str(want or "").strip()
-    if not want or not names:
-        return None
+    if not want or not names: return None
     lw = want.lower()
     for n in names:                       # 1) 精确
-        if str(n) == want:
-            return n
+        if str(n) == want: return n
     for n in names:                       # 2) 末段前缀（idle -> anon/idle01）
         seg = str(n).split("/")[-1].lower()
-        if seg.startswith(lw):
-            return n
+        if seg.startswith(lw): return n
     # 2b) 角色前缀归一化：工程里的名字与键名表角色前缀不同时按末段比
     wseg = lw.split("/")[-1]
     if "/" in lw:
         for n in names:                   # 2b-1) 末段精确
-            if str(n).split("/")[-1].lower() == wseg:
-                return n
+            if str(n).split("/")[-1].lower() == wseg: return n
         for n in names:                   # 2b-2) 末段前缀
-            if str(n).split("/")[-1].lower().startswith(wseg):
-                return n
+            if str(n).split("/")[-1].lower().startswith(wseg): return n
     try:                                  # 3) 模糊
         import difflib
         m = difflib.get_close_matches(lw, [str(n).split("/")[-1].lower()
@@ -645,27 +603,20 @@ def _collect_puppet_motion_refs(proj):
     model.json + 按需拷池文件，把请求量从 ~900/模型 降到个位数。
     """
     refs = {}
-    if not isinstance(proj, dict):
-        return refs
+    if not isinstance(proj, dict): return refs
     for tr in proj.get("tracks") or []:
-        if not isinstance(tr, dict):
-            continue
+        if not isinstance(tr, dict): continue
         for c in tr.get("clips") or []:
-            if not isinstance(c, dict):
-                continue
+            if not isinstance(c, dict): continue
             src = c.get("source") or {}
-            if src.get("kind") != "puppet":
-                continue
+            if src.get("kind") != "puppet": continue
             path = str(src.get("path") or "")
-            if not path or not _is_cubism2_dir(path):
-                continue
+            if not path or not _is_cubism2_dir(path): continue
             key = os.path.normpath(os.path.abspath(path))
             slot = refs.setdefault(key, {"motions": set(),
                                          "expressions": set()})
-            if c.get("motion"):
-                slot["motions"].add(str(c["motion"]))
-            if c.get("expression"):
-                slot["expressions"].add(str(c["expression"]))
+            if c.get("motion"): slot["motions"].add(str(c["motion"]))
+            if c.get("expression"): slot["expressions"].add(str(c["expression"]))
     # 台词级动作（规则 10：dialogue 项自带 motion/expression，导出时按
     # fig_intervals 落到对应立绘）——who->模型映射是动态的，保守做法：
     # 把全部台词动作并入**每个** Cubism2 模型的引用集（通常几十条，
@@ -673,10 +624,8 @@ def _collect_puppet_motion_refs(proj):
     dlg_m, dlg_e = set(), set()
     for d in proj.get("dialogue") or []:
         if isinstance(d, dict):
-            if d.get("motion"):
-                dlg_m.add(str(d["motion"]))
-            if d.get("expression"):
-                dlg_e.add(str(d["expression"]))
+            if d.get("motion"): dlg_m.add(str(d["motion"]))
+            if d.get("expression"): dlg_e.add(str(d["expression"]))
     if dlg_m or dlg_e:
         for slot in refs.values():
             slot["motions"] |= dlg_m
@@ -697,20 +646,17 @@ def _slim_cubism2_json(obj, used, warn, tag):
         fr = obj.get("FileReferences") if isinstance(obj, dict) else None
         mo = (fr or {}).get("Motions") if fr else obj.get("motions")
         mo_is_fr = bool(fr and isinstance(fr.get("Motions"), dict))
-        if not isinstance(mo, dict) or not mo:
-            return False
+        if not isinstance(mo, dict) or not mo: return False
         keys = [str(k) for k in mo.keys()]
 
         def _pick(raws, fallback):
             sel = set()
             for raw in raws or ():
                 k = _match_motion_name(raw, keys)
-                if k:
-                    sel.add(k)
+                if k: sel.add(k)
             if not sel and fallback:          # 保底：idle01 / default
                 k = _match_motion_name(fallback, keys)
-                if k:
-                    sel.add(k)
+                if k: sel.add(k)
             return sel
 
         sel_m = _pick(used.get("motions"), "idle01")
@@ -718,10 +664,8 @@ def _slim_cubism2_json(obj, used, warn, tag):
         if not new_mo:                        # 一个都没选中：保底首个键
             first = next(iter(mo.keys()))
             new_mo = {first: mo[first]}
-        if mo_is_fr:
-            fr["Motions"] = new_mo
-        else:
-            obj["motions"] = new_mo
+        if mo_is_fr: fr["Motions"] = new_mo
+        else: obj["motions"] = new_mo
 
         # expressions：dict 或 list-of-{name} 两种形态
         ex = (fr or {}).get("Expressions") if fr else obj.get("expressions")
@@ -730,20 +674,16 @@ def _slim_cubism2_json(obj, used, warn, tag):
             ekeys = [str(k) for k in ex.keys()]
             sel_e = _pick(used.get("expressions"), "default")
             new_ex = {k: ex[k] for k in ex.keys() if k in sel_e}
-            if ex_is_fr:
-                fr["Expressions"] = new_ex
-            else:
-                obj["expressions"] = new_ex
+            if ex_is_fr: fr["Expressions"] = new_ex
+            else: obj["expressions"] = new_ex
         elif isinstance(ex, list) and ex:
             names = [str(e.get("name")) for e in ex
                      if isinstance(e, dict) and e.get("name")]
             sel_e = _pick(used.get("expressions"), "default")
             new_ex = [e for e in ex if isinstance(e, dict)
                       and str(e.get("name")) in sel_e]
-            if ex_is_fr:
-                fr["Expressions"] = new_ex
-            else:
-                obj["expressions"] = new_ex
+            if ex_is_fr: fr["Expressions"] = new_ex
+            else: obj["expressions"] = new_ex
         return True
     except Exception as e:
         warn.append("Cubism2 model.json 瘦身失败 %s: %r（保持原样）" % (tag, e))
@@ -767,8 +707,7 @@ def _add_default_expression(obj, role_root, warn=None):
         rel = os.path.join(".mtn_exp", "expressions", "__base__",
                             role_dir, "default.exp.json")
         src_f = os.path.normpath(os.path.join(role_root, rel))
-        if not os.path.isfile(src_f):
-            return False
+        if not os.path.isfile(src_f): return False
         if not os.path.abspath(src_f).startswith(
                 os.path.abspath(role_root) + os.sep):
             return False
@@ -785,19 +724,15 @@ def _add_default_expression(obj, role_root, warn=None):
             ex.append({"name": name, "file": file_def})
             return True
         if isinstance(ex, dict):
-            if any(str(k).endswith("/default") for k in ex):
-                return False
+            if any(str(k).endswith("/default") for k in ex): return False
             ex[name] = {"File": file_def}
             return True
         # 键表缺失：补一个 list 形态（与真实素材一致）
-        if fr is not None:
-            fr["Expressions"] = [{"name": name, "file": file_def}]
-        else:
-            obj["expressions"] = [{"name": name, "file": file_def}]
+        if fr is not None: fr["Expressions"] = [{"name": name, "file": file_def}]
+        else: obj["expressions"] = [{"name": name, "file": file_def}]
         return True
     except Exception as e:
-        if warn is not None:
-            warn.append("补 default 表情失败: %r" % (e,))
+        if warn is not None: warn.append("补 default 表情失败: %r" % (e,))
         return False
 
 
@@ -822,8 +757,7 @@ def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None,
                                os.path.dirname(role_root)).replace("\\", "/")
     dst_root = os.path.join(figure_root, safe_name(rel_root) or "model")
     try:
-        if used is None:
-            shutil.copytree(role_root, dst_root, dirs_exist_ok=True)
+        if used is None: shutil.copytree(role_root, dst_root, dirs_exist_ok=True)
         else:
             # ---- 瘦身导出 ----
             # 1) 角色根全树拷，**排除 .mtn_exp 动作池**（池按需拷）——
@@ -848,17 +782,14 @@ def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None,
                 （后者是错的：角色根的父目录是素材库 figure/，永远匹配不上
                 真正的角色根）。
                 """
-                if used_costumes is None:
-                    return set()
+                if used_costumes is None: return set()
                 src_r = os.path.normcase(os.path.normpath(
                     src.rstrip("\\/")))
                 root_r = os.path.normcase(os.path.normpath(role_root))
-                if src_r != root_r:
-                    return set()
+                if src_r != root_r: return set()
                 skip = set()
                 for n in names:
-                    if n in (".", "") or n.startswith("."):
-                        continue
+                    if n in (".", "") or n.startswith("."): continue
                     # 角色根下的条目：服装目录（子目录）才需要过滤；
                     # 根级文件（model.json/.chara 等共享文件）都保留
                     if os.path.isdir(os.path.join(src, n)) \
@@ -893,8 +824,7 @@ def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None,
                     warn.append("Cubism2 model.json 读取失败 %s: %r" %
                                 (src_json, e))
                     return None
-                if not isinstance(o, dict):
-                    return None
+                if not isinstance(o, dict): return None
                 if _slim_cubism2_json(o, used_refs or {}, warn, tag):
                     # 保底 default 表情必须在**写盘前**补进键表：它不是
                     # 任何模型 model.json 的真实键名（瘦身更不会有），但
@@ -947,8 +877,7 @@ def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None,
                             yield it.get("file")
                     elif isinstance(ex_d, list):
                         for it in ex_d:
-                            if isinstance(it, dict):
-                                yield it.get("file")
+                            if isinstance(it, dict): yield it.get("file")
                 defs = [f_ for f_ in _iter_defs() if f_]
                 n_pool = 0
                 for f_ in defs:
@@ -977,8 +906,7 @@ def _copy_cubism2_model(model_dir, figure_root, stats, warn, used=None,
         return None
     # start.txt 引用路径 = <角色名>/<model_dir 相对角色根>/model.json
     parts = [safe_name(rel_root)]
-    if rel not in (".", ""):
-        parts.extend(safe_name(p) for p in rel.split("/") if p)
+    if rel not in (".", ""): parts.extend(safe_name(p) for p in rel.split("/") if p)
     return "/".join(parts)
 
 
@@ -1072,8 +1000,7 @@ def _merge_missing(src_dir, dst_dir, warn):
         for fn in files:
             s = os.path.join(root, fn)
             d = os.path.join(target, fn)
-            if os.path.exists(d):
-                continue                    # 已有（导出内容优先）
+            if os.path.exists(d): continue                    # 已有（导出内容优先）
             try:
                 os.makedirs(os.path.dirname(d) or ".", exist_ok=True)
                 shutil.copy2(s, d)
@@ -1096,17 +1023,14 @@ def _app_version():
     """
     here = os.path.dirname(os.path.abspath(__file__))
     # ① 程序 VERSION 常量（正则抽，避免 import l2d_rig_qt 拉起整个 Qt 应用）
-    try:
+    with contextlib.suppress(OSError):
         with open(os.path.join(here, "l2d_rig_qt.py"), encoding="utf8",
                   errors="ignore") as f:
             for line in f:
                 s = line.strip()
                 if s.startswith("VERSION") and "=" in s:
                     v = s.split("=", 1)[1].strip().strip("'\"")
-                    if v and v[0].isdigit():
-                        return v
-    except OSError:
-        pass
+                    if v and v[0].isdigit(): return v
     # ② version.json 兜底
     try:
         with open(os.path.join(here, "version.json"), encoding="utf8") as f:
@@ -1176,15 +1100,12 @@ def _runtime_version(rt_st, rt_dir):
     """水印第二行 WebGAL 版本：**以运行时树 webgal-engine.json 为准**
     （官方元数据，如 4.6.6）；runtime_pack.status().version 是包自身版本
     （实测可能是 1.5 这类打包号，不能当引擎版本用），只作兜底。"""
-    try:
+    with contextlib.suppress(Exception):
         with open(os.path.join(rt_dir, "webgal-engine.json"),
                   encoding="utf8") as f:
             obj = json.load(f)
         v = obj.get("webgalVersion") or obj.get("version")
-        if v:
-            return str(v)
-    except Exception:
-        pass
+        if v: return str(v)
     v = (rt_st or {}).get("version")
     return str(v) if v else "4.x"
 
@@ -1253,14 +1174,11 @@ def _inject_sentinel_playable(out_dir, warn, stats):
     except OSError as e:
         warn.append("哨兵读 index.html 失败: %r" % e)
         return False
-    if SENTINEL_BUILD_KEY in s:
-        return True
+    if SENTINEL_BUILD_KEY in s: return True
     build = _build_id(out_dir)
     js = _SENTINEL_JS.replace("__BUILD__", build)
-    if "<head>" in s:
-        s = s.replace("<head>", "<head>\n" + js, 1)
-    else:
-        s = js + s
+    if "<head>" in s: s = s.replace("<head>", "<head>\n" + js, 1)
+    else: s = js + s
     try:
         with open(idx, "w", encoding="utf8", newline="") as f:
             f.write(s)
@@ -1281,18 +1199,13 @@ def _inject_skin_playable(out_dir, app_ver, rt_ver, live_badge, warn):
     except OSError as e:
         warn.append("皮肤注入读 index.html 失败: %r" % e)
         return False
-    if SKIN_STYLE_MARK in s:
-        return True
+    if SKIN_STYLE_MARK in s: return True
     head = ("<!-- %s --><style>%s</style>" % (SKIN_STYLE_MARK, SKIN_CSS))
     body = _skin_watermark_html(app_ver, rt_ver, live_badge)
-    if "</head>" in s:
-        s = s.replace("</head>", head + "</head>", 1)
-    else:
-        s = head + s
-    if "</body>" in s:
-        s = s.replace("</body>", body + "</body>", 1)
-    else:
-        s = s + body
+    if "</head>" in s: s = s.replace("</head>", head + "</head>", 1)
+    else: s = head + s
+    if "</body>" in s: s = s.replace("</body>", body + "</body>", 1)
+    else: s = s + body
     try:
         with open(idx, "w", encoding="utf8", newline="") as f:
             f.write(s)
@@ -1382,14 +1295,11 @@ def _find_live2d_core(rt_dir=None):
     这样"整合包不存在"不再等于"core 找不到"。
     命中缓存模块级；env 优先于缓存。"""
     env = os.environ.get("MUPPET_LIVE2D_CORE_DIR", "").strip()
-    if env and _l2d_valid(env):
-        return env
+    if env and _l2d_valid(env): return env
     if rt_dir:
         d = os.path.join(rt_dir, "lib")
-        if _l2d_valid(d):
-            return d
-    if _L2D_CACHE["dir"] and _l2d_valid(_L2D_CACHE["dir"]):
-        return _L2D_CACHE["dir"]
+        if _l2d_valid(d): return d
+    if _L2D_CACHE["dir"] and _l2d_valid(_L2D_CACHE["dir"]): return _L2D_CACHE["dir"]
     d = _asset_lib_core_dir()
     if _l2d_valid(d):
         _L2D_CACHE["dir"] = d
@@ -1398,8 +1308,7 @@ def _find_live2d_core(rt_dir=None):
     packenv = os.environ.get("MUPPET_WEBGAL_PACK_DIR", "").strip()
     roots = [packenv] if packenv else [r"D:\BaiduNetdiskDownload"]
     for root in roots:
-        if not root or not os.path.isdir(root):
-            continue
+        if not root or not os.path.isdir(root): continue
         pats = [os.path.join(root, "*WebGAL整合包*", "webgal-main", "public",
                              "games", "*", "lib"),
                 os.path.join(root, "*Derivative_Engine*", "*MyGO*", "lib")]
@@ -1457,12 +1366,9 @@ def _inject_live2d_core(out_dir, rt_dir, warn, stats, playable):
         if _L2D_MARK not in s:
             tag = '<script type="module"'
             html = _l2d_scripts_html()
-            if tag in s:
-                s = s.replace(tag, html + "\n    " + tag, 1)
-            elif "</head>" in s:
-                s = s.replace("</head>", html + "</head>", 1)
-            else:
-                s = html + s
+            if tag in s: s = s.replace(tag, html + "\n    " + tag, 1)
+            elif "</head>" in s: s = s.replace("</head>", html + "</head>", 1)
+            else: s = html + s
             try:
                 with open(idx, "w", encoding="utf8", newline="") as f:
                     f.write(s)
@@ -1507,8 +1413,7 @@ def _load_json_proj(path):
     try:
         import video_model as VM
         proj = VM.sanitize_project(obj)
-        if proj is None:
-            raise ValueError("不是有效的 video_edit 工程 JSON")
+        if proj is None: raise ValueError("不是有效的 video_edit 工程 JSON")
         return VM.normalize_ids(proj)
     except ImportError:
         if not isinstance(obj, dict) or "tracks" not in obj:
@@ -1540,8 +1445,7 @@ def _scene_filename(aid, pool=None):
     """幕 id -> scene 文件名（安全化 + 去重）。start 保留给首幕。"""
     s = safe_name(str(aid or "act")) or "act"
     name = s + ".txt"
-    if pool is not None:
-        name = pool.alloc("scene", name)
+    if pool is not None: name = pool.alloc("scene", name)
     return name
 
 
@@ -1568,12 +1472,9 @@ def _branch_target_scene(target, aid_to_scene):
     目标可以是幕 id（本工程内跳转，映射成 scene 文件）或外部 scene 名
     （如 "chapter2.txt"，原样保留）。空目标 -> None（不 emit）。"""
     t = str(target or "").strip()
-    if not t:
-        return None
-    if t in aid_to_scene:
-        return aid_to_scene[t]
-    if t.lower().endswith(".txt"):
-        return t
+    if not t: return None
+    if t in aid_to_scene: return aid_to_scene[t]
+    if t.lower().endswith(".txt"): return t
     # 未匹配任何幕 id：当作外部 scene 名，补 .txt（并交给调用方记警告）
     return safe_name(t) + ".txt" if safe_name(t) else None
 
@@ -1586,8 +1487,7 @@ def _emit_branch_tail(act, ctx):
       pseudo_files = [(文件名, [行...])]  伪幕（option.set 副作用）
     单幕工程（act 为 None / 无 choices/jumps/next）返回 ([], [])，调用方
     跳过整段 -> 逐字节等于旧输出。"""
-    if not isinstance(act, dict):
-        return [], []
+    if not isinstance(act, dict): return [], []
     aid_to_scene = ctx.get("aid_to_scene") or {}
     scene_of_self = ctx.get("scene_of_self") or ""
 
@@ -1596,13 +1496,10 @@ def _emit_branch_tail(act, ctx):
 
     # ---- jumps：幕内条件跳转 ----
     for j in (act.get("jumps") or []):
-        if not isinstance(j, dict):
-            continue
+        if not isinstance(j, dict): continue
         tgt = _branch_target_scene(j.get("target"), aid_to_scene)
-        if not tgt:
-            continue
-        if tgt == scene_of_self:
-            continue                     # 跳自己 = 无操作，跳过（防死循环）
+        if not tgt: continue
+        if tgt == scene_of_self: continue                     # 跳自己 = 无操作，跳过（防死循环）
         cond = str(j.get("when") or "").strip()
         if not cond:
             # 无条件跳转：幕内任意时刻无条件跳走会截断后续剧情，
@@ -1615,12 +1512,10 @@ def _emit_branch_tail(act, ctx):
 
     # ---- choices：选择点 ----
     for ch in (act.get("choices") or []):
-        if not isinstance(ch, dict):
-            continue
+        if not isinstance(ch, dict): continue
         cid = ch.get("cid")
         opts = [o for o in (ch.get("options") or []) if isinstance(o, dict)]
-        if not opts:
-            continue
+        if not opts: continue
         prompt = str(ch.get("prompt") or "").strip()
         t_ch = ch.get("t")
         if prompt:
@@ -1640,8 +1535,7 @@ def _emit_branch_tail(act, ctx):
             elif setexpr:
                 set_list = [x.strip() for x in str(setexpr).split(";")
                             if x.strip()]
-            else:
-                set_list = []
+            else: set_list = []
             when = str(o.get("when") or "").strip()
             real = _branch_target_scene(o.get("target"), aid_to_scene)
             if set_list or when:
@@ -1656,26 +1550,21 @@ def _emit_branch_tail(act, ctx):
                         "fallback_scene", "")))
                 for kv in set_list:
                     plines.append("setVar:%s;" % kv.replace(";", "；"))
-                if real:
-                    plines.append("changeScene:%s;" % real)
+                if real: plines.append("changeScene:%s;" % real)
                 elif ctx.get("fallback_scene"):
                     plines.append("changeScene:%s;" % ctx["fallback_scene"])
                 pseudo.append((pname, plines))
                 tgt = pname
-            else:
-                tgt = real
-            if not tgt:
-                continue
+            else: tgt = real
+            if not tgt: continue
             parts.append("%s:%s" % (txt, tgt))
-        if parts:
-            tail.append("choose:%s;" % "|".join(parts))
+        if parts: tail.append("choose:%s;" % "|".join(parts))
 
     # ---- next：幕尾续接 ----
     nxt = act.get("next")
     if nxt:
         tgt = _branch_target_scene(nxt, aid_to_scene)
-        if tgt and tgt != scene_of_self:
-            tail.append("changeScene:%s;" % tgt)
+        if tgt and tgt != scene_of_self: tail.append("changeScene:%s;" % tgt)
 
     return tail, pseudo
 
@@ -1684,18 +1573,13 @@ def _collect_vars_lines(proj):
     """工程级 vars -> start.txt 头部 setVar 初始化行（只写一次）。"""
     out = []
     for v in (proj.get("vars") or []):
-        if not isinstance(v, dict):
-            continue
+        if not isinstance(v, dict): continue
         name = str(v.get("name") or "").strip()
-        if not name:
-            continue
+        if not name: continue
         dflt = v.get("default", 0)
-        if isinstance(dflt, bool):
-            dflt = 1 if dflt else 0
-        elif isinstance(dflt, (int, float)):
-            dflt = dflt
-        else:
-            dflt = '"%s"' % str(dflt).replace('"', "").replace(";", "；")
+        if isinstance(dflt, bool): dflt = 1 if dflt else 0
+        elif isinstance(dflt, (int, float)): dflt = dflt
+        else: dflt = '"%s"' % str(dflt).replace('"', "").replace(";", "；")
         out.append("setVar:%s=%s;" % (name, dflt))
     return out
 
@@ -1732,16 +1616,13 @@ def export_branch_game(proj, out_dir, proj_dir=None, game_name=None,
     pool = _NamePool()
     for i, a in enumerate(acts):
         aid = str(a.get("aid") or ("a%d" % (i + 1)))
-        if i == 0:
-            aid_to_scene[aid] = "start.txt"
-        else:
-            aid_to_scene[aid] = _scene_filename(aid, pool)
+        if i == 0: aid_to_scene[aid] = "start.txt"
+        else: aid_to_scene[aid] = _scene_filename(aid, pool)
 
     ctx = {"stats": stats, "pool": pool, "aid_to_scene": aid_to_scene,
            "puppet_refs": _collect_puppet_motion_refs(proj)}
     # v3.6.2：工程级转场透传给逐幕导出（幕视图里没有这个键）
-    if isinstance(proj.get("transition"), dict):
-        ctx["transition"] = proj["transition"]
+    if isinstance(proj.get("transition"), dict): ctx["transition"] = proj["transition"]
 
     # 逐幕生成
     for a in acts:
@@ -1767,8 +1648,7 @@ def export_branch_game(proj, out_dir, proj_dir=None, game_name=None,
         except Exception as e:
             warn.append("幕 %s 导出异常: %s: %s" % (aid, type(e).__name__, e))
             continue
-        if not ok:
-            warn.append("幕 %s 导出失败: %s" % (aid, msg))
+        if not ok: warn.append("幕 %s 导出失败: %s" % (aid, msg))
         stats["scenes"] = stats.get("scenes", 0) + 1
 
     # vars 初始化插到 start.txt 头部（只此一处，避免播放中被各幕重置）
@@ -1803,12 +1683,9 @@ def export_branch_game(proj, out_dir, proj_dir=None, game_name=None,
                 dst = os.path.join(out_dir, entry)
                 try:
                     if os.path.isdir(src):
-                        if entry == "game":
-                            _merge_missing(src, dst, warn)
-                        else:
-                            shutil.copytree(src, dst, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(src, dst)
+                        if entry == "game": _merge_missing(src, dst, warn)
+                        else: shutil.copytree(src, dst, dirs_exist_ok=True)
+                    else: shutil.copy2(src, dst)
                     stats["files"] += 1
                 except Exception as e:
                     warn.append("playable 拷贝失败 %s: %r" % (entry, e))
@@ -1816,18 +1693,15 @@ def export_branch_game(proj, out_dir, proj_dir=None, game_name=None,
         # v3.5.13：字体子集替换（同上，两处 playable 路径都要做）
         _slim_runtime_fonts(out_dir, warn, stats)
         lk, _ln = _inject_launcher(out_dir, warn)
-        if lk:
-            stats["launcher"] = lk
+        if lk: stats["launcher"] = lk
         _inject_sentinel_playable(out_dir, warn, stats)
         if style:
             if _inject_skin_playable(out_dir, _app_version(),
                                      _runtime_version(rt_st, rt_dir),
                                      live_badge, warn):
                 stats["skin"] = "injected"
-            else:
-                stats["skin"] = "failed"
-        else:
-            stats["skin"] = "off"
+            else: stats["skin"] = "failed"
+        else: stats["skin"] = "off"
         if stats.get("model_dirs", 0) > 0:
             _inject_live2d_core(out_dir, rt_dir, warn, stats, playable=True)
     else:
@@ -1851,8 +1725,7 @@ def render_branch_script(proj, proj_dir=None):
     单幕工程也能用（返回单个 start.txt 内容）。"""
     res = {"scenes": [], "vars": [], "warnings": []}
     for v in (proj.get("vars") or []):
-        if isinstance(v, dict) and v.get("name"):
-            res["vars"].append(dict(v))
+        if isinstance(v, dict) and v.get("name"): res["vars"].append(dict(v))
     acts = [a for a in (proj.get("acts") or []) if isinstance(a, dict)]
     if not acts:
         # 单幕：直接渲染成脚本
@@ -1907,8 +1780,7 @@ def _render_scene_lines(view, proj_dir, scene_name, aid_to_scene, act):
     lines = []
     warns = []
     for d in (view.get("dialogue") or []):
-        if not isinstance(d, dict):
-            continue
+        if not isinstance(d, dict): continue
         txt = str(d.get("text") or "").replace(";", "；").replace("\n", " ")
         who = str(d.get("who") or "").replace(":", "").replace(";", "")
         if txt:
@@ -1920,8 +1792,7 @@ def _render_scene_lines(view, proj_dir, scene_name, aid_to_scene, act):
                "fallback_scene": aid_to_scene.get(str(act.get("next") or ""), "")}
         tail, pseudo = _emit_branch_tail(act, ctx)
         lines.extend(tail)
-    else:
-        pseudo = []
+    else: pseudo = []
     return lines, pseudo, warns
 
 
@@ -1950,24 +1821,19 @@ def _slim_runtime_fonts(out_dir, warn, stats):
     返回省下的字节数。"""
     fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "templates", "webgal", "fonts")
-    if not os.path.isdir(fonts_dir):
-        return 0
+    if not os.path.isdir(fonts_dir): return 0
     assets = os.path.join(out_dir, "assets")
-    if not os.path.isdir(assets):
-        return 0
+    if not os.path.isdir(assets): return 0
     # 子集文件名（无 hash）-> 内容
     slim = {}
     for f in os.listdir(fonts_dir):
         p = os.path.join(fonts_dir, f)
-        if os.path.isfile(p) and f.lower().endswith(".ttf"):
-            slim[f] = p
-    if not slim:
-        return 0
+        if os.path.isfile(p) and f.lower().endswith(".ttf"): slim[f] = p
+    if not slim: return 0
     saved = 0
     renamed = []                   # (原文件名, 新文件名)
     for f in sorted(os.listdir(assets)):
-        if not f.lower().endswith(".ttf"):
-            continue
+        if not f.lower().endswith(".ttf"): continue
         src = os.path.join(assets, f)
         # 原文件名形如 ResourceHanRoundedCN-Regular-C1HdCLVq.ttf
         # 子集名形如 ResourceHanRoundedCN.ttf -> 按前缀匹配
@@ -1976,20 +1842,17 @@ def _slim_runtime_fonts(out_dir, warn, stats):
             if f.startswith(os.path.splitext(stem)[0]):
                 hit = stem
                 break
-        if hit is None:
-            continue
+        if hit is None: continue
         old_sz = os.path.getsize(src)
         new_sz = os.path.getsize(slim[hit])
-        if new_sz >= old_sz:
-            continue               # 子集反而更大就不换
+        if new_sz >= old_sz: continue               # 子集反而更大就不换
         try:
             shutil.copy2(slim[hit], src)   # 保持原文件名，免改引用
             saved += old_sz - new_sz
             stats["fonts_slimmed"] = stats.get("fonts_slimmed", 0) + 1
         except Exception as e:
             warn.append("字体子集替换失败 %s: %r" % (f, e))
-    if saved > 0:
-        stats["fonts_saved_mb"] = round(saved / 1048576.0, 1)
+    if saved > 0: stats["fonts_saved_mb"] = round(saved / 1048576.0, 1)
     return saved
 
 
@@ -2015,8 +1878,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
       - 资源只拷一份（多幕共用 background/figure/bgm），不重复占体积
       - 单幕工程路径**逐字节不变**（不传 `_scene`/`_ctx` 即旧行为）
     """
-    if dialect == "mygo":
-        raise NotImplementedError("MyGO 方言导出器 v3.5 提供")
+    if dialect == "mygo": raise NotImplementedError("MyGO 方言导出器 v3.5 提供")
     if dialect != "webgal":
         return False, "未知方言: %r（仅 webgal / mygo）" % (dialect,), \
                {"files": 0, "lines": 0, "warnings": []}
@@ -2117,8 +1979,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     _proj_end = 0.0
     for _tr0 in tracks:
         for _c0 in (_tr0.get("clips") or []):
-            if not isinstance(_c0, dict):
-                continue
+            if not isinstance(_c0, dict): continue
             _proj_end = max(_proj_end, _f(_c0.get("start")) + _f(_c0.get("dur")))
     for _d0 in (proj.get("dialogue") or []):
         if not isinstance(_d0, dict):          # 脏数据（非 dict 条目）跳过
@@ -2159,32 +2020,25 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         if use_fid:
             line = "changeFigure:%s -id=%s -transform=%s" % (
                 out_name, use_fid, _transform_of(lay, W, H))
-        else:
-            line = "changeFigure:%s -%s" % (out_name, slot)
-        if c.get("motion"):
-            line += " -motion=%s" % c["motion"]
-        if c.get("expression"):
-            line += " -expression=%s" % c["expression"]
+        else: line = "changeFigure:%s -%s" % (out_name, slot)
+        if c.get("motion"): line += " -motion=%s" % c["motion"]
+        if c.get("expression"): line += " -expression=%s" % c["expression"]
         lines.append(line + ";")
         # v3.6.2：立绘滤镜 -> setTransform -target=fig-<槽位>
         _fst = _filter_stmt(c.get("filter"),
                             _FILTER_TARGET_SLOT.get(slot, "fig-center"))
-        if _fst:
-            lines.append(_fst)
-        if extra:
-            lines.extend(extra)
+        if _fst: lines.append(_fst)
+        if extra: lines.extend(extra)
         events.append((t0, 1, seq, lines))
         seq += 1
         _exit_none(t1, slot, out_name, use_fid)
         fig_intervals.append((t0, t1, slot, out_name, use_fid, lay))
 
     for tr in tracks:
-        if not isinstance(tr, dict) or tr.get("hidden"):
-            continue
+        if not isinstance(tr, dict) or tr.get("hidden"): continue
         tr_kind = tr.get("kind")
         for c in (tr.get("clips") or []):
-            if not isinstance(c, dict):
-                continue
+            if not isinstance(c, dict): continue
             src = c.get("source") or {}
             sk = src.get("kind")
             path = _abs_path(src.get("path"), proj_dir)
@@ -2221,13 +2075,11 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                         warn.append("背景素材缺失，已跳过该背景: %s"
                                     % (raw_name or path))
                         continue
-                    if first_bg is None:
-                        first_bg = nm
+                    if first_bg is None: first_bg = nm
                     # v3.6.2：背景滤镜 -> setTransform -target=bg-main
                     _bg_lines = ["changeBg:%s -next;" % nm]
                     _fst = _filter_stmt(c.get("filter"), "bg-main")
-                    if _fst:
-                        _bg_lines.append(_fst)
+                    if _fst: _bg_lines.append(_fst)
                     events.append((t0, 0, seq, _bg_lines))
                     seq += 1
                 else:
@@ -2300,13 +2152,11 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                                 info["motions"])
                         ev = _match_motion_name(c.get("expression"),
                                                 info["expressions"])
-                        if mv:
-                            line += " -motion=%s" % mv
+                        if mv: line += " -motion=%s" % mv
                         elif c.get("motion"):
                             lines.append(_note(
                                 "可用动作: %s" % ", ".join(info["motions"][:8])))
-                        if ev:
-                            line += " -expression=%s" % ev
+                        if ev: line += " -expression=%s" % ev
                         elif c.get("expression"):
                             lines.append(_note(
                                 "可用表情: %s" %
@@ -2316,8 +2166,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                         _fst2 = _filter_stmt(
                             c.get("filter"),
                             _FILTER_TARGET_SLOT.get(slot, "fig-center"))
-                        if _fst2:
-                            lines.append(_fst2)
+                        if _fst2: lines.append(_fst2)
                         lines.append(_note(
                             "WebGAL 运行时原生支持 Cubism2，"
                             "直接可玩（无需 .moc3 手工步骤）"))
@@ -2328,8 +2177,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                         fig_intervals.append(
                             (t0, t1, slot, "%s/model.json" % rel_ref,
                              _use_fid, lay))
-                    else:
-                        warn.append("Cubism2 模型拷贝失败，clip 跳过: %s" % path)
+                    else: warn.append("Cubism2 模型拷贝失败，clip 跳过: %s" % path)
                     continue
                 # ---- 规则 5：puppet 渲首帧 -> figure ----
                 slot = _slot(lay.get("x"))
@@ -2340,10 +2188,8 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 mode = _emit_puppet_png(c, path, out_png)
                 if mode == "placeholder" and not os.path.isfile(path):
                     warn.append("puppet 素材不可达，用占位立绘: %s" % (path or "(空)"))
-                elif mode == "pil":
-                    warn.append("puppet 渲染失败，退 PIL 原图: %s" % path)
-                if mode != "placeholder" or os.path.isfile(out_png):
-                    stats["files"] += 1
+                elif mode == "pil": warn.append("puppet 渲染失败，退 PIL 原图: %s" % path)
+                if mode != "placeholder" or os.path.isfile(out_png): stats["files"] += 1
                 extra = None
                 hint_dir = _cubism_hint_dir(path)
                 if hint_dir is not None and not cubism_seen:
@@ -2356,8 +2202,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                 with open(guide_src, "r", encoding="utf-8",
                                           errors="ignore") as gs:
                                     gf.write(gs.read())
-                            else:
-                                gf.write(_CUBISM_GUIDE)
+                            else: gf.write(_CUBISM_GUIDE)
                     except Exception as e:
                         warn.append("Cubism指引写出失败: %r" % e)
                 if hint_dir is not None:
@@ -2382,11 +2227,9 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     warn.append("音频素材缺失，已跳过: %s" % (raw_name or path))
                     continue
                 if dur >= AUDIO_BGM_MIN:
-                    if first_bgm is None:
-                        first_bgm = nm
+                    if first_bgm is None: first_bgm = nm
                     events.append((t0, 3, seq, ["bgm:%s;" % nm]))
-                else:
-                    events.append((t0, 3, seq, ["playEffect:%s;" % nm]))
+                else: events.append((t0, 3, seq, ["playEffect:%s;" % nm]))
                 seq += 1
             else:
                 warn.append("忽略无法映射的 clip: track=%s source.kind=%r id=%r"
@@ -2406,15 +2249,12 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         注意：台词循环在 clip 循环**之后**跑，此时 model.json 已落盘。
         """
         r = str(ref or "").replace("\\", "/")
-        if not r.lower().endswith(".json"):
-            return None
-        if r in _ref_keys_cache:
-            return _ref_keys_cache[r]
+        if not r.lower().endswith(".json"): return None
+        if r in _ref_keys_cache: return _ref_keys_cache[r]
         p = os.path.join(copy_map["figure"], *r.split("/"))
         info = None
         try:
-            if os.path.isfile(p):
-                info = _parse_cubism2_json(p)
+            if os.path.isfile(p): info = _parse_cubism2_json(p)
         except Exception:
             info = None
         _ref_keys_cache[r] = info
@@ -2428,34 +2268,27 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         也采用（单角色常见情形）；多条且全不命中 -> None（歧义不猜，
         调用方记「台词动作无落点」警告）。"""
         act = [iv for iv in fig_intervals if iv[0] <= t < iv[1]]
-        if not act:
-            return None
+        if not act: return None
 
         def _score(iv):
-            if not who:
-                return 0
+            if not who: return 0
             ref = str(iv[3]).replace("\\", "/")
             fn = ref.rstrip("/").split("/")[-1]
             base = fn.rsplit(".", 1)[0] if "." in fn else fn
             parent = ref.rstrip("/").split("/")[-2].lower() \
                 if "/" in ref.rstrip("/") else ""
             wl = who.lower()
-            if wl in (base.lower(), parent):
-                return 3
+            if wl in (base.lower(), parent): return 3
             for c in (base.lower(), parent):
-                if c and (wl in c or c in wl):
-                    return 2
+                if c and (wl in c or c in wl): return 2
             return 1 if wl in ref.lower() else 0
 
-        if len(act) == 1:
-            return act[0][2], act[0][3], act[0][4], act[0][5]
+        if len(act) == 1: return act[0][2], act[0][3], act[0][4], act[0][5]
         best, bi = -1, -1
         for i, iv in enumerate(act):
             s = _score(iv)
-            if s > best:
-                best, bi = s, i
-        if best <= 0:
-            return None
+            if s > best: best, bi = s, i
+        if best <= 0: return None
         return act[bi][2], act[bi][3], act[bi][4], act[bi][5]
 
     for d in (proj.get("dialogue") or []):
@@ -2475,8 +2308,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
             and d.get("expression") else None
         if mo or ex:
             hit = _dialogue_figure(t, who)
-            if hit is None:
-                warn.append("台词动作无落点: %s @%.2fs" % (who or "旁白", t))
+            if hit is None: warn.append("台词动作无落点: %s @%.2fs" % (who or "旁白", t))
             else:
                 slot, ref, fid, dlay = hit
                 key = (ref, mo or "", ex or "")
@@ -2486,8 +2318,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     if fid:
                         line = "changeFigure:%s -id=%s -transform=%s" % (
                             ref, fid, _transform_of(dlay, W, H))
-                    else:
-                        line = "changeFigure:%s -%s" % (ref, slot)
+                    else: line = "changeFigure:%s -%s" % (ref, slot)
                     # 台词级动作也要**校验键名**：这里写的是原样字符串，
                     # 若工程里存的是 "soyo/default"（素材里真实存在，但
                     # 不是任何 model.json 的键名），引擎运行时会请求一个
@@ -2499,20 +2330,14 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     if _keys:
                         _m2 = _match_motion_name(mo, _keys["motions"])
                         _e2 = _match_motion_name(ex, _keys["expressions"])
-                        if mo and not _m2:
-                            _mo_out = None
-                        if ex and not _e2:
-                            _ex_out = None
+                        if mo and not _m2: _mo_out = None
+                        if ex and not _e2: _ex_out = None
                         # default 保底：键名表里没有但素材里有 -> 直接引用
                         # （_add_default_expression 已把它写进 model.json）
-                        if mo and not _m2 and str(mo).endswith("/default"):
-                            _mo_out = mo
-                        if ex and not _e2 and str(ex).endswith("/default"):
-                            _ex_out = ex
-                    if _mo_out:
-                        line += " -motion=%s" % _mo_out
-                    if _ex_out:
-                        line += " -expression=%s" % _ex_out
+                        if mo and not _m2 and str(mo).endswith("/default"): _mo_out = mo
+                        if ex and not _e2 and str(ex).endswith("/default"): _ex_out = ex
+                    if _mo_out: line += " -motion=%s" % _mo_out
+                    if _ex_out: line += " -expression=%s" % _ex_out
                     events.append((t, 3.5, seq, [line + ";"]))
                     seq += 1
                     dialogue_prev_action[slot] = key        # v3.5：台词正文里的「空格+减号」要转义——引擎用 / -/ 切参数，
@@ -2527,11 +2352,9 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     # 导入端 `//`（DS 惯性）与 `;xxx;` 都收进载体，这里统一经 _comment()
     # 收口（体内 ASCII 分号/冒号转全角），同刻排最前（prio 0，段落头注释）。
     for cm in (proj.get("comments") or []):
-        if not isinstance(cm, dict):
-            continue
+        if not isinstance(cm, dict): continue
         ctxt = str(cm.get("text") or "").strip()
-        if not ctxt:
-            continue
+        if not ctxt: continue
         events.append((_f(cm.get("t")), -1, seq, [_comment(ctxt)]))
         seq += 1
 
@@ -2541,16 +2364,12 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     # 会静默丢掉 AI 写的全部滤镜。这些是**引擎原生指令**，不经 _comment()，
     # 原样直出（prio -0.5：排在注释之后、其他语句之前）。
     for ef in (proj.get("effects") or []):
-        if not isinstance(ef, dict):
-            continue
+        if not isinstance(ef, dict): continue
         cmd = str(ef.get("cmd") or "").strip()
-        if not cmd:
-            continue
+        if not cmd: continue
         head = cmd.split(":", 1)[0].strip()
-        if head not in ("setTransform", "setTempAnimation"):
-            continue
-        if ":" not in cmd:
-            continue
+        if head not in ("setTransform", "setTempAnimation"): continue
+        if ":" not in cmd: continue
         body = cmd.rstrip(";").strip()
         # 分号已被裁掉，补回语句结束符
         events.append((_f(ef.get("t")), -0.5, seq, [body + ";"]))
@@ -2599,8 +2418,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 _again = any(t >= _t - 0.005 and (t - _t) <= NONE_REJOIN_EPS
                              and i == _fid
                              for (t, _r, _s2, i) in _fig_events)
-                if _again:
-                    continue
+                if _again: continue
                 _keep.append((_t, _prio, _seq,
                               ["changeFigure:none -id=%s;" % _fid]))
                 continue
@@ -2622,8 +2440,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                 t >= _t - 0.005 and (t - _t) <= NONE_REJOIN_EPS
                 and s == _sl and r == _ref
                 for (t, r, s, _i) in _fig_events)
-            if _same_slot_rejoin:
-                continue      # 同角色紧接着回这个槽位 -> 换动作 -> 丢弃 none
+            if _same_slot_rejoin: continue      # 同角色紧接着回这个槽位 -> 换动作 -> 丢弃 none
             # 该角色不再回这个槽位：none 表示真退场，保留
             _keep.append((_t, _prio, _seq,
                           ["changeFigure:none -%s;" % _sl]))
@@ -2648,19 +2465,14 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         _enter = str(_tr.get("enter") or "")
         _exit = str(_tr.get("exit") or "")
         # 双保险：脏动画名（没经 sanitize 的工程 dict 直接进导出）退回默认
-        try:
+        with contextlib.suppress(Exception):
             import transitions as _TR
-            if _enter and not _TR.valid_anim(_enter):
-                _enter = ""
-            if _exit and not _TR.valid_anim(_exit):
-                _exit = ""
-        except Exception:
-            pass
+            if _enter and not _TR.valid_anim(_enter): _enter = ""
+            if _exit and not _TR.valid_anim(_exit): _exit = ""
         if _enter or _exit:
             _enter = _enter or TRANSITION_ENTER
             _exit = _exit or TRANSITION_EXIT
-    else:
-        _enter, _exit = TRANSITION_ENTER, TRANSITION_EXIT
+    else: _enter, _exit = TRANSITION_ENTER, TRANSITION_EXIT
     if TRANSITION_ON and has_content and (_enter or _exit):
         _tdone = ctx.get("trans_done")
         if not _tdone:
@@ -2683,8 +2495,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     act = ctx.get("act") if _ctx is not None else None
     tail, pseudo = _emit_branch_tail(act, ctx) if act else ([], [])
     if tail:
-        if not stmt_lines:
-            stmt_lines = list(_EMPTY_SCRIPT.splitlines())
+        if not stmt_lines: stmt_lines = list(_EMPTY_SCRIPT.splitlines())
         stmt_lines.extend(tail)
 
     if not stmt_lines:
@@ -2725,8 +2536,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
 
     # F2-L2：多幕时运行时段（playable/皮肤/core）由编排器统一收尾，
     # 各幕只负责生成 scene 文件。
-    if _ctx is not None:
-        return True, "", stats
+    if _ctx is not None: return True, "", stats
 
     # ---- 规则 11（E3）：playable=True -> 把运行时树拷入 out_dir ----
     if playable:
@@ -2757,10 +2567,8 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                             # 内容：scene/start.txt、config.txt、background/
                             # 等同名项必须保留我们的版本）。
                             _merge_missing(src, dst, warn)
-                        else:
-                            shutil.copytree(src, dst, dirs_exist_ok=True)
-                    else:
-                        shutil.copy2(src, dst)
+                        else: shutil.copytree(src, dst, dirs_exist_ok=True)
+                    else: shutil.copy2(src, dst)
                     stats["files"] += 1
                 except Exception as e:
                     warn.append("playable 拷贝失败 %s: %r" % (entry, e))
@@ -2770,8 +2578,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
         _slim_runtime_fonts(out_dir, warn, stats)
         # H1e（task-62）：file:// 双击黑屏根治——写自包含启动器（exe 优先/bat 兜底）
         lk, _ln = _inject_launcher(out_dir, warn)
-        if lk:
-            stats["launcher"] = lk
+        if lk: stats["launcher"] = lk
         # H1f（task-66）：版本哨兵（head 最顶，早于皮肤与 SW 注册）
         _inject_sentinel_playable(out_dir, warn, stats)
         # I2：可玩包皮肤注入（style=True 默认开）
@@ -2780,17 +2587,14 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                                      _runtime_version(rt_st, rt_dir),
                                      live_badge, warn):
                 stats["skin"] = "injected"
-            else:
-                stats["skin"] = "failed"
-        else:
-            stats["skin"] = "off"
+            else: stats["skin"] = "failed"
+        else: stats["skin"] = "off"
         # H1c：包内有 Cubism2 模型才需要 Live2D core（纯背景台词包零变化）
         if stats.get("model_dirs", 0) > 0:
             _inject_live2d_core(out_dir, rt_dir, warn, stats, playable=True)
     elif style:
         # 非 playable：内容包皮肤以 muppet.css + start.txt 注释交付
-        if _inject_skin_content_only(game_root, warn):
-            stats["skin"] = "css-only"
+        if _inject_skin_content_only(game_root, warn): stats["skin"] = "css-only"
     # H1c 非 playable：core 写 out_dir/lib/ + start.txt 手动补丁注释
     if not playable and stats.get("model_dirs", 0) > 0:
         _inject_live2d_core(out_dir, None, warn, stats, playable=False)
@@ -2843,5 +2647,4 @@ def main(argv=None):
         return 1
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == "__main__": sys.exit(main())

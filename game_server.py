@@ -14,6 +14,7 @@ import socketserver
 import sys
 import threading
 import webbrowser
+import contextlib
 
 
 def app_root():
@@ -63,14 +64,11 @@ def main():
     # 外层（进度显示 / 自动化测试）读不到「游戏已启动」这行，会以为它卡死。
     print("游戏已启动：%s" % url, flush=True)
     print("保持本窗口打开；关闭窗口即退出游戏服务。", flush=True)
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         with Server(("127.0.0.1", port), Quiet) as httpd:
             threading.Timer(0.5, lambda: webbrowser.open(url)).start()
             httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
     return 0
 
 
-if __name__ == "__main__":
-    sys.exit(main())
+if __name__ == "__main__": sys.exit(main())

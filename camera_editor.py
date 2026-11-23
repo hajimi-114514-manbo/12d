@@ -214,8 +214,7 @@ class CameraPathPanel(QWidget):
     def _on_load_tpl(self):
         name = self.cmb_tpl.currentText()
         k = CP.template_keys(name, self._level)
-        if k is None:
-            return
+        if k is None: return
         self.set_keys(k)
         self.lbl_state.setText("已载入模板「%s」（%s层）。可继续加段、改数值。"
                                % (name, "立绘" if self._level == "fig" else "背景"))
@@ -236,28 +235,23 @@ class CameraPathPanel(QWidget):
                     "%.1f" % float(kf.get("rotation") or 0.0)]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
-                if c == 0:
-                    it.setTextAlignment(Qt.AlignCenter)
-                else:
-                    it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if c == 0: it.setTextAlignment(Qt.AlignCenter)
+                else: it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 self.tbl.setItem(i, c, it)
         self.lbl_total.setText("总时长 %d ms（%d 段）"
                                % (int(CP.total_ms(kfs)), len(kfs)))
-        if self.tbl.rowCount() and not self.tbl.selectedItems():
-            self.tbl.selectRow(0)
+        if self.tbl.rowCount() and not self.tbl.selectedItems(): self.tbl.selectRow(0)
 
     def _cur_row(self):
         rows = self.tbl.selectionModel().selectedRows() \
             if self.tbl.selectionModel() else []
-        if rows:
-            return rows[0].row()
+        if rows: return rows[0].row()
         return 0 if self.tbl.rowCount() else -1
 
     def _on_pick(self):
         r = self._cur_row()
         kfs = self.keys()
-        if r < 0 or r >= len(kfs):
-            return
+        if r < 0 or r >= len(kfs): return
         kf = kfs[r]
         sc = kf.get("scale") or CP.DEFAULTS["scale"]
         po = kf.get("position") or CP.DEFAULTS["position"]
@@ -277,8 +271,7 @@ class CameraPathPanel(QWidget):
     def _on_spin(self):
         r = self._cur_row()
         kfs = self.keys()
-        if r < 0 or r >= len(kfs):
-            return
+        if r < 0 or r >= len(kfs): return
         kf = kfs[r]
         kf["duration"] = float(self.sp_dur.value())
         kf["scale"] = {"x": float(self.sp_sx.value()),
@@ -289,8 +282,7 @@ class CameraPathPanel(QWidget):
         # 保持选中行
         sel = r
         self._refresh_table()
-        if 0 <= sel < self.tbl.rowCount():
-            self.tbl.selectRow(sel)
+        if 0 <= sel < self.tbl.rowCount(): self.tbl.selectRow(sel)
 
     def _on_add(self):
         kfs = self.keys()
@@ -314,8 +306,7 @@ class CameraPathPanel(QWidget):
         kfs = self.keys()
         r = self._cur_row()
         j = r + dy
-        if r < 0 or not (0 <= j < len(kfs)):
-            return
+        if r < 0 or not (0 <= j < len(kfs)): return
         kfs[r], kfs[j] = kfs[j], kfs[r]
         self._refresh_table()
         self.tbl.selectRow(j)
@@ -342,8 +333,7 @@ class CameraPathPanel(QWidget):
             self._stop()
             return
         self._play_ms += self._timer.interval()
-        if self._play_ms > total:
-            self._play_ms = 0            # 循环播
+        if self._play_ms > total: self._play_ms = 0            # 循环播
         self._emit_preview(self._play_ms)
 
     def _emit_preview(self, ms):
@@ -363,8 +353,7 @@ class CameraPathPanel(QWidget):
         for lv, target in (("stage", CP.TARGET_STAGE),
                            ("fig", CP.TARGET_FIG)):
             kfs = self.keys(lv)
-            if CP.total_ms(kfs) <= 0:
-                continue
+            if CP.total_ms(kfs) <= 0: continue
             cmds.append({"level": lv,
                          "cmd": CP.build_cmd(kfs, target=target)})
         if not cmds:

@@ -24,6 +24,8 @@ import time
 import tempfile
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import contextlib
+import ui_toast as TOAST
 
 DEFAULT_PORT = 8765
 _MAX_BODY = 2 * 1024 * 1024      # 请求体 2MB 上限（防内存 DoS）
@@ -75,30 +77,24 @@ def _mt():
 def _make_source(kind, path):
     """构造 source dict：优先用 video_source 探测真实尺寸/时长。"""
     V = _vm()
-    try:
+    with contextlib.suppress(Exception):
         import video_source as VS
         src = VS.probe_source(path)
         if isinstance(src, dict) and src.get("path"):
             src["kind"] = kind
             return src
-    except Exception:
-        pass
     return V.new_source(kind, path)
 
 
 def _refresh(wb):
     """命令改动后的轻量刷新（失败不抛，命令仍返回成功）。"""
-    try:
-        wb._after_edit()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb._after_edit()
 
 
 def _track_by_name(wb, name):
     V = _vm()
     for tr in wb.proj.get("tracks", []):
-        if tr.get("name") == name:
-            return tr
+        if tr.get("name") == name: return tr
     return None
 
 
@@ -108,41 +104,29 @@ def _cmd_project_new(wb, args):
     w = int(args.get("w") or 1920)
     h = int(args.get("h") or 1080)
     fps = float(args.get("fps") or 30)
-    try:
-        wb._sources.close_all()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb._sources.close_all()
     wb.proj = V.new_project(w, h, fps)
     wb.proj["dialogue"] = []
-    try:
-        wb._apply_project(None)
-    except Exception:
-        pass
-    try:
-        wb.push_history()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb._apply_project(None)
+    with contextlib.suppress(Exception): wb.push_history()
     return True, "已新建工程 %dx%d @%gfps" % (w, h, fps), {"width": w, "height": h, "fps": fps}
 
 
 def _cmd_scene_set_bg(wb, args):
     V = _vm()
     path = str(args.get("path") or "")
-    if not path or not os.path.isfile(path):
-        return False, "背景图不存在: %s" % path, None
+    if not path or not os.path.isfile(path): return False, "背景图不存在: %s" % path, None
     dur = float(args.get("dur") or 10.0)
     tr = _track_by_name(wb, "BG")
     if tr is None:
         ok, msg, tid = V.add_track(wb.proj, "video", "BG")
-        if not ok:
-            return False, msg, None
+        if not ok: return False, msg, None
         tr = V.find_track(wb.proj, tid)
     src = _make_source("image", path)
     clip = V.new_clip(src, 0.0, dur)
     clip["layout"] = dict(V.default_layout())   # 满幅默认布局
     ok, cid = V.add_clip(wb.proj, tr["id"], clip)
-    if not ok:
-        return False, cid, None
+    if not ok: return False, cid, None
     _refresh(wb)
     return True, "已设置背景 %s" % os.path.basename(path), {"id": cid}
 
@@ -167,11 +151,9 @@ def _fig_track_for(wb, path):
         while _track_by_name(wb, name) is not None:
             name = "FIG-%s-%d" % (who, n)
             n += 1
-            if n > 99:
-                break
+            if n > 99: break
         ok, msg, tid = V.add_track(wb.proj, "video", name)
-        if not ok:
-            return None
+        if not ok: return None
         tr = V.find_track(wb.proj, tid)
     return tr
 
@@ -183,12 +165,9 @@ def _retire_overlapping(wb, tr, start, dur):
     for oc in list(tr.get("clips") or []):
         os_ = float(oc.get("start") or 0.0)
         oe = os_ + float(oc.get("dur") or 0.0)
-        if oe <= start or os_ >= ne:
-            continue
-        if os_ < start:
-            oc["dur"] = round(start - os_, 3)
-        else:
-            V.remove_clip(wb.proj, str(oc.get("id") or ""))
+        if oe <= start or os_ >= ne: continue
+        if os_ < start: oc["dur"] = round(start - os_, 3)
+        else: V.remove_clip(wb.proj, str(oc.get("id") or ""))
 
 
 # ---- 立绘自动排布（figure.add 不指定坐标时按同屏人数分位）----
@@ -206,12 +185,9 @@ def _auto_slot_x(n, index):
     1 人居中；2/3 人用预设（与剧本 left/center/right 观感一致）；
     >=4 人沿 [0.15, 0.85] 等分，避免叠在正中。index 从 0 起。
     """
-    if n <= 0:
-        return 0.5
-    if n in _AUTO_SLOT_X:
-        arr = _AUTO_SLOT_X[n]
-    else:
-        arr = tuple(0.15 + 0.70 * i / float(n - 1) for i in range(n))
+    if n <= 0: return 0.5
+    if n in _AUTO_SLOT_X: arr = _AUTO_SLOT_X[n]
+    else: arr = tuple(0.15 + 0.70 * i / float(n - 1) for i in range(n))
     idx = max(0, min(n - 1, int(index)))
     return round(arr[idx], 3)
 
@@ -229,14 +205,10 @@ def _on_screen_count(wb, V, start, exclude_track_id=None):
     except Exception:
         return 0
     for tr in tracks:
-        if not isinstance(tr, dict) or tr.get("hidden"):
-            continue
-        if tr.get("kind") != "video":
-            continue
-        if exclude_track_id and tr.get("id") == exclude_track_id:
-            continue
-        if not str(tr.get("name") or "").upper().startswith("FIG"):
-            continue
+        if not isinstance(tr, dict) or tr.get("hidden"): continue
+        if tr.get("kind") != "video": continue
+        if exclude_track_id and tr.get("id") == exclude_track_id: continue
+        if not str(tr.get("name") or "").upper().startswith("FIG"): continue
         for c in (tr.get("clips") or []):
             s = float(c.get("start") or 0.0)
             e = s + float(c.get("dur") or 0.0)
@@ -257,12 +229,9 @@ def _on_screen_fig_clips(wb, V, start):
     except Exception:
         return out
     for tr in tracks:
-        if not isinstance(tr, dict) or tr.get("hidden"):
-            continue
-        if tr.get("kind") != "video":
-            continue
-        if not str(tr.get("name") or "").upper().startswith("FIG"):
-            continue
+        if not isinstance(tr, dict) or tr.get("hidden"): continue
+        if tr.get("kind") != "video": continue
+        if not str(tr.get("name") or "").upper().startswith("FIG"): continue
         for c in (tr.get("clips") or []):
             s = float(c.get("start") or 0.0)
             e = s + float(c.get("dur") or 0.0)
@@ -278,10 +247,8 @@ def _auto_group_count(wb, V, start, exclude_track_id=None):
     显式坐标 / move 过的角色不算——它们不占自动槽。"""
     n = 0
     for tid, c in _on_screen_fig_clips(wb, V, start):
-        if exclude_track_id and tid == exclude_track_id:
-            continue
-        if bool((c.get("layout") or {}).get("auto_x")):
-            n += 1
+        if exclude_track_id and tid == exclude_track_id: continue
+        if bool((c.get("layout") or {}).get("auto_x")): n += 1
     return n
 
 
@@ -295,8 +262,7 @@ def _reflow_auto_figures(wb, V, start):
     pairs = _on_screen_fig_clips(wb, V, start)
     autos = [(tid, c) for tid, c in pairs
              if bool((c.get("layout") or {}).get("auto_x"))]
-    if not autos:
-        return
+    if not autos: return
     # 按入场顺序稳定排序（start 相同按 clip id），保证先来的在左
     autos.sort(key=lambda p: (float(p[1].get("start") or 0.0),
                               str(p[1].get("id") or "")))
@@ -311,8 +277,7 @@ def _reflow_auto_figures(wb, V, start):
 def _cmd_figure_add(wb, args):
     V = _vm()
     path = str(args.get("path") or "")
-    if not path or not os.path.exists(path):
-        return False, "素材路径不存在: %s" % path, None
+    if not path or not os.path.exists(path): return False, "素材路径不存在: %s" % path, None
     kind = args.get("kind")
     if not kind:
         # 目录含 rig_character.psd（木偶工程）或 model.json（Cubism2 整合包
@@ -335,8 +300,7 @@ def _cmd_figure_add(wb, args):
         start = 0.0
     # K1：同屏人数上限撤销——不再拒绝任何入场；同角色复用轨。
     tr = _fig_track_for(wb, path)
-    if tr is None:
-        return False, "建立绘轨失败", None
+    if tr is None: return False, "建立绘轨失败", None
     if not has_x or not has_y:
         # 新 clip 初值按「同屏自动组人数+1」；加入后统一重排到均匀位
         n = _auto_group_count(wb, V, start, exclude_track_id=tr["id"]) + 1
@@ -362,17 +326,14 @@ def _cmd_figure_add(wb, args):
     MT = _mt()
     for key in ("motion", "expression"):
         v = args.get(key)
-        if not v:
-            continue
+        if not v: continue
         ids = None
         if MT is not None:
             ids = set(MT.motion_ids() if key == "motion"
                       else MT.expression_ids())
-        if V._motion_value_ok(str(v), ids):
-            clip[key] = str(v)
+        if V._motion_value_ok(str(v), ids): clip[key] = str(v)
     ok, cid = V.add_clip(wb.proj, tr["id"], clip)
-    if not ok:
-        return False, cid, None
+    if not ok: return False, cid, None
     # 加入后重排同屏自动组：逐个入场也能最终均匀（用户选定语义）
     if not has_x:
         _reflow_auto_figures(wb, V, start)
@@ -391,8 +352,7 @@ def _cmd_figure_move(wb, args):
     V = _vm()
     cid = str(args.get("clip_id") or "")
     _tr, c = V.find_clip(wb.proj, cid)
-    if c is None:
-        return False, "找不到片段: %s" % cid, None
+    if c is None: return False, "找不到片段: %s" % cid, None
     # K1（task-69）：同屏上限撤销——start 位移只做时间移动不做人数检查；
     # x/y/scale/rot 直通任意值（无 snap，平移支持）。
     if args.get("start") is not None:
@@ -400,25 +360,16 @@ def _cmd_figure_move(wb, args):
             new_start = float(args.get("start"))
         except (TypeError, ValueError):
             return False, "start 非法", None
-        if new_start < 0:
-            return False, "start 非法", None
+        if new_start < 0: return False, "start 非法", None
         c["start"] = round(new_start, 3)
     lay = V.layout_at(c)
     for k in ("x", "y", "scale", "rot"):
-        if args.get(k) is not None:
-            lay[k] = float(args[k])
+        if args.get(k) is not None: lay[k] = float(args[k])
     # 手动调过位置 -> 退出自动重排组（AI 的安排优先，后续加人不再动它）
-    if args.get("x") is not None:
-        lay["auto_x"] = False
+    if args.get("x") is not None: lay["auto_x"] = False
     c["layout"] = lay
-    try:
-        wb.push_history()
-    except Exception:
-        pass
-    try:
-        wb.render_frame(wb._t)
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb.push_history()
+    with contextlib.suppress(Exception): wb.render_frame(wb._t)
     return True, "已移动 %s" % cid, dict(lay)
 
 
@@ -426,8 +377,7 @@ def _cmd_figure_remove(wb, args):
     V = _vm()
     cid = str(args.get("clip_id") or "")
     ok, msg = V.remove_clip(wb.proj, cid)
-    if not ok:
-        return False, msg or "删除失败", None
+    if not ok: return False, msg or "删除失败", None
     _refresh(wb)
     return True, "已删除 %s" % cid, None
 
@@ -436,20 +386,15 @@ def _cmd_motion_play(wb, args):
     V = _vm()
     cid = str(args.get("clip_id") or "")
     _tr, c = V.find_clip(wb.proj, cid)
-    if c is None:
-        return False, "找不到片段: %s" % cid, None
+    if c is None: return False, "找不到片段: %s" % cid, None
     MT = _mt()
     name = args.get("name")
     if name:
-        if MT is None:
-            return False, "motion_table 不可用", None
+        if MT is None: return False, "motion_table 不可用", None
         if str(name) not in MT.motion_ids():
             return True, "动作 %s 不在预置列表（仅提示）" % name, None
         c["motion"] = str(name)          # C2：set + seek 组合
-        try:
-            wb.push_history()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): wb.push_history()
     wb.seek(c["start"])
     return True, "已设置并跳转 %s 起点" % cid, {"t": float(c["start"]),
                                                "motion": c.get("motion", "")}
@@ -460,21 +405,16 @@ def _cmd_motion_set(wb, args):
     V = _vm()
     cid = str(args.get("clip_id") or "")
     _tr, c = V.find_clip(wb.proj, cid)
-    if c is None:
-        return False, "找不到片段: %s" % cid, None
+    if c is None: return False, "找不到片段: %s" % cid, None
     MT = _mt()
-    if MT is None:
-        return False, "motion_table 不可用", None
+    if MT is None: return False, "motion_table 不可用", None
     name = str(args.get("name") or "")
     ids = MT.motion_ids()
-    if name not in ids:
-        return False, "动作 %s 不在预置列表" % name, {"options": ids}
+    if name not in ids: return False, "动作 %s 不在预置列表" % name, {"options": ids}
     c["motion"] = name
-    try:
+    with contextlib.suppress(Exception):
         wb.push_history()
         wb.render_frame(wb._t)
-    except Exception:
-        pass
     return True, "已设置动作 %s" % name, {"motion": name}
 
 
@@ -483,29 +423,23 @@ def _cmd_expression_set(wb, args):
     V = _vm()
     cid = str(args.get("clip_id") or "")
     _tr, c = V.find_clip(wb.proj, cid)
-    if c is None:
-        return False, "找不到片段: %s" % cid, None
+    if c is None: return False, "找不到片段: %s" % cid, None
     MT = _mt()
-    if MT is None:
-        return False, "motion_table 不可用", None
+    if MT is None: return False, "motion_table 不可用", None
     name = str(args.get("name") or "")
     ids = MT.expression_ids()
-    if name not in ids:
-        return False, "表情 %s 不在预置列表" % name, {"options": ids}
+    if name not in ids: return False, "表情 %s 不在预置列表" % name, {"options": ids}
     c["expression"] = name
-    try:
+    with contextlib.suppress(Exception):
         wb.push_history()
         wb.render_frame(wb._t)
-    except Exception:
-        pass
     return True, "已设置表情 %s" % name, {"expression": name}
 
 
 def _cmd_catalog_get(wb, _args=None):
     """catalog.get{}：原样返回 motion_table.catalog()（DSH 直读）。"""
     MT = _mt()
-    if MT is None:
-        return False, "motion_table 不可用", None
+    if MT is None: return False, "motion_table 不可用", None
     return True, "", MT.catalog()
 
 
@@ -532,19 +466,11 @@ def _cmd_say(wb, args):
     mv = V._sanitize_preset(args.get("motion"), lambda: _ids("motion_ids"))
     ex = V._sanitize_preset(args.get("expression"),
                             lambda: _ids("expression_ids"))
-    if mv:
-        entry["motion"] = mv
-    if ex:
-        entry["expression"] = ex
+    if mv: entry["motion"] = mv
+    if ex: entry["expression"] = ex
     wb.proj.setdefault("dialogue", []).append(entry)
-    try:
-        wb.push_history()
-    except Exception:
-        pass
-    try:
-        wb.render_frame(wb._t)
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb.push_history()
+    with contextlib.suppress(Exception): wb.render_frame(wb._t)
     return True, "已添加台词" + ("（带动作）" if mv or ex else ""), \
         {"t": round(t, 3), "dur": round(dur, 3), "who": who,
          "motion": mv or "", "expression": ex or ""}
@@ -580,15 +506,13 @@ def _cmd_snapshot(wb, args):
 
 def _cmd_webgal_export(wb, args):
     out_dir = str(args.get("out_dir") or "")
-    if not out_dir:
-        return False, "缺少 out_dir", None
+    if not out_dir: return False, "缺少 out_dir", None
     try:
         import webgal_export as WX
     except ImportError:
         return False, "WebGAL 导出器未就绪(task-26)", None
     exp = getattr(WX, "export_game", None)
-    if exp is None:
-        return False, "WebGAL 导出器未就绪(task-26)", None
+    if exp is None: return False, "WebGAL 导出器未就绪(task-26)", None
     try:
         lb = args.get("live_badge", 0)
         try:
@@ -607,25 +531,19 @@ def _cmd_webgal_export(wb, args):
         return False, "WebGAL 导出异常: %s" % e, None
     # 兼容二元组(旧)与三元组(ok,msg,stats)——task-26 正式版返回三元组
     try:
-        if len(res) >= 3:
-            ok, msg, stats = res[0], res[1], res[2]
-        else:
-            ok, msg, stats = res[0], res[1], None
+        if len(res) >= 3: ok, msg, stats = res[0], res[1], res[2]
+        else: ok, msg, stats = res[0], res[1], None
     except (TypeError, ValueError, IndexError):
         return False, "WebGAL 导出器返回值异常: %r" % (res,), None
     data = {"out_dir": out_dir}
-    if isinstance(stats, dict):
-        data["stats"] = stats
+    if isinstance(stats, dict): data["stats"] = stats
     # F2-L5（v3.5）：导出前预检 —— 分支摘要 + 素材体检，**不阻断**，
     # 只是把「有什么问题」提前说清楚（用户之前是导出后才发现缺素材）。
-    try:
+    with contextlib.suppress(Exception):
         _pre = _branch_export_precheck(wb)
         if _pre:
             data["precheck"] = _pre
-            if _pre.get("summary"):
-                msg = ("%s\n%s" % (msg, _pre["summary"])).strip()
-    except Exception:
-        pass
+            if _pre.get("summary"): msg = ("%s\n%s" % (msg, _pre["summary"])).strip()
     return bool(ok), str(msg), data
 
 
@@ -638,9 +556,8 @@ def _branch_export_precheck(wb):
     out = {"acts": 0, "choices": 0, "jumps": 0, "missing": [],
            "summary": ""}
     proj = getattr(wb, "proj", None)
-    if not isinstance(proj, dict):
-        return {}
-    try:
+    if not isinstance(proj, dict): return {}
+    with contextlib.suppress(Exception):
         import video_model as V
         acts = [a for a in (proj.get("acts") or []) if isinstance(a, dict)]
         if acts:
@@ -648,21 +565,16 @@ def _branch_export_precheck(wb):
             out["choices"] = sum(len(a.get("choices") or []) for a in acts)
             out["jumps"] = sum(len(a.get("jumps") or []) for a in acts)
             out["next"] = sum(1 for a in acts if a.get("next"))
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         import asset_audit as AA
         rep = AA.audit_project(proj, getattr(wb, "proj_dir", None))
         out["missing"] = rep.get("missing") or []
         out["missing_total"] = len(out["missing"])
-    except Exception:
-        pass
     bits = []
     if out["acts"] > 1:
         bits.append("%d 幕 / %d 个选择点 / %d 个条件跳转"
                     % (out["acts"], out["choices"], out["jumps"]))
-    if out.get("missing_total"):
-        bits.append("素材缺失 %d 个（导出时会跳过）" % out["missing_total"])
+    if out.get("missing_total"): bits.append("素材缺失 %d 个（导出时会跳过）" % out["missing_total"])
     out["summary"] = "；".join(bits)
     return out
 
@@ -686,14 +598,11 @@ def _warn_count(msg):
     """从 import_script 的 msg「…警告 K」里取 K；解析不到回 0。"""
     s = str(msg or "")
     i = s.find("警告")
-    if i < 0:
-        return 0
+    if i < 0: return 0
     digits = ""
     for ch in s[i + len("警告"):]:
-        if ch.isdigit():
-            digits += ch
-        else:
-            break
+        if ch.isdigit(): digits += ch
+        else: break
     return int(digits) if digits else 0
 
 
@@ -730,14 +639,8 @@ def _load_proj_on_main(wb, proj, msg):
     """
     try:
         if getattr(wb, "_playing", False):
-            try:
-                wb.seek(0.0)
-            except Exception:
-                pass
-            try:
-                wb.stop_play()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): wb.seek(0.0)
+            with contextlib.suppress(Exception): wb.stop_play()
         wb._sources.close_all()
         wb.proj = proj
         wb._loading = True
@@ -749,12 +652,9 @@ def _load_proj_on_main(wb, proj, msg):
         tracks = len(proj.get("tracks", []))
         clips = sum(len(t.get("clips") or []) for t in proj.get("tracks", []))
         dialogue = len(proj.get("dialogue") or [])
-        try:
+        with contextlib.suppress(Exception):
             from qfluentwidgets import InfoBar, InfoBarPosition
-            InfoBar.success("脚本导入", msg, parent=wb,
-                            position=InfoBarPosition.TOP, duration=4000)
-        except Exception:
-            pass
+            TOAST.toast_ok(wb, "脚本导入", msg, duration=4000)
         return True, msg, {"tracks": tracks, "clips": clips,
                            "dialogue": dialogue, "warnings": _warn_count(msg)}
     except Exception as e:
@@ -805,13 +705,11 @@ def _assets_query(args):
     kind = args.get("kind")
     kind = str(kind).strip() if kind not in (None, "") else None
     tags = args.get("tags")
-    if isinstance(tags, str):
-        tags = [tags]
+    if isinstance(tags, str): tags = [tags]
     elif tags is not None and not isinstance(tags, (list, tuple)):
         return False, "tags 必须是字符串或字符串列表", None
     limit = args.get("limit", 30)
-    if limit is None:
-        limit = 30
+    if limit is None: limit = 30
     try:
         return WI.assets_query(kind=kind, tags=list(tags) if tags else None,
                                limit=limit)
@@ -840,16 +738,12 @@ def _cur_aid(wb):
     V = _vm()
     ids = V.act_ids(wb.proj)
     aid = getattr(wb, "_cur_aid", None)
-    if aid and aid in ids:
-        return aid
+    if aid and aid in ids: return aid
     return ids[0] if ids else "a1"
 
 
 def _set_cur_aid(wb, aid):
-    try:
-        wb._cur_aid = aid
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb._cur_aid = aid
 
 
 def _cmd_act_list(wb, _args=None):
@@ -872,8 +766,7 @@ def _cmd_act_add(wb, args):
     after = args.get("after")
     ok, msg, aid = V.add_act(wb.proj, str(name) if name else None,
                              str(after) if after else None)
-    if not ok:
-        return False, msg or "新增幕失败", None
+    if not ok: return False, msg or "新增幕失败", None
     _set_cur_aid(wb, aid)
     _refresh(wb)
     data = {"aid": aid, "upgraded": (not was_multi)}
@@ -900,8 +793,7 @@ def _cmd_act_rename(wb, args):
     V = _vm()
     aid = str(args.get("aid") or _cur_aid(wb))
     name = str(args.get("name") or "").strip()
-    if not name:
-        return False, "name 不能为空", None
+    if not name: return False, "name 不能为空", None
     ok, msg = V.rename_act(wb.proj, aid, name)
     return bool(ok), msg, ({"aid": aid, "name": name} if ok else None)
 
@@ -911,8 +803,7 @@ def _cmd_act_duplicate(wb, args):
     V = _vm()
     aid = str(args.get("aid") or _cur_aid(wb))
     ok, msg, new_aid = V.duplicate_act(wb.proj, aid)
-    if not ok:
-        return False, msg, None
+    if not ok: return False, msg, None
     _set_cur_aid(wb, new_aid)
     _refresh(wb)
     return True, msg or ("已复制为 %s" % new_aid), {"aid": new_aid, "from": aid}
@@ -923,10 +814,8 @@ def _cmd_act_remove(wb, args):
     V = _vm()
     aid = str(args.get("aid") or _cur_aid(wb))
     ok, msg, cleared = V.remove_act(wb.proj, aid)
-    if not ok:
-        return False, msg, None
-    if getattr(wb, "_cur_aid", None) == aid:
-        _set_cur_aid(wb, V.act_ids(wb.proj)[0])
+    if not ok: return False, msg, None
+    if getattr(wb, "_cur_aid", None) == aid: _set_cur_aid(wb, V.act_ids(wb.proj)[0])
     _refresh(wb)
     return True, msg or "已删除幕 %s" % aid, {"cleared_refs": cleared}
 
@@ -947,8 +836,7 @@ def _cmd_choice_set(wb, args):
     """
     V = _vm()
     act, aid = _act_of(wb, args)
-    if act is None:
-        return False, "幕不存在: %s" % aid, {"available": V.act_ids(wb.proj)}
+    if act is None: return False, "幕不存在: %s" % aid, {"available": V.act_ids(wb.proj)}
     opts = args.get("options")
     if opts is not None and not isinstance(opts, (list, tuple)):
         return False, "options 必须是列表", None
@@ -959,8 +847,7 @@ def _cmd_choice_set(wb, args):
             if ch.get("cid") == cid:
                 target = ch
                 break
-        if target is None:
-            return False, "选择点不存在: %s" % cid, None
+        if target is None: return False, "选择点不存在: %s" % cid, None
     else:
         if len(act.get("choices") or []) >= V.MAX_CHOICES_PER_ACT:
             return False, "本幕选择点已达上限 %d" % V.MAX_CHOICES_PER_ACT, None
@@ -972,18 +859,15 @@ def _cmd_choice_set(wb, args):
             target["t"] = max(0.0, float(args["t"]))
         except (TypeError, ValueError):
             return False, "t 非法", None
-    if args.get("prompt") is not None:
-        target["prompt"] = str(args["prompt"])
+    if args.get("prompt") is not None: target["prompt"] = str(args["prompt"])
     if opts is not None:
         if len(opts) > V.MAX_OPTIONS_PER_CHOICE:
             return False, "选项数超上限 %d" % V.MAX_OPTIONS_PER_CHOICE, None
         clean = []
         for o in opts:
-            if not isinstance(o, dict):
-                return False, "options 元素必须是对象", None
+            if not isinstance(o, dict): return False, "options 元素必须是对象", None
             txt = str(o.get("text") or "").strip()
-            if not txt:
-                return False, "选项 text 不能为空", None
+            if not txt: return False, "选项 text 不能为空", None
             e = {"text": txt, "target": str(o.get("target") or "")}
             if o.get("set"):
                 # option.set 契约 = 字符串列表（video_model._sanitize_str_list）。
@@ -995,8 +879,7 @@ def _cmd_choice_set(wb, args):
                 else:
                     e["set"] = [x.strip() for x in str(sv).split(";")
                                 if x.strip()]
-            if o.get("when"):
-                e["when"] = str(o["when"])
+            if o.get("when"): e["when"] = str(o["when"])
             clean.append(e)
         target["options"] = clean
     wb.push_history() if hasattr(wb, "push_history") else None
@@ -1009,8 +892,7 @@ def _cmd_choice_remove(wb, args):
     """choice.remove{aid?, cid} -> 删选择点。"""
     V = _vm()
     act, aid = _act_of(wb, args)
-    if act is None:
-        return False, "幕不存在: %s" % aid, None
+    if act is None: return False, "幕不存在: %s" % aid, None
     cid = str(args.get("cid") or "")
     lst = act.get("choices") or []
     for i, ch in enumerate(lst):
@@ -1025,15 +907,13 @@ def _cmd_jump_set(wb, args):
     """jump.set{aid?, t, when?, target} -> 设条件跳转（if:cond:target;）。"""
     V = _vm()
     act, aid = _act_of(wb, args)
-    if act is None:
-        return False, "幕不存在: %s" % aid, None
+    if act is None: return False, "幕不存在: %s" % aid, None
     try:
         t = max(0.0, float(args.get("t", 0.0)))
     except (TypeError, ValueError):
         return False, "t 非法", None
     target_scene = str(args.get("target") or "").strip()
-    if not target_scene:
-        return False, "target 不能为空", None
+    if not target_scene: return False, "target 不能为空", None
     # target 允许是本工程幕 id（导出时映射成 scene 名），也允许是外部 scene 名
     V.act_ids(wb.proj)
     j = {"t": t, "when": str(args.get("when") or ""), "target": target_scene}
@@ -1048,15 +928,13 @@ def _cmd_jump_remove(wb, args):
     """jump.remove{aid?, index} -> 按下标删跳转。"""
     V = _vm()
     act, aid = _act_of(wb, args)
-    if act is None:
-        return False, "幕不存在: %s" % aid, None
+    if act is None: return False, "幕不存在: %s" % aid, None
     try:
         idx = int(args.get("index", -1))
     except (TypeError, ValueError):
         return False, "index 非法", None
     lst = act.get("jumps") or []
-    if not (0 <= idx < len(lst)):
-        return False, "index 越界（共 %d 条）" % len(lst), None
+    if not (0 <= idx < len(lst)): return False, "index 越界（共 %d 条）" % len(lst), None
     lst.pop(idx)
     _refresh(wb)
     return True, "已删除第 %d 条跳转" % idx, {"aid": aid}
@@ -1066,8 +944,7 @@ def _cmd_act_next(wb, args):
     """act.next{aid?, target|null} -> 设/清单幕结尾的续幕（导出 changeScene）。"""
     V = _vm()
     act, aid = _act_of(wb, args)
-    if act is None:
-        return False, "幕不存在: %s" % aid, None
+    if act is None: return False, "幕不存在: %s" % aid, None
     tgt = args.get("target")
     if tgt in (None, ""):
         act["next"] = None
@@ -1075,10 +952,8 @@ def _cmd_act_next(wb, args):
         return True, "已清除幕 %s 的续接" % aid, {"aid": aid, "next": None}
     tgt = str(tgt)
     ids = V.act_ids(wb.proj)
-    if tgt not in ids:
-        return False, "目标幕不存在: %s" % tgt, {"available": ids}
-    if tgt == aid:
-        return False, "不能接回自己", None
+    if tgt not in ids: return False, "目标幕不存在: %s" % tgt, {"available": ids}
+    if tgt == aid: return False, "不能接回自己", None
     act["next"] = tgt
     _refresh(wb)
     return True, "幕 %s 结尾续接到 %s" % (aid, tgt), {"aid": aid, "next": tgt}
@@ -1088,8 +963,7 @@ def _cmd_var_set(wb, args):
     """var.set{name, default?} -> 声明/更新一个分支变量（工程级）。"""
     V = _vm()
     name = str(args.get("name") or "").strip()
-    if not name:
-        return False, "name 不能为空", None
+    if not name: return False, "name 不能为空", None
     # 变量名要做标识符安全化（导出会写进 setVar:name=...;）
     if not re.match(r"^[A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*$", name):
         return False, "name 只能由字母/数字/下划线/汉字组成且不以数字开头", None
@@ -1131,8 +1005,7 @@ def _cmd_act_script(wb, args):
     except ImportError:
         return False, "导出器未就绪（webgal_export 缺失）", None
     fn = getattr(WE, "render_branch_script", None)
-    if fn is None:
-        return False, "导出器尚未实现多幕脚本预览（F2-L2 未落地）", None
+    if fn is None: return False, "导出器尚未实现多幕脚本预览（F2-L2 未落地）", None
     try:
         res = fn(wb.proj, getattr(wb, "_proj_dir", None))
     except Exception as e:
@@ -1150,14 +1023,12 @@ def _cmd_assets_check(wb, args):
     ok 恒 True = 命令执行成功；缺失与否看 data.total / msg（与
     assets.query 读命令惯例一致）。"""
     import asset_audit as A
-    if wb is None or getattr(wb, "proj", None) is None:
-        return False, "无工程，无法体检", None
+    if wb is None or getattr(wb, "proj", None) is None: return False, "无工程，无法体检", None
     pdir = getattr(wb, "proj_dir", None) or getattr(wb, "_proj_dir", None)
     rep = A.audit_project(wb.proj, proj_dir=pdir)
     kind = str(args.get("kind") or "").strip().lower()
     full = rep["missing"]
-    if kind:
-        full = [m for m in full if m["kind"] == kind]
+    if kind: full = [m for m in full if m["kind"] == kind]
     limit = args.get("limit")
     try:
         limit = int(limit) if limit else 0
@@ -1168,8 +1039,7 @@ def _cmd_assets_check(wb, args):
     data = {"missing": shown, "total": len(full),
             "placeholder": rep["placeholder"], "real": rep["real"],
             "counts": rep["counts"], "lib": rep["lib"], "summary": summary}
-    if not full:
-        return True, "素材体检：无缺失", data
+    if not full: return True, "素材体检：无缺失", data
     return True, "素材体检缺 %d 项（占位符 %d / 真缺失 %d）——%s" % (
         len(full), rep["placeholder"], rep["real"], summary or "详见 data"), data
 
@@ -1205,43 +1075,30 @@ def _cmd_camera_apply(wb, args):
     preset = str(args.get("preset") or "")
     paths = []
     # target 归一：both=两层都写；bg-main/fig-center 只写那一层
-    if target in ("both", "", None):
-        want_layers = ("stage", "fig")
-    elif str(target).startswith("bg"):
-        want_layers = ("stage",)
-    else:
-        want_layers = ("fig",)
+    if target in ("both", "", None): want_layers = ("stage", "fig")
+    elif str(target).startswith("bg"): want_layers = ("stage",)
+    else: want_layers = ("fig",)
     for layer, tgt in (("stage", CP.TARGET_STAGE), ("fig", CP.TARGET_FIG)):
-        if layer not in want_layers:
-            continue
-        if isinstance(kfs, list) and kfs:
-            use = CP.normalize_keys(kfs)
-        elif preset:
-            use = CP.template_keys(preset, layer)
-        else:
-            return False, "需要 preset 或 keyframes 之一", None
+        if layer not in want_layers: continue
+        if isinstance(kfs, list) and kfs: use = CP.normalize_keys(kfs)
+        elif preset: use = CP.template_keys(preset, layer)
+        else: return False, "需要 preset 或 keyframes 之一", None
         if not use:
             return False, "找不到模板: %s（可用：%s）" % (
                 preset, ", ".join(CP.TEMPLATE_NAMES)), None
-        if CP.total_ms(use) <= 0 and preset != "恢复全部运镜":
-            continue
+        if CP.total_ms(use) <= 0 and preset != "恢复全部运镜": continue
         paths.append({"level": layer, "target": tgt,
                       "cmd": CP.build_cmd(use, target=tgt),
                       "keyframes": use, "total_ms": CP.total_ms(use)})
-    if not paths:
-        return False, "这段运镜没有时长（全是瞬切），没有可应用的内容", None
+    if not paths: return False, "这段运镜没有时长（全是瞬切），没有可应用的内容", None
 
     from PySide6.QtWidgets import QApplication
     wb._t = t
     effs = wb.proj.get("effects")
-    if not isinstance(effs, list):
-        effs = wb.proj["effects"] = []
+    if not isinstance(effs, list): effs = wb.proj["effects"] = []
     for p in paths:
         effs.append({"t": round(t, 3), "cmd": p["cmd"]})
-    try:
-        effs.sort(key=lambda x: float(x.get("t") or 0.0))
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): effs.sort(key=lambda x: float(x.get("t") or 0.0))
     wb.push_history()
     wb._after_edit()
     QApplication.processEvents()
@@ -1273,22 +1130,16 @@ def _cmd_light_apply(wb, args):
         t = float(getattr(wb, "_t", 0.0) or 0.0)
     layer = str(args.get("layer") or "both")
     effs = wb.proj.get("effects")
-    if not isinstance(effs, list):
-        effs = wb.proj["effects"] = []
+    if not isinstance(effs, list): effs = wb.proj["effects"] = []
     cmds = []
     for lay, tgt in (("bg", "bg-main"), ("fig", "fig-center")):
-        if layer != "both" and layer != lay:
-            continue
+        if layer != "both" and layer != lay: continue
         cmd = LE.to_transform_cmd(name, target=tgt)
         if cmd:
             cmds.append({"layer": lay, "target": tgt, "cmd": cmd})
             effs.append({"t": round(t, 3), "cmd": cmd})
-    if not cmds:
-        return False, "该预设没有可作用的层（target 不匹配）", None
-    try:
-        effs.sort(key=lambda x: float(x.get("t") or 0.0))
-    except Exception:
-        pass
+    if not cmds: return False, "该预设没有可作用的层（target 不匹配）", None
+    with contextlib.suppress(Exception): effs.sort(key=lambda x: float(x.get("t") or 0.0))
     wb._cur_light_name = name      # 供加投影时决定影子浓度
     wb.push_history()
     wb._after_edit()
@@ -1327,24 +1178,19 @@ def _cmd_shadow_add(wb, args):
     aid = getattr(wb, "_cur_aid", None)
     figs = []
     for tr in V._tracks_of(wb.proj, aid):
-        if not isinstance(tr, dict) or tr.get("kind") != "video":
-            continue
+        if not isinstance(tr, dict) or tr.get("kind") != "video": continue
         nm = str(tr.get("name") or "")
-        if not nm.upper().startswith("FIG"):
-            continue
+        if not nm.upper().startswith("FIG"): continue
         ch = nm[4:].lstrip("-_")
-        if who and ch != who:
-            continue
+        if who and ch != who: continue
         for c in (tr.get("clips") or []):
             figs.append((ch, tr, c))
-    if not figs:
-        return False, "没有找到立绘 clip（先 figure.add）", None
+    if not figs: return False, "没有找到立绘 clip（先 figure.add）", None
     ch, tr, c = figs[0]
     lay = V.layout_at(c)
     cur_light = getattr(wb, "_cur_light_name", None)
     conc = args.get("concentration")
-    if conc is None:
-        conc = CS.preset_concentration(cur_light) if cur_light else 0.38
+    if conc is None: conc = CS.preset_concentration(cur_light) if cur_light else 0.38
     try:
         conc = float(conc)
     except (TypeError, ValueError):
@@ -1380,8 +1226,7 @@ def _cmd_shadow_add(wb, args):
                 created = True
         except Exception:
             strack = None
-    if strack is None:
-        return False, "创建投影轨失败", None
+    if strack is None: return False, "创建投影轨失败", None
     try:
         sc = V.new_clip(V.new_source("image", png),
                         float(c.get("start") or 0.0),
@@ -1395,10 +1240,7 @@ def _cmd_shadow_add(wb, args):
     except Exception as e:
         return False, "添加投影失败: %s" % e, None
     wb.push_history()
-    try:
-        wb.timeline.refresh()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb.timeline.refresh()
     wb._after_edit()
     from PySide6.QtWidgets import QApplication
     QApplication.processEvents()
@@ -1417,18 +1259,12 @@ def _cmd_shadow_remove(wb, args):
     keep, removed = [], []
     for t in tracks:
         nm = str(t.get("name") or "").upper()
-        if nm.startswith(want):
-            removed.append(t.get("name"))
-        else:
-            keep.append(t)
-    if not removed:
-        return True, "没有匹配的投影轨", {"removed": []}
+        if nm.startswith(want): removed.append(t.get("name"))
+        else: keep.append(t)
+    if not removed: return True, "没有匹配的投影轨", {"removed": []}
     wb.proj["tracks"] = keep
     wb.push_history()
-    try:
-        wb.timeline.refresh()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb.timeline.refresh()
     wb._after_edit()
     return True, "已移除 %d 条投影轨" % len(removed), {"removed": removed}
 
@@ -1469,10 +1305,8 @@ def _cmd_batch_run(wb, args):
         elif action == "add_next":
             kw = {}
             if args.get("max_gap") is not None:
-                try:
+                with contextlib.suppress((TypeError, ValueError)):
                     kw["max_gap"] = float(args["max_gap"])
-                except (TypeError, ValueError):
-                    pass
             newp, st = BO.add_next_to_dialogue(wb.proj, aid=aid, **kw)
             msg = "为 %d 句连续台词加上 -next" % st["updated"]
         elif action == "auto_exit":
@@ -1482,8 +1316,7 @@ def _cmd_batch_run(wb, args):
         elif action == "retime":
             kw = {}
             for k in ("chars_per_sec", "min_dur", "keep_longer"):
-                if args.get(k) is not None:
-                    kw[k] = args[k]
+                if args.get(k) is not None: kw[k] = args[k]
             newp, st = BO.retime_dialogue(wb.proj, aid=aid, **kw)
             msg = "按字数调整 %d 句台词时长" % st["updated"]
         else:
@@ -1497,10 +1330,7 @@ def _cmd_batch_run(wb, args):
     if changed:
         wb.proj = newp
         wb.push_history()
-        try:
-            wb.timeline.refresh()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): wb.timeline.refresh()
         wb._after_edit()
         from PySide6.QtWidgets import QApplication
         QApplication.processEvents()
@@ -1513,13 +1343,11 @@ def _cmd_track_add(wb, args):
     """新建轨道。args: kind=video|audio, name, act(aid 可选)。"""
     V = _vm()
     kind = str(args.get("kind") or "video")
-    if kind not in ("video", "audio"):
-        return False, "kind 只能是 video/audio", None
+    if kind not in ("video", "audio"): return False, "kind 只能是 video/audio", None
     name = str(args.get("name") or ("%s轨" % kind))
     aid = args.get("act") or getattr(wb, "_cur_aid", None)
     ok, msg, tid = V.add_track(wb.proj, kind, name, aid=aid)
-    if not ok:
-        return False, msg, None
+    if not ok: return False, msg, None
     wb.push_history()
     wb._after_edit()
     return True, "已建轨 %s（%s）" % (name, tid), {"track_id": tid, "name": name}
@@ -1531,12 +1359,10 @@ def _cmd_track_list(wb, args):
     aid = getattr(wb, "_cur_aid", None)
     out = []
     for tr in V._tracks_of(wb.proj, aid):
-        if not isinstance(tr, dict):
-            continue
+        if not isinstance(tr, dict): continue
         clips = []
         for c in (tr.get("clips") or []):
-            if not isinstance(c, dict):
-                continue
+            if not isinstance(c, dict): continue
             src = c.get("source") or {}
             clips.append({
                 "id": c.get("id"), "start": c.get("start"),
@@ -1564,30 +1390,23 @@ def _cmd_clip_add(wb, args):
     V = _vm()
     import os as _os
     path = str(args.get("path") or "")
-    if not path or not _os.path.exists(path):
-        return False, "素材不存在: %s" % path, None
+    if not path or not _os.path.exists(path): return False, "素材不存在: %s" % path, None
     kind = str(args.get("kind") or "")
     if not kind:
         ext = _os.path.splitext(path)[1].lower()
-        if ext in (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac"):
-            kind = "audio"
-        elif ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
-            kind = "video"
-        elif _os.path.isdir(path):
-            kind = "puppet"
-        else:
-            kind = "image"
+        if ext in (".mp3", ".wav", ".flac", ".m4a", ".ogg", ".aac"): kind = "audio"
+        elif ext in (".mp4", ".mov", ".avi", ".mkv", ".webm"): kind = "video"
+        elif _os.path.isdir(path): kind = "puppet"
+        else: kind = "image"
     aid = getattr(wb, "_cur_aid", None)
     want = str(args.get("track") or "")
     tr = None
     for t in V._tracks_of(wb.proj, aid):
-        if not isinstance(t, dict):
-            continue
+        if not isinstance(t, dict): continue
         if want and (str(t.get("id")) == want or str(t.get("name")) == want):
             tr = t
             break
-    if tr is None and want:
-        return False, "找不到轨道: %s" % want, None
+    if tr is None and want: return False, "找不到轨道: %s" % want, None
     if tr is None:
         # 自动选：音频找 audio 轨，其余找第一条 video 轨，都没有就建
         need_kind = "audio" if kind == "audio" else "video"
@@ -1599,32 +1418,26 @@ def _cmd_clip_add(wb, args):
             ok, msg, tid = V.add_track(wb.proj, need_kind,
                                        "%s轨" % ("音频" if need_kind == "audio"
                                                 else "视频"), aid=aid)
-            if not ok:
-                return False, "建轨失败: %s" % msg, None
+            if not ok: return False, "建轨失败: %s" % msg, None
             for t in V._tracks_of(wb.proj, aid):
                 if isinstance(t, dict) and str(t.get("id")) == str(tid):
                     tr = t
                     break
-    if tr is None:
-        return False, "无法确定目标轨道", None
+    if tr is None: return False, "无法确定目标轨道", None
     try:
         src = V.new_source(kind, path)
         start = float(args.get("start") or 0.0)
         dur = args.get("dur")
-        if dur is None:
-            dur = float(src.get("src_dur") or 0.0) or 5.0
+        if dur is None: dur = float(src.get("src_dur") or 0.0) or 5.0
         dur = float(dur)
         c = V.new_clip(src, start, dur, src_in=float(args.get("src_in") or 0.0))
         # 可选 layout
         lay = args.get("layout")
-        if isinstance(lay, dict):
-            c["layout"] = dict(c.get("layout") or {}, **lay)
+        if isinstance(lay, dict): c["layout"] = dict(c.get("layout") or {}, **lay)
         elif args.get("x") is not None or args.get("y") is not None:
             c["layout"] = dict(c.get("layout") or {})
-            if args.get("x") is not None:
-                c["layout"]["x"] = float(args["x"])
-            if args.get("y") is not None:
-                c["layout"]["y"] = float(args["y"])
+            if args.get("x") is not None: c["layout"]["x"] = float(args["x"])
+            if args.get("y") is not None: c["layout"]["y"] = float(args["y"])
             if args.get("scale") is not None:
                 c["layout"]["scale"] = float(args["scale"])
         tr.setdefault("clips", []).append(c)
@@ -1651,19 +1464,16 @@ def _find_clip_checked(wb, cid, track_hint=None):
     aid = getattr(wb, "_cur_aid", None)
     hits = []
     for tr in V._tracks_of(wb.proj, aid):
-        if not isinstance(tr, dict):
-            continue
+        if not isinstance(tr, dict): continue
         for c in (tr.get("clips") or []):
             if isinstance(c, dict) and str(c.get("id")) == str(cid):
                 hits.append((tr, c))
-    if not hits:
-        return None, None, "找不到 clip: %s" % cid
+    if not hits: return None, None, "找不到 clip: %s" % cid
     if track_hint:
         want = str(track_hint)
         hits = [(t, c) for t, c in hits
                 if str(t.get("id")) == want or str(t.get("name")) == want]
-        if not hits:
-            return None, None, "在轨道 %s 上找不到 clip %s" % (track_hint, cid)
+        if not hits: return None, None, "在轨道 %s 上找不到 clip %s" % (track_hint, cid)
     if len(hits) > 1:
         names = [t.get("name") for t, _ in hits]
         return None, None, ("clip id %s 在多个轨道重复（%s）——"
@@ -1675,17 +1485,13 @@ def _find_clip_checked(wb, cid, track_hint=None):
 def _cmd_clip_move(wb, args):
     """移动 clip。args: id, start（可选 delta 秒）, track（消歧）。"""
     cid = str(args.get("id") or "")
-    if not cid:
-        return False, "缺少 id", None
+    if not cid: return False, "缺少 id", None
     tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
-    if c is None:
-        return False, err, None
-    if args.get("start") is not None:
-        c["start"] = max(0.0, float(args["start"]))
+    if c is None: return False, err, None
+    if args.get("start") is not None: c["start"] = max(0.0, float(args["start"]))
     elif args.get("delta") is not None:
         c["start"] = max(0.0, float(c.get("start") or 0) + float(args["delta"]))
-    else:
-        return False, "需要 start 或 delta", None
+    else: return False, "需要 start 或 delta", None
     wb.push_history()
     wb._after_edit()
     return True, "已移动 clip 到 %.2fs（轨 %s）" % (c["start"], tr.get("name")), {
@@ -1696,15 +1502,12 @@ def _cmd_clip_trim(wb, args):
     """裁剪 clip。args: id, dur / src_in, track（消歧）。"""
     cid = str(args.get("id") or "")
     tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
-    if c is None:
-        return False, err, None
+    if c is None: return False, err, None
     if args.get("dur") is not None:
         d = float(args["dur"])
-        if d <= 0:
-            return False, "dur 必须 > 0", None
+        if d <= 0: return False, "dur 必须 > 0", None
         c["dur"] = d
-    if args.get("src_in") is not None:
-        c["src_in"] = max(0.0, float(args["src_in"]))
+    if args.get("src_in") is not None: c["src_in"] = max(0.0, float(args["src_in"]))
     wb.push_history()
     wb._after_edit()
     return True, "已调整 clip（dur=%.2f src_in=%.2f，轨 %s）" % (
@@ -1717,8 +1520,7 @@ def _cmd_clip_remove(wb, args):
     """删除 clip。args: id, track（消歧）。"""
     cid = str(args.get("id") or "")
     tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
-    if c is None:
-        return False, err, None
+    if c is None: return False, err, None
     try:
         tr["clips"].remove(c)
     except ValueError:
@@ -1732,8 +1534,7 @@ def _cmd_clip_split(wb, args):
     """在 t 处切分 clip。args: id, t, track（消歧）。"""
     cid = str(args.get("id") or "")
     tr, c, err = _find_clip_checked(wb, cid, args.get("track"))
-    if c is None:
-        return False, err, None
+    if c is None: return False, err, None
     t = float(args.get("t") or 0.0)
     s0 = float(c.get("start") or 0)
     d0 = float(c.get("dur") or 0)
@@ -1747,7 +1548,7 @@ def _cmd_clip_split(wb, args):
     #   ① 先跑 fix_ids 把 id 修唯一（返回新 proj，引用全变）
     #   ② 用 (轨名, start) 在新 proj 里重新定位目标 clip
     # 否则会出现「报成功但目标 clip 没变」（测试 B9 踩到）。
-    try:
+    with contextlib.suppress(Exception):
         import batch_ops as _BO
         _newp, _st = _BO.fix_ids(wb.proj)
         if any((_st or {}).values()):
@@ -1762,26 +1563,18 @@ def _cmd_clip_split(wb, args):
                             abs(float(_c.get("start") or 0) - s0) < 1e-6:
                         tr, c = _t, _c
                         break
-                if c is not None:
-                    break
-    except Exception:
-        pass
-    if c is None:
-        return False, "切分前重新定位失败（工程结构已变）", None
+                if c is not None: break
+    if c is None: return False, "切分前重新定位失败（工程结构已变）", None
     cid2 = str(c.get("id"))
     try:
         # split_clip 返回 (ok, msg, 右段id) —— 3 元组，不是 2 元组
         r = V.split_clip(wb.proj, cid2, t)
-        if isinstance(r, tuple) and len(r) >= 3:
-            ok, msg = r[0], r[1]
-        elif isinstance(r, tuple) and len(r) == 2:
-            ok, msg = r
-        else:
-            ok, msg = bool(r), "已切分"
+        if isinstance(r, tuple) and len(r) >= 3: ok, msg = r[0], r[1]
+        elif isinstance(r, tuple) and len(r) == 2: ok, msg = r
+        else: ok, msg = bool(r), "已切分"
     except Exception as e:
         return False, "切分失败: %s: %s" % (type(e).__name__, e), None
-    if not ok:
-        return False, msg, None
+    if not ok: return False, msg, None
     wb.push_history()
     wb._after_edit()
     return True, "已在 %.2fs 切分" % t, {"t": t, "detail": str(msg)}
@@ -1795,10 +1588,8 @@ def _cmd_film_filter(wb, args):
             "filters": [{"name": f["name"], "desc": f.get("desc")}
                         for f in FF.FILM_FILTERS]}
     name = str(args.get("name") or "")
-    if not name:
-        return False, "需要 name（传 list=true 可查看全部）", None
-    if FF.by_name(name) is None:
-        return False, "未知滤镜: %s" % name, None
+    if not name: return False, "需要 name（传 list=true 可查看全部）", None
+    if FF.by_name(name) is None: return False, "未知滤镜: %s" % name, None
     wb._apply_film_filter(name)
     from PySide6.QtWidgets import QApplication
     QApplication.processEvents()
@@ -1821,12 +1612,9 @@ def _cmd_stage_effect(wb, args):
     eff = None
     if name:
         eff = SE.by_name(name)
-        if eff is None:
-            return False, "未知特效: %s（传 list=true 查看分类）" % name, None
-    elif code:
-        eff = {"name": "自定义", "code": [str(code)]}
-    else:
-        return False, "需要 name 或 code（传 list=true 查看分类）", None
+        if eff is None: return False, "未知特效: %s（传 list=true 查看分类）" % name, None
+    elif code: eff = {"name": "自定义", "code": [str(code)]}
+    else: return False, "需要 name 或 code（传 list=true 查看分类）", None
     wb._apply_stage_effect(eff)
     from PySide6.QtWidgets import QApplication
     QApplication.processEvents()
@@ -1840,8 +1628,7 @@ def _cmd_transition_set(wb, args):
         return True, "共 %d 个转场" % len(TR.catalog()), {
             "transitions": TR.catalog()}
     name = str(args.get("name") or "")
-    if not name:
-        return False, "需要 name（传 list=true 可查看）", None
+    if not name: return False, "需要 name（传 list=true 可查看）", None
     wb._apply_transition(name)
     from PySide6.QtWidgets import QApplication
     QApplication.processEvents()
@@ -1876,8 +1663,7 @@ def _cmd_export_run(wb, args):
         real = path
         if not _os.path.isfile(real):
             alt = _os.path.splitext(path)[0] + ".wav"
-            if _os.path.isfile(alt):
-                real = alt
+            if _os.path.isfile(alt): real = alt
         return True, "已导出 %s -> %s" % (kind, real), {"path": real,
                                                     "exists": _os.path.isfile(real)}
     return False, "kind 只能是 video/audio/srt", None
@@ -1886,10 +1672,8 @@ def _cmd_export_run(wb, args):
 def _cmd_project_save(wb, args):
     """保存工程。args: path（可选，另存为）。"""
     try:
-        if args.get("path"):
-            wb.save_as(str(args["path"]))
-        else:
-            wb.save_project()
+        if args.get("path"): wb.save_as(str(args["path"]))
+        else: wb.save_project()
     except Exception as e:
         return False, "保存失败: %s" % e, None
     return True, "已保存", {"dir": getattr(wb, "proj_dir", None)}
@@ -1913,13 +1697,10 @@ def _cmd_timeline_play(wb, args):
             wb.seek(float(args["t"]))
             return True, "已跳到 %.2fs" % float(args["t"]), {"t": wb._t}
         if a == "play":
-            if not getattr(wb, "_playing", False):
-                wb.toggle_play()
+            if not getattr(wb, "_playing", False): wb.toggle_play()
         elif a in ("pause", "stop"):
-            if getattr(wb, "_playing", False):
-                wb.toggle_play()
-        else:
-            wb.toggle_play()
+            if getattr(wb, "_playing", False): wb.toggle_play()
+        else: wb.toggle_play()
     except Exception as e:
         return False, "播放控制失败: %s" % e, None
     return True, "已执行 %s" % a, {"playing": getattr(wb, "_playing", False),
@@ -1991,8 +1772,7 @@ _HANDLERS = {
 def run_command(wb, cmd, args):
     """主线程执行一条命令，返回 (ok, msg, data)。未知命令/异常都回 ok=False。"""
     fn = _HANDLERS.get(str(cmd or ""))
-    if fn is None:
-        return False, "未知命令: %s" % cmd, None
+    if fn is None: return False, "未知命令: %s" % cmd, None
     try:
         return fn(wb, args)
     except Exception as e:
@@ -2002,18 +1782,14 @@ def run_command(wb, cmd, args):
 def drain():
     """主线程：排空待处理命令队列（由 _schedule 触发）。"""
     wb = _WB
-    if wb is None:
-        return
+    if wb is None: return
     while True:
         try:
             cmd, args, reply = _PENDING.get_nowait()
         except queue.Empty:
             return
         ok, msg, data = run_command(wb, cmd, args)
-        try:
-            reply.put({"ok": ok, "msg": msg, "data": data})
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): reply.put({"ok": ok, "msg": msg, "data": data})
 
 
 def _schedule(wb, fn):
@@ -2023,11 +1799,9 @@ def _schedule(wb, fn):
     QTimer.singleShot(0, wb, fn)（**必须带 receiver**，否则单 Shot 会绑定到
     调用方线程——HTTP 线程没有事件循环，定时器永不触发）。Qt 只在这里惰性
     import，模块 import 期保持纯 stdlib。"""
-    try:
+    with contextlib.suppress(Exception):
         wb.after(0, fn)
         return
-    except Exception:
-        pass
     from PySide6.QtCore import QTimer
     QTimer.singleShot(0, wb, fn)
 
@@ -2048,10 +1822,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         except Exception:
-            try:
-                self.close_connection = True
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self.close_connection = True
 
     def _handle(self, cmd, args):
         wb = _WB
@@ -2129,10 +1900,8 @@ class _Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/ping":
             self._send(200, {"ok": True, "version": _read_version(), "port": _port()})
-        elif path == "/state":
-            self._handle("state.get", {})
-        else:
-            self._send(404, {"ok": False, "msg": "未知路由: %s" % path})
+        elif path == "/state": self._handle("state.get", {})
+        else: self._send(404, {"ok": False, "msg": "未知路由: %s" % path})
 
     def do_POST(self):
         path = self.path.split("?")[0]
@@ -2164,15 +1933,13 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             raw = self.rfile.read(length) if length > 0 else b""
             req = json.loads(raw.decode("utf8")) if raw else {}
-            if not isinstance(req, dict):
-                raise ValueError("请求体不是 JSON object")
+            if not isinstance(req, dict): raise ValueError("请求体不是 JSON object")
         except Exception as e:
             self._send(400, {"ok": False, "msg": "JSON 解析失败: %s" % e})
             return
         cmd = str(req.get("cmd") or "")
         args = req.get("args")
-        if not isinstance(args, dict):
-            args = {}
+        if not isinstance(args, dict): args = {}
         if not cmd:
             self._send(400, {"ok": False, "msg": "缺少 cmd"})
             return
@@ -2182,8 +1949,7 @@ class _Handler(BaseHTTPRequestHandler):
 def start(wb):
     """启动 DSH 联动服务（模块级单例，幂等）。返回实际端口。"""
     global _SERVER, _THREAD, _WB, _PORT
-    if _SERVER is not None:
-        return _PORT
+    if _SERVER is not None: return _PORT
     _WB = wb
     _PORT = _port()
     try:
@@ -2203,21 +1969,13 @@ def stop():
     """停止服务（幂等）：shutdown + 线程退出。"""
     global _SERVER, _THREAD, _WB
     server = _SERVER
-    if server is None:
-        return
+    if server is None: return
     _SERVER = None
     _WB = None
-    try:
-        server.shutdown()
-    except Exception:
-        pass
-    try:
-        server.server_close()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): server.shutdown()
+    with contextlib.suppress(Exception): server.server_close()
     t = _THREAD
-    if t is not None and t.is_alive():
-        t.join(timeout=3)
+    if t is not None and t.is_alive(): t.join(timeout=3)
     _THREAD = None
 
 

@@ -42,6 +42,7 @@ import io
 import json
 import os
 import string
+import contextlib
 
 _APPDIR = os.path.dirname(os.path.abspath(__file__))
 _REG_KEY = r"Software\MuppetStudio"
@@ -60,11 +61,9 @@ def _memo_path():
     base = os.environ.get("APPDATA") or os.environ.get("LOCALAPPDATA")
     if base:
         d = os.path.join(base, "MuppetStudio")
-        try:
+        with contextlib.suppress(Exception):
             os.makedirs(d, exist_ok=True)
             return os.path.join(d, _MEMO_NAME)
-        except Exception:
-            pass
     return os.path.join(_APPDIR, _MEMO_NAME)
 
 
@@ -76,11 +75,9 @@ def _is_lib(d):
 def _env_dir():
     """env MUPPET_ASSET_INDEX -> 目录（传 json 则取父目录）；未设 None。"""
     env = os.environ.get("MUPPET_ASSET_INDEX", "").strip()
-    if not env:
-        return None
+    if not env: return None
     p = os.path.normpath(env)
-    if os.path.isfile(p) or p.lower().endswith(".json"):
-        return os.path.dirname(p)
+    if os.path.isfile(p) or p.lower().endswith(".json"): return os.path.dirname(p)
     return p
 
 
@@ -99,12 +96,10 @@ def _reg_dir():
 def candidates():
     """候选目录列表（按优先级）。env 设置时**只返回它**（硬限定）。"""
     env = _env_dir()
-    if env is not None:
-        return [env]
+    if env is not None: return [env]
     out = []
     memo = _memo_dir()
-    if memo:
-        out.append(memo)
+    if memo: out.append(memo)
     out.extend([
         os.path.join(_APPDIR, "asset_library"),
         os.path.normpath(os.path.join(_APPDIR, "..", "webgal_games",
@@ -112,8 +107,7 @@ def candidates():
         os.path.normpath(os.path.join(_APPDIR, "..", "asset_library")),
     ])
     reg = _reg_dir()
-    if reg:
-        out.append(reg)
+    if reg: out.append(reg)
     return out
 
 
@@ -123,20 +117,17 @@ def _memo_dir():
         o = json.load(io.open(_memo_path(), encoding="utf-8"))
     except Exception:
         return None
-    if not isinstance(o, dict):
-        return None
+    if not isinstance(o, dict): return None
     d = o.get("dir")
     # 必须是字符串（`{"dir": 123}` 这种脏数据不能变成 "123" 当路径用）
-    if not isinstance(d, str):
-        return None
+    if not isinstance(d, str): return None
     d = d.strip()
     return os.path.normpath(d) if d else None
 
 
 def remember_dir(d):
     """把素材库目录记住（写用户数据）。失败静默（记忆丢了不影响本次使用）。"""
-    if not d:
-        return False
+    if not d: return False
     try:
         json.dump({"dir": os.path.normpath(str(d)), "ts": int(__import__(
             "time").time())},
@@ -151,8 +142,7 @@ def forget_dir():
     """清除记忆（测试/用户改路径时用）。"""
     try:
         p = _memo_path()
-        if os.path.isfile(p):
-            os.remove(p)
+        if os.path.isfile(p): os.remove(p)
         return True
     except Exception:
         return False
@@ -172,15 +162,13 @@ def _scan_roots():
     # 盘符根
     for ch in string.ascii_uppercase:
         d = "%s:\\" % ch
-        if os.path.isdir(d):
-            roots.append(d)
+        if os.path.isdir(d): roots.append(d)
     # 去重保序
     seen = set()
     out = []
     for r in roots:
         k = os.path.normcase(os.path.normpath(r))
-        if k in seen:
-            continue
+        if k in seen: continue
         seen.add(k)
         out.append(r)
     return out
@@ -207,24 +195,20 @@ def scan_for_library(max_candidates=4000):
         nonlocal n
         n += 1
         k = os.path.normcase(os.path.normpath(d))
-        if k in seen:
-            return None
+        if k in seen: return None
         seen.add(k)
-        if _is_lib(d):
-            return d
+        if _is_lib(d): return d
         return None
 
     # 先看已知候选（快路径，绝大多数情况这里就命中）
     for d in candidates():
         r = check(d)
-        if r:
-            return r
+        if r: return r
 
     roots = _scan_roots()
     # 第一层：根的直接子目录
     for root in roots:
-        if n > max_candidates:
-            return None
+        if n > max_candidates: return None
         try:
             subs = os.listdir(root)
         except Exception:
@@ -232,27 +216,20 @@ def scan_for_library(max_candidates=4000):
         # 先查名字像素材库的
         subs.sort(key=lambda x: (0 if x.lower() in _HINT_NAMES else 1, x.lower()))
         for sub in subs:
-            if n > max_candidates:
-                return None
+            if n > max_candidates: return None
             p = os.path.join(root, sub)
-            if not os.path.isdir(p):
-                continue
+            if not os.path.isdir(p): continue
             r = check(p)
-            if r:
-                return r
+            if r: return r
             # 名字像容器目录的，再往下一层找 asset_library
             if sub.lower() in _HINT_NAMES:
-                try:
+                with contextlib.suppress(Exception):
                     for sub2 in os.listdir(p):
-                        if n > max_candidates:
-                            return None
+                        if n > max_candidates: return None
                         p2 = os.path.join(p, sub2)
                         if os.path.isdir(p2):
                             r = check(p2)
-                            if r:
-                                return r
-                except Exception:
-                    pass
+                            if r: return r
     return None
 
 
@@ -270,18 +247,15 @@ def ensure_library(scan=True, force_rescan=False):
     if not force_rescan:
         # 记忆优先
         memo = _memo_dir()
-        if memo and _is_lib(memo):
-            return memo
+        if memo and _is_lib(memo): return memo
         # 其余已知候选
         for d in candidates():
             if _is_lib(d):
                 # 顺手记住（下次少走分支）
-                if d != memo:
-                    remember_dir(d)
+                if d != memo: remember_dir(d)
                 return d
 
-    if not scan:
-        return None
+    if not scan: return None
 
     found = scan_for_library()
     if found:
@@ -298,10 +272,8 @@ def available():
     """
     try:
         d = ensure_library(scan=False)
-        if not d:
-            return False
-        if not _is_lib(d):
-            return False
+        if not d: return False
+        if not _is_lib(d): return False
         return os.path.isdir(os.path.join(d, "figure"))
     except Exception:
         return False
@@ -315,8 +287,7 @@ def asset_library_dir():
     ensure_library()。"""
     cs = candidates()
     for d in cs:
-        if _is_lib(d):
-            return d
+        if _is_lib(d): return d
     return cs[0] if cs else os.path.join(_APPDIR, "asset_library")
 
 

@@ -252,8 +252,7 @@ _SEED_EXPRESSIONS = [
 def _table_dir():
     """数据目录：env MUPPET_TEMPLATES_DIR 优先，否则模块目录/templates/webgal。"""
     env = os.environ.get("MUPPET_TEMPLATES_DIR")
-    if env:
-        return env
+    if env: return env
     return os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "templates", "webgal")
 
@@ -277,42 +276,34 @@ def _to_json(motions, expressions, namespaces=None, recommended=None):
             mm = {"id": m["id"], "name": m.get("name", m["id"]),
                   "kind": m["kind"], "dur": float(m.get("dur") or 0.0),
                   "loop": bool(m.get("loop", False))}
-            if m.get("ns"):
-                mm["ns"] = m["ns"]
-            if m.get("common"):
-                mm["common"] = True
+            if m.get("ns"): mm["ns"] = m["ns"]
+            if m.get("common"): mm["common"] = True
             m_out.append(mm)
             continue
         mm = {"id": m["id"], "name": m["name"], "dur": m["dur"],
               "loop": bool(m.get("loop", True))}
-        if m.get("channels"):
-            mm["channels"] = dict(m["channels"])
+        if m.get("channels"): mm["channels"] = dict(m["channels"])
         cur = {}
         for role, track in (m.get("curves") or {}).items():
             cur[role] = [[kf["t"], kf["v"], kf.get("ease", "linear")]
                          for kf in track]
-        if cur:
-            mm["curves"] = cur
+        if cur: mm["curves"] = cur
         m_out.append(mm)
     e_out = []
     for e in expressions:
         if _is_cubism(e):
             ee = {"id": e["id"], "name": e.get("name", e["id"]),
                   "kind": e["kind"], "fade": float(e.get("fade") or 0.0)}
-            if e.get("ns"):
-                ee["ns"] = e["ns"]
-            if e.get("common"):
-                ee["common"] = True
+            if e.get("ns"): ee["ns"] = e["ns"]
+            if e.get("common"): ee["common"] = True
             e_out.append(ee)
             continue
         ee = {"id": e["id"], "name": e["name"], "fade": e["fade"],
               "pose": {role: dict(snap) for role, snap in (e.get("pose") or {}).items()}}
         e_out.append(ee)
     out = {"motions": m_out, "expressions": e_out}
-    if namespaces:
-        out["namespaces"] = dict(namespaces)
-    if recommended:
-        out["recommended"] = list(recommended)
+    if namespaces: out["namespaces"] = dict(namespaces)
+    if recommended: out["recommended"] = list(recommended)
     return out
 
 
@@ -320,11 +311,9 @@ def _cubism_entry(raw, need_kind):
     """cubism 条目校验：id 非空 str；kind 必须 cubism/cubism_exp；
     ns 从 id 前缀推断。非法返回 None（调用方判结构非法）。"""
     mid = raw.get("id")
-    if not isinstance(mid, str) or not mid:
-        return None
+    if not isinstance(mid, str) or not mid: return None
     kind = str(raw.get("kind") or "")
-    if kind not in ("cubism", "cubism_exp"):
-        return None
+    if kind not in ("cubism", "cubism_exp"): return None
     out = {"id": mid, "name": str(raw.get("name") or mid), "kind": kind,
            "dur": float(raw.get("dur") or 0.0),
            "loop": bool(raw.get("loop", False))}
@@ -332,12 +321,9 @@ def _cubism_entry(raw, need_kind):
         out["fade"] = float(raw.get("fade") or 0.0)
         out["loop"] = False
     ns = str(raw.get("ns") or "")
-    if not ns and "/" in mid:
-        ns = mid.split("/")[0]
-    if ns:
-        out["ns"] = ns
-    if raw.get("common"):
-        out["common"] = True
+    if not ns and "/" in mid: ns = mid.split("/")[0]
+    if ns: out["ns"] = ns
+    if raw.get("common"): out["common"] = True
     return out
 
 
@@ -345,50 +331,39 @@ def _from_json(raw):
     """JSON 结构 -> (motions, expressions, meta)；结构非法返回 None。
     meta = {"namespaces": dict, "recommended": list}（缺省空）。
     cubism 条目免 curves/pose；程序化条目沿用 C1 严格校验。"""
-    if not isinstance(raw, dict):
-        return None
+    if not isinstance(raw, dict): return None
     mraw, eraw = raw.get("motions"), raw.get("expressions")
-    if not isinstance(mraw, list) or not isinstance(eraw, list):
-        return None
+    if not isinstance(mraw, list) or not isinstance(eraw, list): return None
     motions, expressions = [], []
     meta = {"namespaces": {}, "recommended": []}
     ns = raw.get("namespaces")
-    if ns is not None and not isinstance(ns, dict):
-        return None
+    if ns is not None and not isinstance(ns, dict): return None
     if isinstance(ns, dict):
         meta["namespaces"] = {str(k): v for k, v in ns.items()
                               if isinstance(v, dict)}
     rec = raw.get("recommended")
-    if rec is not None and not isinstance(rec, list):
-        return None
+    if rec is not None and not isinstance(rec, list): return None
     if isinstance(rec, list):
         meta["recommended"] = [str(x) for x in rec if isinstance(x, str)]
     try:
         for m in mraw:
-            if not isinstance(m, dict):
-                return None
+            if not isinstance(m, dict): return None
             mid = m.get("id")
-            if not isinstance(mid, str) or not mid:
-                return None
+            if not isinstance(mid, str) or not mid: return None
             if _is_cubism(m):
                 ce = _cubism_entry(m, True)
-                if ce is None:
-                    return None
+                if ce is None: return None
                 motions.append(ce)
                 continue
-            if str(m.get("kind") or ""):
-                return None          # 未知 kind：结构非法，整表回退
+            if str(m.get("kind") or ""): return None          # 未知 kind：结构非法，整表回退
             curves = m.get("curves")
-            if not isinstance(curves, dict):
-                return None
+            if not isinstance(curves, dict): return None
             cur = {}
             for role, track in curves.items():
-                if role not in ROLES or not isinstance(track, list):
-                    return None
+                if role not in ROLES or not isinstance(track, list): return None
                 ks = []
                 for kf in track:
-                    if not isinstance(kf, (list, tuple)) or len(kf) < 3:
-                        return None
+                    if not isinstance(kf, (list, tuple)) or len(kf) < 3: return None
                     ks.append(_kf(kf[0], kf[1], kf[2]))
                 ks.sort(key=lambda x: x["t"])
                 cur[role] = ks
@@ -402,26 +377,20 @@ def _from_json(raw):
             mm["curves"] = cur
             motions.append(mm)
         for e in eraw:
-            if not isinstance(e, dict):
-                return None
+            if not isinstance(e, dict): return None
             eid = e.get("id")
-            if not isinstance(eid, str) or not eid:
-                return None
+            if not isinstance(eid, str) or not eid: return None
             if _is_cubism(e):
                 ce = _cubism_entry(e, True)
-                if ce is None:
-                    return None
+                if ce is None: return None
                 expressions.append(ce)
                 continue
-            if str(e.get("kind") or ""):
-                return None
+            if str(e.get("kind") or ""): return None
             pose = e.get("pose")
-            if not isinstance(pose, dict):
-                return None
+            if not isinstance(pose, dict): return None
             pp = {}
             for role, snap in pose.items():
-                if role not in ROLES or not isinstance(snap, dict):
-                    return None
+                if role not in ROLES or not isinstance(snap, dict): return None
                 pp[role] = {"rot": float(snap.get("rot", 0.0)),
                             "dy": float(snap.get("dy", 0.0)),
                             "dscale": float(snap.get("dscale", 0.0))}
@@ -495,16 +464,14 @@ def _load(force=False):
     global _MTIME, _FSIZE
     path = table_path()
     mt, fs = _stat_pair()
-    if not force and (mt, fs) == (_MTIME, _FSIZE):
-        return
+    if not force and (mt, fs) == (_MTIME, _FSIZE): return
     fallback = (copy.deepcopy(_SEED_MOTIONS),
                 copy.deepcopy(_SEED_EXPRESSIONS))
     try:
         with open(path, encoding="utf8") as f:
             raw = json.load(f)
         parsed = _from_json(raw)
-        if parsed is None:
-            warnings.append("motion_table 结构非法，回退内置表: %s" % path)
+        if parsed is None: warnings.append("motion_table 结构非法，回退内置表: %s" % path)
         _apply(parsed, fallback)
     except Exception as e:
         if not os.path.isfile(path):
@@ -532,8 +499,7 @@ def reload():
 def _ensure_fresh():
     """读表入口调用：文件 mtime 或 size 变了就自动 reload。"""
     mt, fs = _stat_pair()
-    if (mt, fs) != (_MTIME, _FSIZE):
-        _load(force=True)
+    if (mt, fs) != (_MTIME, _FSIZE): _load(force=True)
 
 
 # 模块加载即加载一次（不抛异常，任何失败都回退内置）
@@ -564,8 +530,7 @@ def get_motion(mid):
     cubism 条目同样可取（带 kind/ns/common，无 curves）。"""
     _ensure_fresh()
     m = _MIDX.get(mid)
-    if m is None:
-        raise KeyError(mid)
+    if m is None: raise KeyError(mid)
     return copy.deepcopy(m)
 
 
@@ -573,8 +538,7 @@ def get_expression(eid):
     """按 id 取表情（返回副本）；坏 id 抛 KeyError。"""
     _ensure_fresh()
     e = _EIDX.get(eid)
-    if e is None:
-        raise KeyError(eid)
+    if e is None: raise KeyError(eid)
     return copy.deepcopy(e)
 
 
@@ -589,10 +553,8 @@ def catalog():
         r.update(extra)
         if x.get("kind"):
             r["kind"] = x["kind"]
-            if x.get("ns"):
-                r["ns"] = x["ns"]
-            if x.get("common"):
-                r["common"] = True
+            if x.get("ns"): r["ns"] = x["ns"]
+            if x.get("common"): r["common"] = True
         return r
 
     out = {
@@ -602,10 +564,8 @@ def catalog():
         "expressions": [_row(e, {"fade": e.get("fade", 0.0)})
                         for e in EXPRESSIONS],
     }
-    if NAMESPACES:
-        out["namespaces"] = copy.deepcopy(NAMESPACES)
-    if RECOMMENDED:
-        out["recommended"] = list(RECOMMENDED)
+    if NAMESPACES: out["namespaces"] = copy.deepcopy(NAMESPACES)
+    if RECOMMENDED: out["recommended"] = list(RECOMMENDED)
     return out
 
 
@@ -623,19 +583,15 @@ def eval_motion(mid, t):
     坏 id 抛 KeyError。
     """
     m = get_motion(mid)
-    if _is_cubism(m):
-        return {}
+    if _is_cubism(m): return {}
     dur = float(m.get("dur") or 0.0)
     tt = float(t)
-    if m.get("loop"):
-        tt = tt % dur if dur > 0 else 0.0
-    else:
-        tt = max(0.0, min(tt, dur))
+    if m.get("loop"): tt = tt % dur if dur > 0 else 0.0
+    else: tt = max(0.0, min(tt, dur))
     out = {}
     for role, track in (m.get("curves") or {}).items():
         v = anim.eval_track(track, tt)
-        if v is None:
-            continue
+        if v is None: continue
         d = {"rot": 0.0, "dy": 0.0}
         d[_channel(m, role)] = float(v)
         out[role] = d
@@ -648,13 +604,10 @@ def eval_expression(eid, progress):
     cubism_exp 条目返回 {}（引擎侧播放）。坏 id 抛 KeyError。
     """
     e = get_expression(eid)
-    if _is_cubism(e):
-        return {}
+    if _is_cubism(e): return {}
     p = float(progress)
-    if p < 0.0:
-        p = 0.0
-    elif p > 1.0:
-        p = 1.0
+    if p < 0.0: p = 0.0
+    elif p > 1.0: p = 1.0
     out = {}
     for role, snap in (e.get("pose") or {}).items():
         out[role] = {

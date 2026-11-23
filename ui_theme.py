@@ -22,6 +22,7 @@
    切换主题时 TH 会依次调用所有注册函数，再刷新一遍所有控件。
 3) 需要临时取色：`TH.t("text")` 取 QSS 串，`TH.qcolor("text")` 取 QColor。
 """
+import contextlib
 import io
 import json
 import os
@@ -201,10 +202,7 @@ def _prefs_file():
         return _prefs_path
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
     d = os.path.join(base, "MuppetStudio")
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): os.makedirs(d, exist_ok=True)
     _prefs_path = os.path.join(d, "ui_theme.json")
     return _prefs_path
 
@@ -300,10 +298,7 @@ def apply(app=None):
     _set_qt_theme()
     _apply_global_qss(app)
     for fn in list(_reloaders):
-        try:
-            fn()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): fn()
 
 
 def set_mode(m, app=None, save=True):
@@ -317,18 +312,12 @@ def set_mode(m, app=None, save=True):
     _set_qt_theme()
     _apply_global_qss(app)
     for fn in list(_reloaders):
-        try:
-            fn()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): fn()
     _repaint_all()
 
 
 def _set_qt_theme():
-    try:
-        setTheme(Theme.LIGHT if _mode == "light" else Theme.DARK)
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): setTheme(Theme.LIGHT if _mode == "light" else Theme.DARK)
     # qfluentwidgets 的 setTheme 只推 qconfig，标题栏/导航栏这些库内
     # 自绘控件要重新 apply 各自的样式表才会换色（实测切主题后标题栏
     # 会残留上一个主题的底色）。
@@ -346,18 +335,13 @@ def _reapply_library_sheets():
         for w in app.allWidgets():
             if not isinstance(w, FluentWindow):
                 continue
-            try:
-                FluentStyleSheet.FLUENT_WINDOW.apply(w)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): FluentStyleSheet.FLUENT_WINDOW.apply(w)
             for attr in ("titleBar", "navigationInterface"):
                 o = getattr(w, attr, None)
                 if o is not None:
-                    try:
+                    with contextlib.suppress(Exception):
                         o.update()
                         o.repaint()
-                    except Exception:
-                        pass
     except Exception:
         pass
 
@@ -476,10 +460,7 @@ class _ToolTipWatcher(QObject):
     def _hide(self):
         self._timer.stop()
         if self._tip is not None:
-            try:
-                self._tip.hide()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self._tip.hide()
 
 
 _watcher = [None]
@@ -492,12 +473,10 @@ def install_tooltip_watcher(app=None):
         return
     if _watcher[0] is not None:
         return
-    try:
+    with contextlib.suppress(Exception):
         w = _ToolTipWatcher(app)
         app.installEventFilter(w)
         _watcher[0] = w
-    except Exception:
-        pass
 
 
 def _apply_global_qss(app=None):
@@ -629,11 +608,9 @@ def _repaint_fixed_spins():
         sb = ref()
         if sb is None:
             continue
-        try:
+        with contextlib.suppress(Exception):
             _paint_spin_text(sb)
             alive.append(ref)
-        except Exception:
-            pass
     _fixed_spins[:] = alive
 
 
@@ -648,7 +625,7 @@ def _install_resize_hook(sb):
         orig = sb.resizeEvent
 
         def _ev(e, _sb=sb, _orig=orig):
-            try:
+            with contextlib.suppress(Exception):
                 _orig(e)
                 le = _sb.lineEdit()
                 w = max(60, int(_sb.width()) - 10 - 44)
@@ -656,8 +633,6 @@ def _install_resize_hook(sb):
                     le.setFixedWidth(w)
                     le.move(10, 1)
                     le.resize(w, max(1, int(_sb.height()) - 2))
-            except Exception:
-                pass
         sb.resizeEvent = _ev
         sb._muppet_resize_hooked = True
     except Exception:
@@ -670,10 +645,7 @@ def _repaint_all():
     if app is None:
         return
     for w in app.allWidgets():
-        try:
-            w.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): w.update()
 
 
 def toggle():

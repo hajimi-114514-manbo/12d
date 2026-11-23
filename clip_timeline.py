@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
 import video_model as VM
 import timeline_panel as TP          # 复用配色 / _nice_step，无循环依赖
 import ui_theme as TH
+import contextlib
 
 # ---------------- 配色（跟随 ui_theme：深色 / 浅色磨砂白） ----------------
 # 这些模块级名字由 _refresh_colors() 在切主题时整体重新赋值，
@@ -131,10 +132,7 @@ def _refresh_colors():
                    ("puppet", "clip_puppet"), ("audio", "clip_audio")):
         CLIP_COLORS[k] = TH.qcolor(tok)
     for p in _PANELS:
-        try:
-            p._apply_theme()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): p._apply_theme()
 
 
 _PANELS = []
@@ -300,10 +298,7 @@ class ClipTimelinePanel(QWidget):
             self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
         except Exception:
             pass
-        try:
-            self.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.update()
 
     # ================= 数据 / 状态 =================
     def set_project(self, proj):
@@ -347,8 +342,7 @@ class ClipTimelinePanel(QWidget):
 
     def set_time(self, t):
         self._t = max(0.0, float(t))
-        if self.follow_playhead:
-            self.maybe_scroll_to(self._t)
+        if self.follow_playhead: self.maybe_scroll_to(self._t)
         self.area.update()          # 只 update，量小
 
     def resizeEvent(self, ev):
@@ -364,8 +358,7 @@ class ClipTimelinePanel(QWidget):
     # ================= 缩放 / 坐标 =================
     def set_pixels_per_second(self, v):
         v = _in(float(v), PPS_MIN, PPS_MAX)
-        if abs(v - self.pps) < 1e-9:
-            return
+        if abs(v - self.pps) < 1e-9: return
         self.pps = v
         self.lbl_pps.setText("%.0f px/s" % v)
         self.scale_changed.emit(v)
@@ -390,8 +383,7 @@ class ClipTimelinePanel(QWidget):
             avail = (self.height() - HEAD_H - self.scaled_ruler_h()
                      - HSCROLL_H - 4)
             total = sum(self._row_h_default(t) for t in tracks)
-            if avail > 0 and total > avail:
-                h = max(14, int(round(h * avail / total)))
+            if avail > 0 and total > avail: h = max(14, int(round(h * avail / total)))
         return h
 
     def _row_h_default(self, track):
@@ -450,8 +442,7 @@ class ClipTimelinePanel(QWidget):
         """兼容保留：横向滚动现在由面板自带的 hbar 负责。"""
         p = self.parentWidget()
         while p is not None:
-            if isinstance(p, QAbstractScrollArea):
-                return p
+            if isinstance(p, QAbstractScrollArea): return p
             p = p.parentWidget()
         return None
 
@@ -460,15 +451,13 @@ class ClipTimelinePanel(QWidget):
         """视口宽 = 面板宽。未布局（宽度 0/未 show）时退回 sizeHint 宽度，
         否则 hbar 的 span 恒为 0（脱机测试/刚构造时滚不动）。"""
         w = self.width()
-        if w < NAME_W + 40:
-            w = max(int(self.sizeHint().width()), NAME_W + 600)
+        if w < NAME_W + 40: w = max(int(self.sizeHint().width()), NAME_W + 600)
         return w
 
     def _sync_hbar(self):
         """把 view_t0 / 内容宽同步到滚动条（程序设置，不触发回环）。"""
         bar = getattr(self, "hbar", None)
-        if bar is None:
-            return
+        if bar is None: return
         cw = self.content_width()
         vw = self._viewport_w()
         span = max(0, cw - vw)
@@ -484,16 +473,14 @@ class ClipTimelinePanel(QWidget):
 
     def _on_hscroll(self, v):
         """拖滑块 -> view_t0 跟着走。"""
-        if getattr(self, "_hbar_busy", False):
-            return
+        if getattr(self, "_hbar_busy", False): return
         self.view_t0 = max(0.0, v / max(1e-9, self.pps))
         self.area.update()
 
     def _hscroll_px(self, dx):
         """滚轮/外部的像素级横向滚动（dx>0 右移）。带值域钳位。"""
         bar = getattr(self, "hbar", None)
-        if bar is None:
-            return
+        if bar is None: return
         bar.setValue(int(_in(bar.value() + int(dx),
                              bar.minimum(), bar.maximum())))
 
@@ -512,15 +499,12 @@ class ClipTimelinePanel(QWidget):
             lane = max(1.0, vw - NAME_W)
             x = self.t_to_x(t)                 # 屏坐标（已含 view_t0）
             new_t0 = self.view_t0
-            if x > vw - 40:
-                new_t0 = max(0.0, t - (lane - 40) / self.pps)
-            elif x < NAME_W + 40:
-                new_t0 = max(0.0, t - 40 / self.pps)
+            if x > vw - 40: new_t0 = max(0.0, t - (lane - 40) / self.pps)
+            elif x < NAME_W + 40: new_t0 = max(0.0, t - 40 / self.pps)
             # 不越内容末尾（避免滚到空白区）
             max_t0 = max(0.0, (self.content_width() - vw) / self.pps)
             new_t0 = min(new_t0, max_t0)
-            if abs(new_t0 - self.view_t0) < 1e-9:
-                return
+            if abs(new_t0 - self.view_t0) < 1e-9: return
             self.view_t0 = new_t0
             self._sync_hbar()                  # 滑块跟上（含值域重算）
             self.area.update()
@@ -535,13 +519,10 @@ class ClipTimelinePanel(QWidget):
                 x = self.t_to_x(t)
                 if x > hb.value() + host.viewport().width() - 40:
                     hb.setValue(int(x - host.viewport().width() + 40))
-                elif x < hb.value() + 40:
-                    hb.setValue(max(0, int(x - 40)))
+                elif x < hb.value() + 40: hb.setValue(max(0, int(x - 40)))
                 return
-        if t > self.view_t0 + win - edge:
-            self.view_t0 = max(0.0, t - win + edge)
-        elif t < self.view_t0 + edge:
-            self.view_t0 = max(0.0, t - edge)
+        if t > self.view_t0 + win - edge: self.view_t0 = max(0.0, t - win + edge)
+        elif t < self.view_t0 + edge: self.view_t0 = max(0.0, t - edge)
         self.area.update()
 
     def clip_at_point(self, pt):
@@ -560,8 +541,7 @@ class ClipTimelinePanel(QWidget):
             return
         self._sel = cid
         self._sync_buttons()
-        if emit:
-            self.selection_changed.emit(cid)
+        if emit: self.selection_changed.emit(cid)
         self.area.update()
 
     def set_selection(self, ids, primary=None, emit=True):
@@ -574,13 +554,11 @@ class ClipTimelinePanel(QWidget):
         prim = primary if primary is not None else (out[-1] if out else None)
         # 框选每挪一像素都会回调这里；集合没变就不发信号（否则外层
         # 属性面板每秒被刷几十次，还会往 selection_changed 灌重复事件）
-        if out == self._sels and prim == self._sel:
-            return
+        if out == self._sels and prim == self._sel: return
         self._sels = out
         self._sel = prim
         self._sync_buttons()
-        if emit:
-            self.selection_changed.emit(self._sel)
+        if emit: self.selection_changed.emit(self._sel)
         self.area.update()
 
     def selected_clip_ids(self):
@@ -614,8 +592,7 @@ class ClipTimelinePanel(QWidget):
         if tr_p is not None and tr_p.get("id") == tr_c.get("id"):
             ids = [c["id"] for c in tr_c["clips"]
                    if lo - 1e-9 <= float(c["start"]) <= hi + 1e-9]
-        else:
-            ids = [self._sel, cid]
+        else: ids = [self._sel, cid]
         if not ids:
             self._set_sel(cid)
             return
@@ -632,8 +609,7 @@ class ClipTimelinePanel(QWidget):
 
     # ================= 模型操作（全部走 video_model） =================
     def _selected_clip(self):
-        if not self._sel:
-            return None
+        if not self._sel: return None
         tr, c = VM.find_clip(self.proj, self._sel)
         return c
 
@@ -645,13 +621,11 @@ class ClipTimelinePanel(QWidget):
         切分前 —— 每个 clip 发一次会把一次操作拆成 N 条历史）。
         失败（太短/锁定/越界）静默跳过，与单选语义一致。"""
         ids = self._sels or ([self._sel] if self._sel else [])
-        if not ids:
-            return False
+        if not ids: return False
         n = 0
         for cid in ids:
             ok, _msg, _rid = VM.split_clip(self.proj, cid, self._t)
-            if ok:
-                n += 1
+            if ok: n += 1
         if n:
             self.edit_committed.emit()
             self.refresh()
@@ -660,8 +634,7 @@ class ClipTimelinePanel(QWidget):
     def remove_selected(self):
         """[🗑] / Delete：删除选中 clip（多选成组删），失败（锁定等）静默。"""
         ids = self._sels or ([self._sel] if self._sel else [])
-        if not ids:
-            return False
+        if not ids: return False
         ok, _msg = VM.remove_clips(self.proj, ids)
         if ok:
             self._set_sel(None)
@@ -673,15 +646,13 @@ class ClipTimelinePanel(QWidget):
         """Ctrl+A：选中当前幕全部可见轨的 clip（隐藏轨排除）。"""
         ids = [c["id"] for tr in self._tracks() if not tr.get("hidden")
                for c in tr["clips"]]
-        if not ids:
-            return False
+        if not ids: return False
         self.set_selection(ids, ids[-1] if ids else None)
         return True
 
     def _on_follow_toggled(self, checked):
         self.follow_playhead = bool(checked)
-        if self.follow_playhead:
-            self.maybe_scroll_to(self._t)
+        if self.follow_playhead: self.maybe_scroll_to(self._t)
 
     def snap_guide_x(self):
         """当前吸附辅助线 x（area 坐标），无则 None。"""
@@ -735,11 +706,9 @@ class _ClipArea(QWidget):
 
     def _row_at(self, y):
         """(track, y0, h) 或 None（刻度尺/行以下）。"""
-        if y < self.panel.scaled_ruler_h():
-            return None
+        if y < self.panel.scaled_ruler_h(): return None
         for y0, h, tr in self.panel.row_geometry():
-            if y0 <= y < y0 + h:
-                return tr, y0, h
+            if y0 <= y < y0 + h: return tr, y0, h
         return None
 
     def _icon_rects(self, y0, h):
@@ -749,17 +718,13 @@ class _ClipArea(QWidget):
 
     def _hover_at(self, x, y):
         """悬停点落在哪个头列按钮上 -> ("eye"/"lock", (y0,h))；无则 (None,None)。"""
-        if x >= NAME_W:
-            return None, None
+        if x >= NAME_W: return None, None
         row = self._row_at(y)
-        if row is None:
-            return None, None
+        if row is None: return None, None
         tr, y0, h = row
         r_eye, r_lock = self._icon_rects(y0, h)
-        if r_eye.contains(QPointF(x, y)):
-            return "eye", (y0, h)
-        if r_lock.contains(QPointF(x, y)):
-            return "lock", (y0, h)
+        if r_eye.contains(QPointF(x, y)): return "eye", (y0, h)
+        if r_lock.contains(QPointF(x, y)): return "lock", (y0, h)
         return None, None
 
     def leaveEvent(self, ev):
@@ -771,22 +736,17 @@ class _ClipArea(QWidget):
     def _hit_clip(self, x, y):
         """命中 clip（不筛 hidden/locked）-> (track, clip, zone) 或 None。"""
         row = self._row_at(y)
-        if row is None:
-            return None
+        if row is None: return None
         tr, y0, h = row
-        if x < NAME_W:
-            return None
+        if x < NAME_W: return None
         for c in tr["clips"]:
             cx0 = self.t_to_x(c["start"])
             cx1 = cx0 + c["dur"] * self.panel.pps
             if cx0 - 1.0 <= x <= cx1 + 1.0:
                 eg = self.panel.edge_grab_px()
-                if x <= cx0 + eg:
-                    zone = self.EDGE_START
-                elif x >= cx1 - eg:
-                    zone = self.EDGE_END
-                else:
-                    zone = self.EDGE_MOVE
+                if x <= cx0 + eg: zone = self.EDGE_START
+                elif x >= cx1 - eg: zone = self.EDGE_END
+                else: zone = self.EDGE_MOVE
                 return tr, c, zone
         return None
 
@@ -798,16 +758,14 @@ class _ClipArea(QWidget):
     def _preview_geom(self, c):
         """拖拽中：返回该 clip 的预览 (start, dur)；否则返回实际数据。"""
         d = self._drag
-        if d is None or not d.get("moved"):
-            return float(c["start"]), float(c["dur"])
+        if d is None or not d.get("moved"): return float(c["start"]), float(c["dur"])
         # 成组拖动：组内成员整体平移同一个 delta（dur 不变）
         if d.get("group") and c["id"] in d["group"]:
             s0, dur0 = d["group"][c["id"]]
             return s0 + d["delta"], dur0
         if d.get("pv") is None or d["id"] != c["id"]:
             return float(c["start"]), float(c["dur"])
-        if d["kind"] == self.EDGE_MOVE:
-            return d["pv"], d["dur0"]
+        if d["kind"] == self.EDGE_MOVE: return d["pv"], d["dur0"]
         if d["kind"] == self.EDGE_START:
             end = d["start0"] + d["dur0"]
             return d["pv"], max(0.05, end - d["pv"])
@@ -815,25 +773,21 @@ class _ClipArea(QWidget):
 
     # ---------------- 事件 ----------------
     def mousePressEvent(self, ev):
-        if ev.button() != Qt.LeftButton:
-            return
-        if self._drag is not None or self._scrub:
-            self._finish_drag()
+        if ev.button() != Qt.LeftButton: return
+        if self._drag is not None or self._scrub: self._finish_drag()
         self._marquee = None            # 新按下作废上一发挂起的空白点击
         x, y = ev.position().x(), ev.position().y()
         ruler_h = self.panel.scaled_ruler_h()
 
         # 刻度尺：scrub
         if y < ruler_h:
-            if x >= NAME_W:
-                self._begin_scrub(x)
+            if x >= NAME_W: self._begin_scrub(x)
             return
 
         # 头列：👁 / 🔒
         if x < NAME_W:
             row = self._row_at(y)
-            if row is None:
-                return
+            if row is None: return
             tr, y0, h = row
             r_eye, r_lock = self._icon_rects(y0, h)
             if r_eye.contains(QPointF(x, y)):
@@ -852,15 +806,13 @@ class _ClipArea(QWidget):
             # 没移动就松手 -> 老语义（取消选中 + scrub 播放头）；
             # 移动超阈值 -> 升级为框选。隐藏轨整行完全不可交互。
             row = self._row_at(y)
-            if row is not None and row[0].get("hidden"):
-                return
+            if row is not None and row[0].get("hidden"): return
             self._marquee = {"x0": x, "y0": y, "x1": x, "y1": y,
                              "active": False,
                              "add": bool(ev.modifiers() & Qt.ControlModifier)}
             return
         tr, c, zone = hit
-        if tr.get("hidden"):
-            return                       # 隐藏轨不可交互
+        if tr.get("hidden"): return                       # 隐藏轨不可交互
         mods = ev.modifiers()
         if mods & Qt.ControlModifier:
             self.panel._toggle_sel(c["id"])   # 加选/去选，不进拖拽
@@ -872,18 +824,15 @@ class _ClipArea(QWidget):
             # 组内点击（未按修饰键）：保持整组选中可成组拖，但把被点的
             # 提为主选中 -> 属性面板跟着显示它（剪映/PR 一致）
             self.panel.set_selection(self.panel._sels, c["id"])
-        else:
-            self.panel._set_sel(c["id"])
-        if tr.get("locked"):
-            return                       # 锁定轨：可选中，不可拖/trim
+        else: self.panel._set_sel(c["id"])
+        if tr.get("locked"): return                       # 锁定轨：可选中，不可拖/trim
         grp = {}
         if zone == self.EDGE_MOVE and len(self.panel._sels) > 1 \
                 and c["id"] in self.panel._sels:
             # 成组拖动：只收**可动**成员（锁定轨/隐藏轨的留在原地）
             for cid in self.panel._sels:
                 t2, c2 = VM.find_clip(self.panel.proj, cid)
-                if c2 is None or t2.get("locked") or t2.get("hidden"):
-                    continue
+                if c2 is None or t2.get("locked") or t2.get("hidden"): continue
                 grp[cid] = (float(c2["start"]), float(c2["dur"]))
         self._drag = {
             "kind": zone, "id": c["id"], "c": c,
@@ -907,20 +856,17 @@ class _ClipArea(QWidget):
         ry0, ry1 = sorted((mq["y0"], mq["y1"]))
         hit_ids = []
         for y0, rh, tr in self.panel.row_geometry():
-            if tr.get("hidden"):
-                continue
+            if tr.get("hidden"): continue
             if ry1 < y0 or ry0 > y0 + rh:      # 矩形没盖到这一行
                 continue
             for c in tr["clips"]:
                 cx0 = self.t_to_x(c["start"])
                 cx1 = cx0 + float(c["dur"]) * self.panel.pps
-                if cx1 >= rx0 and cx0 <= rx1:
-                    hit_ids.append(c["id"])
+                if cx1 >= rx0 and cx0 <= rx1: hit_ids.append(c["id"])
         if mods & Qt.ControlModifier:
             merged = list(self.panel._sels)
             for i in hit_ids:
-                if i not in merged:
-                    merged.append(i)
+                if i not in merged: merged.append(i)
             self.panel.set_selection(merged,
                                      hit_ids[-1] if hit_ids else
                                      (merged[-1] if merged else None))
@@ -960,8 +906,7 @@ class _ClipArea(QWidget):
             return
         d = self._drag
         if d is not None:
-            if not d["moved"] and abs(x - d["x0px"]) > DRAG_THRESHOLD:
-                d["moved"] = True
+            if not d["moved"] and abs(x - d["x0px"]) > DRAG_THRESHOLD: d["moved"] = True
             if d["moved"]:
                 # v3.5.2：贴边自动横滚（光标在左/右缘时内容跟着走，
                 # 否则拖超出视口的 clip 根本看不见 -> 必须有滑块+自动滚）
@@ -986,8 +931,7 @@ class _ClipArea(QWidget):
             self.setCursor(Qt.SizeHorCursor)
         elif hit is not None and not hit[0].get("hidden"):
             self.setCursor(Qt.PointingHandCursor)
-        else:
-            self.unsetCursor()
+        else: self.unsetCursor()
 
     def _update_preview(self, d, x):
         p = self.panel
@@ -1005,8 +949,7 @@ class _ClipArea(QWidget):
                 for edge in (s0 + raw, s0 + raw + du0):
                     for q in pts:
                         cand = raw + (q - edge)
-                        if abs(cand - raw) <= bd:
-                            best, bd = cand, abs(cand - raw)
+                        if abs(cand - raw) <= bd: best, bd = cand, abs(cand - raw)
             best = round(best, 3)
             d["delta"] = best
             d["pv"] = round(max(0.0, d["start0"] + best), 3)
@@ -1017,8 +960,7 @@ class _ClipArea(QWidget):
                         if abs((s0 + best) - q) <= 1e-6:
                             d["snap_x"] = p.t_to_x(q)
                             break
-                    if d["snap_x"] is not None:
-                        break
+                    if d["snap_x"] is not None: break
             self.update()
             return
         pts = VM.snap_points(p.proj, exclude_id=d["id"])
@@ -1071,8 +1013,7 @@ class _ClipArea(QWidget):
             delta = d.get("delta")
             if delta is not None and abs(delta) > 1e-9:
                 ok, _msg = VM.move_clips(p.proj, list(d["group"]), delta)
-                if ok:
-                    p.edit_committed.emit()
+                if ok: p.edit_committed.emit()
             p.refresh()
             return
         if not d.get("moved") or d.get("pv") is None:
@@ -1081,15 +1022,13 @@ class _ClipArea(QWidget):
         if d["kind"] == self.EDGE_MOVE:
             if abs(d["pv"] - d["start0"]) > 1e-9:
                 ok, _msg = VM.move_clip(p.proj, d["id"], d["pv"])
-                if ok:
-                    p.edit_committed.emit()
+                if ok: p.edit_committed.emit()
         else:
             side = "start" if d["kind"] == self.EDGE_START else "end"
             cur = d["start0"] if side == "start" else d["start0"] + d["dur0"]
             if abs(d["pv"] - cur) > 1e-9:
                 ok, _msg = VM.trim_clip(p.proj, d["id"], side, d["pv"])
-                if ok:
-                    p.edit_committed.emit()
+                if ok: p.edit_committed.emit()
         # 失败：模型未改数据 -> 静默回弹（清掉预览重画即可）
         p.refresh()
 
@@ -1105,11 +1044,9 @@ class _ClipArea(QWidget):
         滚动容器"注释接住，但外层根本没有滚动容器 -> 白滚）。"""
         if ev.modifiers() & Qt.ControlModifier:
             dy = ev.angleDelta().y()
-            if dy == 0:
-                return
+            if dy == 0: return
             x = ev.position().x()
-            if x < NAME_W:
-                x = float(NAME_W)
+            if x < NAME_W: x = float(NAME_W)
             t_anchor = self.panel.x_to_t(x)
             f = WHEEL_UP_FACTOR if dy > 0 else WHEEL_DOWN_FACTOR
             new_pps = _in(self.panel.pps * f, PPS_MIN, PPS_MAX)
@@ -1156,8 +1093,7 @@ class _ClipArea(QWidget):
         rows = pal.row_geometry()
         p.fillRect(QRectF(0, ruler_h, NAME_W, h - ruler_h), C_LANE)
         for i, (y0, rh, tr) in enumerate(rows):
-            if y0 > h:
-                break
+            if y0 > h: break
             p.fillRect(QRectF(NAME_W, y0, w - NAME_W, rh),
                        C_ROW_A if i % 2 == 0 else C_ROW_B)
 
@@ -1234,8 +1170,7 @@ class _ClipArea(QWidget):
                     p.drawText(QPointF(min(x + 3, w - tw - 2), ruler_h - 7), txt)
                 elif draw_minor:
                     p.drawLine(QPointF(x, ruler_h - 4), QPointF(x, ruler_h))
-            if t > t1:
-                break
+            if t > t1: break
             t += minor if draw_minor else major
         p.setPen(QPen(C_GRID, 1))
         p.drawLine(QPointF(0, ruler_h - 0.5), QPointF(w, ruler_h - 0.5))
@@ -1256,12 +1191,10 @@ class _ClipArea(QWidget):
             st, du = self._preview_geom(c)
             x0 = pal.t_to_x(st)
             wpx = du * pal.pps
-            if x0 + wpx < NAME_W or x0 > w:
-                continue
+            if x0 + wpx < NAME_W or x0 > w: continue
             kind = c.get("source", {}).get("kind")
             col = QColor(_base_color(c))
-            if hidden:
-                col.setAlpha(_HIDDEN_ALPHA)
+            if hidden: col.setAlpha(_HIDDEN_ALPHA)
             radius = min(4.0 * s, ch / 2.0, max(1.0, wpx / 2.0))
             rect = QRectF(x0, cy, max(2.0, wpx), ch)
             path = QPainterPath()
@@ -1304,21 +1237,17 @@ class _ClipArea(QWidget):
                         fv = 0.5
                     vx = x0 + (wpx - 1.0) * (i / (n - 1.0))
                     vy = mid - (fv - 0.5) * (ch - 3.0)
-                    if i == 0:
-                        path2.moveTo(vx, vy)
-                    else:
-                        path2.lineTo(vx, vy)
+                    if i == 0: path2.moveTo(vx, vy)
+                    else: path2.lineTo(vx, vy)
                 wc = QColor(C_WAVE)
-                if hidden:
-                    wc.setAlpha(_HIDDEN_ALPHA)
+                if hidden: wc.setAlpha(_HIDDEN_ALPHA)
                 p.setPen(QPen(wc, max(1.0, 1.2 * s)))
                 p.setBrush(Qt.NoBrush)
                 p.drawPath(path2)
         p.restore()
 
         # ---- 头列：轨名 + 👁 + 🔒 ----
-        if tr.get("locked"):
-            p.fillRect(QRectF(0, y0, NAME_W, rh), C_LOCKED_ROW)
+        if tr.get("locked"): p.fillRect(QRectF(0, y0, NAME_W, rh), C_LOCKED_ROW)
         f = QFont()
         f.setPixelSize(max(10, int(round(12 * s))))
         p.setFont(f)
@@ -1398,7 +1327,6 @@ class _ClipArea(QWidget):
                 keyhole = QPointF(cx, body_y + body_h * 0.5)
                 p.setBrush(QBrush(col))
                 p.drawEllipse(keyhole, r * 0.16, r * 0.16)
-            else:
-                p.drawPath(path)
+            else: p.drawPath(path)
 
 

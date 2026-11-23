@@ -10,6 +10,7 @@
 
 约定：第一阶段预览**无声**（QTimer 逐帧合成画面），声音在导出里体现。
 """
+import contextlib
 import json
 import math
 import os
@@ -63,21 +64,18 @@ _BUF_LOCAL = threading.local()
 def _scratch(shape, dtype):
     """线程局部复用缓冲（键含 dtype，u8/u16 不互踩）。"""
     d = getattr(_BUF_LOCAL, "bufs", None)
-    if d is None:
-        d = _BUF_LOCAL.bufs = {}
+    if d is None: d = _BUF_LOCAL.bufs = {}
     key = (shape[0], shape[1], shape[2] if shape[2:] else 1, dtype)
     buf = d.get(key)
     if buf is None:
-        if len(d) > 8:
-            d.clear()
+        if len(d) > 8: d.clear()
         buf = d[key] = np.empty(shape, dtype)
     return buf
 
 
 def _sub_typing_cache():
     c = getattr(_SUB_LOCAL, "typing", None)
-    if c is None:
-        c = _SUB_LOCAL.typing = {}
+    if c is None: c = _SUB_LOCAL.typing = {}
     return c
 
 
@@ -112,13 +110,11 @@ def _font_files():
     """runtime 字体优先（资源圆体 = 引擎同款），再退系统雅黑/黑体。"""
     rt = os.path.join(_APP_DIR, "templates", "webgal_runtime", "assets")
     out = []
-    try:
+    with contextlib.suppress(OSError):
         if os.path.isdir(rt):
             out.extend(os.path.join(rt, f) for f in sorted(os.listdir(rt))
                        if f.lower().startswith("resourcehanrounded")
                        and f.lower().endswith((".ttf", ".otf", ".ttc")))
-    except OSError:
-        pass
     out.extend((r"C:\Windows\Fonts\msyh.ttc",
                 r"C:\Windows\Fonts\msyhbd.ttc",
                 r"C:\Windows\Fonts\simhei.ttf"))
@@ -128,22 +124,18 @@ def _font_files():
 def _get_font(px, bold=False):
     key = (int(px), bool(bold))
     f = _FONT_CACHE.get(key)
-    if f is not None:
-        return f
+    if f is not None: return f
     mod = _pil()
-    if mod is None:
-        return None
+    if mod is None: return None
     ImageFont = mod[2]
     px = max(1, int(px))
     f = None
     if bold:
         for p in _font_files():
             if "msyhbd" in p:
-                try:
+                with contextlib.suppress(Exception):
                     f = ImageFont.truetype(p, px)
                     break
-                except Exception:
-                    pass
     if f is None:
         for p in _font_files():
             try:
@@ -212,13 +204,11 @@ def _blend_band(canvas, y0, band, x0=0, pre=None):
     import cv2
     h, w = band.shape[:2]
     reg = canvas[y0:y0 + h, x0:x0 + w]
-    if reg.size == 0:
-        return
+    if reg.size == 0: return
     if pre is None or not (isinstance(pre, tuple) and len(pre) == 4):
         pre = _band_premul(band)
     p, inv, amin, amax = pre
-    if amax == 0:
-        return
+    if amax == 0: return
     if amin == 255:
         reg[...] = band[..., :3]
         return
@@ -235,8 +225,7 @@ def _panel_layer(W, H):
     key = (W, H)
     with _SUB_LOCK:
         hit = _SUB_PANEL_CACHE.get(key)
-    if hit is not None:
-        return hit
+    if hit is not None: return hit
     scale = _engine_scale(H)
     hp = max(8, int(round(430 * scale)))
     y0 = H - hp
@@ -265,8 +254,7 @@ def _panel_layer(W, H):
                       alpha.astype(np.uint8)])
     out = (y0, band, _band_premul(band))
     with _SUB_LOCK:
-        if len(_SUB_PANEL_CACHE) >= 4:
-            _SUB_PANEL_CACHE.clear()
+        if len(_SUB_PANEL_CACHE) >= 4: _SUB_PANEL_CACHE.clear()
         _SUB_PANEL_CACHE[key] = out
     return out
 
@@ -277,12 +265,10 @@ def _dialog_layout(W, H, text):
     key = (W, H, text)
     with _SUB_LOCK:
         hit = _SUB_LAYOUT_CACHE.get(key)
-    if hit is not None:
-        return hit
+    if hit is not None: return hit
     mod = _pil()
     body = _get_font(_body_px(H), bold=False)
-    if mod is None or body is None:
-        return []
+    if mod is None or body is None: return []
     scale = _engine_scale(H)
     x0 = int(round(490 * W / 2560))
     x1 = W - int(round(50 * scale))
@@ -298,8 +284,7 @@ def _dialog_layout(W, H, text):
             lines += 1
             y += line_h
             x = x0
-            if lines >= 4:
-                break
+            if lines >= 4: break
             continue
         try:
             w = body.getlength(ch) + sp
@@ -309,8 +294,7 @@ def _dialog_layout(W, H, text):
             lines += 1
             y += line_h
             x = x0
-            if lines >= 4:
-                break
+            if lines >= 4: break
         out.append((ch, x, y))
         x += w
     with _SUB_LOCK:
@@ -338,17 +322,14 @@ def _name_band(W, H, who):
     key = (W, H, who)
     with _SUB_LOCK:
         hit = _SUB_TEXT_CACHE.get(("name",) + key)
-    if hit is not None:
-        return hit
+    if hit is not None: return hit
     mod = _pil()
-    if mod is None or not who:
-        return (0, None)
+    if mod is None or not who: return (0, None)
     Image, ImageDraw, _ = mod
     scale = _engine_scale(H)
     name_px = max(14, int(round(_body_px(H) * 0.85)))
     font = _get_font(name_px, bold=True)
-    if font is None:
-        return (0, None)
+    if font is None: return (0, None)
     hp = int(round(430 * scale))
     panel_top = H - hp
     x0 = int(round(490 * W / 2560))
@@ -366,11 +347,9 @@ def _name_band(W, H, who):
     for i in range(seg):
         t = i / seg
         a = int(255 * (0.95 if t < 0.05 else max(0.0, 1.0 - (t - 0.05) / 0.45)) * 0.3)
-        if a <= 0:
-            continue
+        if a <= 0: continue
         yy = ly + int(round(2 * scale))
-        if 0 <= yy < bh:
-            d.point((x0 + i, yy), fill=(255, 255, 255, a))
+        if 0 <= yy < bh: d.point((x0 + i, yy), fill=(255, 255, 255, a))
     band = np.asarray(img).copy()
     img.close()
     out = (y0, band, _band_premul(band))
@@ -386,16 +365,13 @@ def _full_text_band(W, H, text):
     key = (W, H, text)
     with _SUB_LOCK:
         hit = _SUB_TEXT_CACHE.get(key)
-    if hit is not None:
-        return hit
+    if hit is not None: return hit
     mod = _pil()
     body = _get_font(_body_px(H), bold=False)
-    if mod is None or body is None:
-        return (0, None)
+    if mod is None or body is None: return (0, None)
     Image, ImageDraw, _ = mod
     chars = _dialog_layout(W, H, text)
-    if not chars:
-        return (0, None)
+    if not chars: return (0, None)
     body_px = _body_px(H)
     stroke = max(2, int(round(0.12 * body_px)))
     soff = max(1, int(round(0.05 * body_px)))
@@ -424,8 +400,7 @@ def _tile_of_char(ch, body, body_px, alpha):
     """单字符三层文字的 RGBA tile 数组（与 _draw_char_now 同源构造）。
     返回 (arr, pad, bw, bh) 或 None。"""
     mod = _pil()
-    if mod is None or body is None or alpha <= 0.02:
-        return None
+    if mod is None or body is None or alpha <= 0.02: return None
     Image, ImageDraw, _ = mod
     stroke = max(2, int(round(0.12 * body_px)))
     soff = max(1, int(round(0.05 * body_px)))
@@ -433,8 +408,7 @@ def _tile_of_char(ch, body, body_px, alpha):
     pad = stroke + soff + 2
     bw = int(bb[2] - bb[0]) + pad * 2
     bh = int(sum(body.getmetrics())) + pad * 2
-    if bw <= 0 or bh <= 0:
-        return None
+    if bw <= 0 or bh <= 0: return None
     tile = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
     d = ImageDraw.Draw(tile)
     _draw_engine_text(d, pad - bb[0], pad, ch, body, body_px, alpha=alpha)
@@ -455,8 +429,7 @@ def _tile_over_pband(p, al, x, y, arr, pad):
     px, py = int(x) - pad, int(y) - pad
     sx0, sy0 = max(0, px), max(0, py)
     sx1, sy1 = min(w, px + arr.shape[1]), min(h, py + arr.shape[0])
-    if sx1 <= sx0 or sy1 <= sy0:
-        return
+    if sx1 <= sx0 or sy1 <= sy0: return
     sub_a = ta[sy0 - py:sy1 - py, sx0 - px:sx1 - px]
     sub_rgb = trgb[sy0 - py:sy1 - py, sx0 - px:sx1 - px]
     ep = p[sy0:sy1, sx0:sx1]
@@ -480,8 +453,7 @@ def _typing_band(W, H, text, chars, n_stable):
     调用方把活跃字符（n_stable..vis）继续逐字直接叠 canvas。"""
     mod = _pil()
     body = _get_font(_body_px(H), bold=False)
-    if mod is None or body is None or n_stable <= 0:
-        return None
+    if mod is None or body is None or n_stable <= 0: return None
     key = (W, H, text)
     _tc = _sub_typing_cache()
     e = _tc.get(key)
@@ -497,8 +469,7 @@ def _typing_band(W, H, text, chars, n_stable):
         y0 = max(0, int(min(ys) - stroke - soff - 2))
         y1 = min(H, int(max(ys) + int(sum(body.getmetrics()))
                         + stroke + soff + 2))
-        if x1 <= x0 or y1 <= y0:
-            return None
+        if x1 <= x0 or y1 <= y0: return None
         e = {"p": np.zeros((y1 - y0, x1 - x0, 3), np.float32),
              "al": np.zeros((y1 - y0, x1 - x0, 1), np.float32),
              "drawn": 0, "arr": None, "aux": None,
@@ -532,8 +503,7 @@ def _typing_band(W, H, text, chars, n_stable):
                                + 0.2 * body_px
                                + 2 * (int(round(0.12 * body_px))
                                       + int(round(0.05 * body_px)) + 2)))
-    if e["arr"] is None or e["drawn"] <= 0:
-        return None
+    if e["arr"] is None or e["drawn"] <= 0: return None
     return e
 
 
@@ -541,8 +511,7 @@ def _draw_char_now(canvas, x, y, ch, alpha):
     """打字中的单个渐显字符（小图层局部混合）。"""
     mod = _pil()
     body = _get_font(_body_px(canvas.shape[0]), bold=False)
-    if mod is None or body is None or alpha <= 0.02:
-        return
+    if mod is None or body is None or alpha <= 0.02: return
     Image, ImageDraw, _ = mod
     body_px = _body_px(canvas.shape[0])
     stroke = max(2, int(round(0.12 * body_px)))
@@ -551,8 +520,7 @@ def _draw_char_now(canvas, x, y, ch, alpha):
     pad = stroke + soff + 2
     bw = int(bb[2] - bb[0]) + pad * 2
     bh = int(sum(body.getmetrics())) + pad * 2
-    if bw <= 0 or bh <= 0:
-        return
+    if bw <= 0 or bh <= 0: return
     tile = Image.new("RGBA", (bw, bh), (0, 0, 0, 0))
     d = ImageDraw.Draw(tile)
     _draw_engine_text(d, pad - bb[0], pad, ch, body, body_px, alpha=alpha)
@@ -561,8 +529,7 @@ def _draw_char_now(canvas, x, y, ch, alpha):
     px, py = int(x) - pad, int(y) - pad
     sx0, sy0 = max(0, px), max(0, py)
     sx1, sy1 = min(W, px + bw), min(H, py + bh)
-    if sx1 <= sx0 or sy1 <= sy0:
-        return
+    if sx1 <= sx0 or sy1 <= sy0: return
     sub = arr[sy0 - py:sy1 - py, sx0 - px:sx1 - px]
     sub_a = sub[..., 3:4].astype(np.float32) / 255.0
     reg = canvas[sy0:sy1, sx0:sx1]
@@ -581,8 +548,7 @@ def _over_rgba_band(dst, src, dy, dx=0):
     v3.5.9：panel+name 预合成用（结合律成立，差异仅 uint8 舍入 ≤2 灰阶）。"""
     h, w = src.shape[:2]
     reg = dst[dy:dy + h, dx:dx + w]
-    if reg.size == 0:
-        return
+    if reg.size == 0: return
     a_s = src[..., 3:4].astype(np.float32) / 255.0
     a_d = reg[..., 3:4].astype(np.float32) / 255.0
     out_a = a_s + a_d * (1 - a_s)
@@ -599,26 +565,21 @@ _PANEL_NAMED_CACHE = {}
 def _panel_named_layer(W, H, who):
     """panel+name 预合成（v3.5.9）：名字同句不变 → 缓存 (W,H,who)，
     每帧 blend 从 3 次（panel/name/text）减到 2 次。who 为空退化为 panel。"""
-    if not who:
-        return _panel_layer(W, H)
+    if not who: return _panel_layer(W, H)
     key = (W, H, who)
     with _SUB_LOCK:
         hit = _PANEL_NAMED_CACHE.get(key)
-    if hit is not None:
-        return hit
+    if hit is not None: return hit
     y0, band, bpre = _panel_layer(W, H)
-    if band is None or not band.size:
-        return (y0, band, bpre)
+    if band is None or not band.size: return (y0, band, bpre)
     ny0, nband, npre = _name_band(W, H, who)
-    if nband is None or not nband.size:
-        return (y0, band, bpre)
+    if nband is None or not nband.size: return (y0, band, bpre)
     band = band.copy()                    # 不污染 _panel_layer 的共享缓存
     _over_rgba_band(band, nband, ny0 - y0)
     bpre = _band_premul(band)             # 预乘重算（一次性，随缓存存放）
     out = (y0, band, bpre)
     with _SUB_LOCK:
-        if len(_PANEL_NAMED_CACHE) >= 16:
-            _PANEL_NAMED_CACHE.clear()
+        if len(_PANEL_NAMED_CACHE) >= 16: _PANEL_NAMED_CACHE.clear()
         _PANEL_NAMED_CACHE[key] = out
     return out
 
@@ -626,8 +587,7 @@ def _panel_named_layer(W, H, who):
 def _draw_dialogue(canvas, proj, t, aid):
     """把 t 时刻活跃台词画到 canvas（引擎皮肤：面板 + 名字 + 打字机）。"""
     mod = _pil()
-    if mod is None:
-        return
+    if mod is None: return
     try:
         dlg = V.act_view(proj, aid).get("dialogue") or []
     except Exception:
@@ -635,29 +595,23 @@ def _draw_dialogue(canvas, proj, t, aid):
     eps = 1e-6
     active = None
     for d in dlg:
-        if not isinstance(d, dict):
-            continue
+        if not isinstance(d, dict): continue
         try:
             t0 = float(d.get("t"))
             dur = float(d.get("dur"))
         except Exception:
             continue
-        if t0 - eps <= t < t0 + dur - eps:
-            active = d
-    if active is None:
-        return
+        if t0 - eps <= t < t0 + dur - eps: active = d
+    if active is None: return
     who = str(active.get("who") or "")
     text = str(active.get("text") or "")
-    if not text:
-        return
+    if not text: return
     H, W = canvas.shape[:2]
     # v3.5.9：panel+name 预合成缓存（名字同句不变），blend 3→2 次
     y0, band, bpre = _panel_named_layer(W, H, who)
-    if band is not None and band.size:
-        _blend_band(canvas, y0, band, pre=bpre)
+    if band is not None and band.size: _blend_band(canvas, y0, band, pre=bpre)
     chars = _dialog_layout(W, H, text)
-    if not chars:
-        return
+    if not chars: return
     n = len(chars)
     t_el = t - float(active.get("t"))
     per = _typewriter_per(text, float(active.get("dur") or 3.0))
@@ -671,8 +625,7 @@ def _draw_dialogue(canvas, proj, t, aid):
     # v3.5.8 追加 A：a==1 的稳定前缀走增量带（每帧一次区域 blend，零
     # 重复 PIL 绘制）；仍在 fade 中的尾部字符逐字直接叠 canvas（原路径）。
     n_stable = 0
-    if t_el >= fade:
-        n_stable = min(vis, int((t_el - fade) / per) + 1)
+    if t_el >= fade: n_stable = min(vis, int((t_el - fade) / per) + 1)
     if n_stable > 0:
         e = _typing_band(W, H, text, chars, n_stable)
         if e is not None:
@@ -684,8 +637,7 @@ def _draw_dialogue(canvas, proj, t, aid):
     for i in range(n_stable, vis):
         ch, x, y = chars[i]
         a = min(1.0, max(0.0, (t_el - i * per) / fade))
-        if a > 0.02:
-            _draw_char_now(canvas, x, y, ch, a)
+        if a > 0.02: _draw_char_now(canvas, x, y, ch, a)
 
 
 def clear_subtitle_cache():
@@ -720,8 +672,7 @@ def _parse_effect_cmd(cmd):
     """`setTransform:{json} -target=xx -duration=N` → (target, params)；非法 None。"""
     key = str(cmd or "")
     hit = _FX_PARSE_CACHE.get(key)
-    if hit is not None:
-        return hit if hit != "bad" else None
+    if hit is not None: return hit if hit != "bad" else None
     try:
         head, rest = key.split(":", 1)
         if head.strip() != "setTransform":
@@ -733,16 +684,13 @@ def _parse_effect_cmd(cmd):
         params = json.loads(js)
         target = "bg-main"
         m = re.search(r"-target=(\S+)", rest)
-        if m:
-            target = m.group(1).rstrip(";").strip()
-        if not isinstance(params, dict):
-            raise ValueError
+        if m: target = m.group(1).rstrip(";").strip()
+        if not isinstance(params, dict): raise ValueError
         out = (target, dict(params))
     except Exception:
         _FX_PARSE_CACHE[key] = "bad"
         return None
-    if len(_FX_PARSE_CACHE) > 512:
-        _FX_PARSE_CACHE.clear()
+    if len(_FX_PARSE_CACHE) > 512: _FX_PARSE_CACHE.clear()
     _FX_PARSE_CACHE[key] = out
     return out
 
@@ -756,23 +704,19 @@ def _active_fx(proj, t, aid):
         return out
     eps = 1e-6
     for ef in eff:
-        if not isinstance(ef, dict):
-            continue
+        if not isinstance(ef, dict): continue
         try:
             et = float(ef.get("t"))
         except Exception:
             continue
-        if et > t + eps:
-            continue
+        if et > t + eps: continue
         parsed = _parse_effect_cmd(ef.get("cmd"))
-        if parsed:
-            out[parsed[0]] = parsed[1]
+        if parsed: out[parsed[0]] = parsed[1]
     return out
 
 
 def _fx_num(v, d=0.0):
-    if isinstance(v, bool):
-        return d
+    if isinstance(v, bool): return d
     try:
         return float(v)
     except Exception:
@@ -787,15 +731,13 @@ def _fx_glitch(rgb, ctx):
         y = int(rng.integers(0, max(1, h - 16)))
         hh = int(rng.integers(3, 16))
         dx = int(rng.integers(-24, 25))
-        if dx:
-            rgb[y:y + hh] = np.roll(rgb[y:y + hh], dx, axis=1)
+        if dx: rgb[y:y + hh] = np.roll(rgb[y:y + hh], dx, axis=1)
 
 
 def _fx_rgb_shift(rgb, ctx):
     """rgbFilm：R/B 通道水平分离（色差重影）。"""
     off = 2 + int(round(2 * math.sin(ctx["t"] * 9.0)))
-    if off == 0:
-        return
+    if off == 0: return
     rgb[..., 0] = np.roll(rgb[..., 0], off, axis=1)
     rgb[..., 2] = np.roll(rgb[..., 2], -off, axis=1)
 
@@ -824,8 +766,7 @@ def _fx_vignette(rgb, va):
                     ((yy - cy) / max(1.0, cy)) ** 2) / 1.4142
         fall = 1.0 - min(1.0, max(0.0, va)) * np.clip((r - 0.55) / 0.45, 0, 1)
         fall = fall.astype(np.float32)[..., None]
-        if len(_VIGN_CACHE) > 16:
-            _VIGN_CACHE.clear()
+        if len(_VIGN_CACHE) > 16: _VIGN_CACHE.clear()
         _VIGN_CACHE[key] = fall
     rgb[:] *= fall
 
@@ -848,8 +789,7 @@ def _gamma_lut(g):
     g = max(0.1, g)
     ent = _GAMMA_LUTS.get(g)
     if ent is None:
-        if len(_GAMMA_LUTS) > 32:
-            _GAMMA_LUTS.clear()
+        if len(_GAMMA_LUTS) > 32: _GAMMA_LUTS.clear()
         i = np.arange(256, dtype=np.float32)
         f = (255.0 * np.power(np.clip(i / 255.0, 0.0, 1.0), g)
              ).astype(np.float32)
@@ -894,8 +834,7 @@ def _fx_color(rgb, p):
     if sp <= 0 and br == 1.0 and ct == 1.0 \
             and (cr, cg, cb) == (1.0, 1.0, 1.0) and sa == 1.0:
         ga = _fx_num(p.get("gamma"), 1.0)
-        if ga != 1.0:
-            _gamma_apply(rgb, _gamma_lut(ga)[1])
+        if ga != 1.0: _gamma_apply(rgb, _gamma_lut(ga)[1])
         return
     M = np.eye(3, dtype=np.float32)
     c = np.zeros(3, np.float32)
@@ -921,8 +860,7 @@ def _fx_color(rgb, p):
         M = sa * M + (1.0 - sa) * np.outer(np.ones(3, np.float32), W @ M)
         c = sa * c + (1.0 - sa) * float(W @ c) * np.ones(3, np.float32)
     rgb[:] = cv2.transform(rgb, M)
-    if c.any():
-        rgb += c
+    if c.any(): rgb += c
     ga = _fx_num(p.get("gamma"), 1.0)
     if ga != 1.0:
         _gamma_apply(rgb, _gamma_lut(ga)[1])   # 输出有界，免尾部 clip
@@ -941,8 +879,7 @@ def _fx_bloom(rgb, p):
     全帧只留最后一次加法。"""
     import cv2
     b = _fx_num(p.get("bloom"))
-    if b <= 0:
-        return
+    if b <= 0: return
     bb = max(1, int(round(_fx_num(p.get("bloomBlur"), 4))))
     bt = min(0.95, max(0.01, _fx_num(p.get("bloomThreshold"), 0.5)))
     bri = max(0.2, _fx_num(p.get("bloomBrightness"), 0.5))
@@ -953,8 +890,7 @@ def _fx_bloom(rgb, p):
     thr = bt * 255.0
     mask = np.clip((lum - thr) / max(1.0, 255.0 - thr), 0.0, 1.0)
     k = max(1, (bb * 2 + 1) // 4)
-    if k % 2 == 0:
-        k += 1
+    if k % 2 == 0: k += 1
     glow = cv2.resize(cv2.GaussianBlur(small * mask, (k, k), 0), (w, h),
                       interpolation=cv2.INTER_LINEAR)
     rgb[:] += glow * (b * bri * 0.5 * _FX_BLOOM_K)
@@ -971,10 +907,8 @@ def _fx_chain(rgb, p, ctx):
         small = cv2.resize(rgb, (max(1, w // k), max(1, h // k)),
                            interpolation=cv2.INTER_LINEAR)
         rgb[:] = cv2.resize(small, (w, h), interpolation=cv2.INTER_NEAREST)
-    if p.get("glitchFilm"):
-        _fx_glitch(rgb, ctx)
-    if p.get("rgbFilm"):
-        _fx_rgb_shift(rgb, ctx)
+    if p.get("glitchFilm"): _fx_glitch(rgb, ctx)
+    if p.get("rgbFilm"): _fx_rgb_shift(rgb, ctx)
     b = _fx_num(p.get("blur"))
     if b > 0:
         k = max(1, int(round(b))) * 2 + 1
@@ -983,24 +917,19 @@ def _fx_chain(rgb, p, ctx):
         # 小核（k<9）直接全帧，省两次 resize。
         if k >= 9 and h >= 4 and w >= 4:
             kh = max(1, k // 2)
-            if kh % 2 == 0:
-                kh += 1
+            if kh % 2 == 0: kh += 1
             small = cv2.resize(rgb, (w // 2, h // 2),
                                interpolation=cv2.INTER_AREA)
             rgb[:] = cv2.resize(cv2.GaussianBlur(small, (kh, kh), 0), (w, h),
                                 interpolation=cv2.INTER_LINEAR)
-        else:
-            rgb[:] = cv2.GaussianBlur(rgb, (k, k), 0)
+        else: rgb[:] = cv2.GaussianBlur(rgb, (k, k), 0)
     # v3.5.7：sepia 已并入 _fx_color 的合并矩阵（见其 docstring）
     _fx_color(rgb, p)
     _fx_bloom(rgb, p)
     ns = _fx_num(p.get("noise"))
-    if ns > 0:
-        _fx_noise(rgb, min(1.0, ns), ctx)
-    if p.get("oldFilm"):
-        _fx_oldfilm(rgb, ctx)
-    if p.get("vignetting"):
-        _fx_vignette(rgb, _fx_num(p.get("vignettingAlpha"), 0.5))
+    if ns > 0: _fx_noise(rgb, min(1.0, ns), ctx)
+    if p.get("oldFilm"): _fx_oldfilm(rgb, ctx)
+    if p.get("vignetting"): _fx_vignette(rgb, _fx_num(p.get("vignettingAlpha"), 0.5))
     np.clip(rgb, 0, 255, out=rgb)
 
 
@@ -1035,11 +964,9 @@ def _paste_prep(img, lay, W, H):
     转换只在真混合时付出。"""
     import cv2
     x, y, sc, rot = lay["x"], lay["y"], lay["scale"], lay["rot"]
-    if img.ndim == 2:
-        img = np.dstack([img] * 3)
+    if img.ndim == 2: img = np.dstack([img] * 3)
     h, w = img.shape[:2]
-    if img.shape[2] == 3:
-        img = np.dstack([img, np.full((h, w), 255, np.uint8)])
+    if img.shape[2] == 3: img = np.dstack([img, np.full((h, w), 255, np.uint8)])
     s0 = max(W / w, H / h) if lay.get("cover") else min(W / w, H / h)
     s = s0 * sc
     nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
@@ -1057,8 +984,7 @@ def _paste_prep(img, lay, W, H):
                            flags=cv2.INTER_LINEAR, borderValue=0)
     dx0, dy0 = max(0, ox), max(0, oy)
     dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
-    if dx1 <= dx0 or dy1 <= dy0:
-        return None
+    if dx1 <= dx0 or dy1 <= dy0: return None
     sx0, sy0 = dx0 - ox, dy0 - oy
     sub_rgb = rgb[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
     sub_a = a[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
@@ -1075,8 +1001,7 @@ _OV_LOCAL = threading.local()
 
 def _ov_buf(key, shape):
     bufs = getattr(_OV_LOCAL, "bufs", None)
-    if bufs is None:
-        bufs = _OV_LOCAL.bufs = {}
+    if bufs is None: bufs = _OV_LOCAL.bufs = {}
     b = bufs.get(key)
     if b is None or b.shape != shape:
         b = np.empty(shape, np.float32)
@@ -1099,15 +1024,13 @@ def _paste_over(frgba, prep):
         return
     # ① alpha 包围盒（两次 u8 reduction，微秒级）
     rows = np.any(sub_a, axis=1)
-    if not rows.any():
-        return
+    if not rows.any(): return
     cols = np.any(sub_a, axis=0)
     r0 = int(np.argmax(rows))
     r1 = len(rows) - int(np.argmax(rows[::-1]))
     c0 = int(np.argmax(cols))
     c1 = len(cols) - int(np.argmax(cols[::-1]))
-    if c1 <= c0 or r1 <= r0:
-        return
+    if c1 <= c0 or r1 <= r0: return
     sub_rgb = sub_rgb[r0:r1, c0:c1]
     sub_a = sub_a[r0:r1, c0:c1]
     dx0 += c0
@@ -1115,8 +1038,7 @@ def _paste_over(frgba, prep):
     dx1 = min(dx1, dx0 + (c1 - c0))
     dy1 = min(dy1, dy0 + (r1 - r0))
     h, w = sub_a.shape
-    if dx1 <= dx0 or dy1 <= dy0:
-        return
+    if dx1 <= dx0 or dy1 <= dy0: return
     # ② 原地 float 合成（公式与原实现逐步对应；sub_a 是 2D，统一扩 3 通道形）
     sa = _ov_buf("sa", (h, w, 1))
     np.multiply(sub_a[..., None], 1.0 / 255.0, out=sa)
@@ -1151,8 +1073,7 @@ def _paste_rgba(frgba, img, lay, static=False):
     缓存复用；调用方必须保证该 img 在缓存期内不被原地改写。"""
     if not static:
         prep = _paste_prep(img, lay, frgba.shape[1], frgba.shape[0])
-        if prep is not None:
-            _paste_over(frgba, prep)
+        if prep is not None: _paste_over(frgba, prep)
         return
     H, W = frgba.shape[:2]
     key = (id(img), round(float(lay["x"]), 6), round(float(lay["y"]), 6),
@@ -1164,8 +1085,7 @@ def _paste_rgba(frgba, img, lay, static=False):
     # 未命中重算。顺带让缓存自己钉住静态帧，避免中途被 GC 复用地址。
     with _CACHE_LOCK:
         ent = _PASTE_CACHE.get(key)
-    if ent is not None and ent[0] is img:
-        prep = ent[1]
+    if ent is not None and ent[0] is img: prep = ent[1]
     else:
         prep = _paste_prep(img, lay, W, H)
         with _CACHE_LOCK:
@@ -1175,8 +1095,7 @@ def _paste_rgba(frgba, img, lay, static=False):
                 _PASTE_CACHE.pop(next(iter(_PASTE_CACHE)), None)
             _PASTE_CACHE[key] = (img, prep)
             _cache_shrink(_PASTE_CACHE, _PASTE_BUDGET_MB * 1048576, keep=2)
-    if prep is not None:
-        _paste_over(frgba, prep)
+    if prep is not None: _paste_over(frgba, prep)
 
 
 def _paste_cache_clear():
@@ -1236,8 +1155,7 @@ _PASTE_BUDGET_MB = 192        # 贴层缓存（每条同时钉住源图 + prep�
 
 def _entry_bytes(v):
     """缓存条目的实际占用：单层数组，或 (源图, prep) 两份。"""
-    if isinstance(v, tuple):
-        return sum(getattr(a, "nbytes", 0) for a in v)
+    if isinstance(v, tuple): return sum(getattr(a, "nbytes", 0) for a in v)
     return getattr(v, "nbytes", 0)
 
 
@@ -1248,12 +1166,10 @@ def _cache_shrink(cache, budget_bytes, keep=1):
     而贴层缓存一条是 (源图, prep) **两份**数组。实测 workers=8 时按条数
     兜底会放到 718MB 峰值，改按字节后压回预算内——宁可退回 miss 重算，
     也不让导出把机器压进交换分区（那样比 miss 慢得多）。"""
-    if budget_bytes <= 0:
-        return
+    if budget_bytes <= 0: return
     while len(cache) > keep:
         tot = sum(_entry_bytes(v) for v in cache.values())
-        if tot <= budget_bytes:
-            break
+        if tot <= budget_bytes: break
         cache.pop(next(iter(cache)), None)
 
 
@@ -1289,12 +1205,10 @@ def tune_cache_capacity(workers):
 
 def _fx_sig(p):
     """滤镜参数字典 -> 可哈希签名；None = 不可缓存（空/含时变算子）。"""
-    if not p:
-        return None
+    if not p: return None
     ks = []
     for k, v in p.items():
-        if k in _FX_TIMEVARYING_KEYS:
-            return None
+        if k in _FX_TIMEVARYING_KEYS: return None
         try:
             ks.append((k, round(float(v), 6)))
         except (TypeError, ValueError):
@@ -1323,14 +1237,11 @@ def _fx_budget_shrink():
     while len(_BG_FX_CACHE) + len(_FIG_FX_CACHE) > 2:
         tot = (sum(_entry_bytes(v) for v in _BG_FX_CACHE.values())
                + sum(_entry_bytes(v) for v in _FIG_FX_CACHE.values()))
-        if tot <= budget:
-            break
+        if tot <= budget: break
         if len(_FIG_FX_CACHE) >= len(_BG_FX_CACHE) and _FIG_FX_CACHE:
             _FIG_FX_CACHE.pop(next(iter(_FIG_FX_CACHE)), None)
-        elif _BG_FX_CACHE:
-            _BG_FX_CACHE.pop(next(iter(_BG_FX_CACHE)), None)
-        else:
-            _FIG_FX_CACHE.pop(next(iter(_FIG_FX_CACHE)), None)
+        elif _BG_FX_CACHE: _BG_FX_CACHE.pop(next(iter(_BG_FX_CACHE)), None)
+        else: _FIG_FX_CACHE.pop(next(iter(_FIG_FX_CACHE)), None)
 
 
 def _fx_cache_get(cache, key):
@@ -1350,8 +1261,7 @@ def _bg_cache_key(jobs, W, H):
     视频/puppet 源逐帧变化，一律不缓存。"""
     ks = []
     for img, lay, srcd in jobs:
-        if not isinstance(srcd, dict) or srcd.get("kind") != "image":
-            return None
+        if not isinstance(srcd, dict) or srcd.get("kind") != "image": return None
         pth = str(srcd.get("path") or "")
         try:
             mt = os.path.getmtime(pth)
@@ -1367,8 +1277,7 @@ def _bg_cache_key(jobs, W, H):
 def _paste_bg_layer(bgc, jobs, W, H):
     """bg_jobs 贴满背景层（v3.5.7：image 源的贴底结果按键缓存，跳过
     每帧重复的 resize+blend；滤镜在 bgc 副本上就地改，不污染缓存）。"""
-    if not jobs:
-        return
+    if not jobs: return
     key = _bg_cache_key(jobs, W, H)
     if key is not None:
         with _CACHE_LOCK:
@@ -1396,8 +1305,7 @@ def fit_paste(canvas, img):
     """等比缩放居中贴到画布（fit，黑边）——第一阶段唯一适配模式。"""
     H, W = canvas.shape[:2]
     h, w = img.shape[:2]
-    if h == 0 or w == 0:
-        return canvas
+    if h == 0 or w == 0: return canvas
     s = min(W / w, H / h)
     nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
     import cv2
@@ -1410,8 +1318,7 @@ def fit_paste(canvas, img):
 def _track_clip_at(tr, t):
     """该轨在 t 时刻生效的 clip（同轨不重叠 => 至多一个）。"""
     for c in tr["clips"]:
-        if c["start"] - V.EPS <= t < c["start"] + c["dur"] - V.EPS:
-            return c
+        if c["start"] - V.EPS <= t < c["start"] + c["dur"] - V.EPS: return c
     return None
 
 
@@ -1467,15 +1374,13 @@ def layer_rect(w, h, W, H, lay):
         sc, rot = lay["scale"], lay["rot"]
     except Exception:
         return (0, 0, 0, 0)
-    if w <= 0 or h <= 0 or W <= 0 or H <= 0:
-        return (0, 0, 0, 0)
+    if w <= 0 or h <= 0 or W <= 0 or H <= 0: return (0, 0, 0, 0)
     s0 = max(W / w, H / h) if lay.get("cover") else min(W / w, H / h)
     s = s0 * sc
     nw = max(1, int(round(w * s)))
     nh = max(1, int(round(h * s)))
     cx, cy = x * W, y * H
-    if rot == 0.0:
-        return (int(round(cx - nw / 2.0)), int(round(cy - nh / 2.0)), nw, nh)
+    if rot == 0.0: return (int(round(cx - nw / 2.0)), int(round(cy - nh / 2.0)), nw, nh)
     rad = math.radians(rot)
     ca, sa = abs(math.cos(rad)), abs(math.sin(rad))
     rw = int(math.ceil(nw * ca + nh * sa))
@@ -1501,24 +1406,17 @@ def paste_layer(canvas, img, lay):
     # ---- 旧行为精确保持 ----
     is_default = (x == 0.5 and y == 0.5 and sc == 1.0 and rot == 0.0
                   and not cover)
-    if is_default and img.ndim == 2:
-        img = np.dstack([img] * 3)
+    if is_default and img.ndim == 2: img = np.dstack([img] * 3)
     if is_default and img.ndim == 3 and img.shape[2] == 3:
-        if img.shape[0] == H and img.shape[1] == W:
-            canvas[...] = img
-        else:
-            fit_paste(canvas, img)
+        if img.shape[0] == H and img.shape[1] == W: canvas[...] = img
+        else: fit_paste(canvas, img)
         return canvas
     # ---- 通用路径 ----
-    if img.ndim == 2:
-        img = np.dstack([img] * 3)
-    if img.shape[2] >= 4:
-        rgb, alpha = img[:, :, :3], img[:, :, 3]
-    else:
-        rgb, alpha = img[:, :, :3], None
+    if img.ndim == 2: img = np.dstack([img] * 3)
+    if img.shape[2] >= 4: rgb, alpha = img[:, :, :3], img[:, :, 3]
+    else: rgb, alpha = img[:, :, :3], None
     h, w = rgb.shape[:2]
-    if h == 0 or w == 0:
-        return canvas
+    if h == 0 or w == 0: return canvas
     s0 = max(W / w, H / h) if cover else min(W / w, H / h)
     s = s0 * sc
     nw = max(1, int(round(w * s)))
@@ -1531,13 +1429,11 @@ def paste_layer(canvas, img, lay):
     if rot == 0.0:
         dx0, dy0 = max(0, ox), max(0, oy)
         dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
-        if dx1 <= dx0 or dy1 <= dy0:
-            return canvas
+        if dx1 <= dx0 or dy1 <= dy0: return canvas
         sx0, sy0 = dx0 - ox, dy0 - oy
         sub_rgb = rgb[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
         dst = canvas[dy0:dy1, dx0:dx1]
-        if alpha is None:
-            dst[...] = sub_rgb                  # 全不透明：直贴
+        if alpha is None: dst[...] = sub_rgb                  # 全不透明：直贴
         else:
             a2 = alpha[sy0:sy0 + (dy1 - dy0), sx0:sx0 + (dx1 - dx0)]
             _over_rgba(dst, sub_rgb, a2)
@@ -1563,8 +1459,7 @@ def paste_layer(canvas, img, lay):
                             borderValue=0)
     dx0, dy0 = max(0, ox), max(0, oy)
     dx1, dy1 = min(W, ox + rw), min(H, oy + rh)
-    if dx1 <= dx0 or dy1 <= dy0:
-        return canvas
+    if dx1 <= dx0 or dy1 <= dy0: return canvas
     sx0, sy0 = dx0 - ox, dy0 - oy
     sl = (slice(sy0, sy0 + (dy1 - dy0)), slice(sx0, sx0 + (dx1 - dx0)))
     _over_rgba(canvas[dy0:dy1, dx0:dx1], rgb[sl], a2[sl])
@@ -1598,19 +1493,15 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
     引擎对照不受影响）。另：image 源的背景贴层加了静态缓存
     （_paste_bg_layer），同工程逐帧导出只算一次 resize+blend。"""
     H, W = int(proj["height"]), int(proj["width"])
-    if canvas is None:
-        canvas = np.zeros((H, W, 3), np.uint8)
-    else:
-        canvas[...] = 0
+    if canvas is None: canvas = np.zeros((H, W, 3), np.uint8)
+    else: canvas[...] = 0
     fx_map = _active_fx(proj, t, aid) if fx else None
     if not fx_map:
         # ---- 旧逐轨叠加路径（无滤镜：逐像素零 diff 保证）----
         for tr in V._tracks_of(proj, aid):      # 列表序 = 底→顶（后加的在上）
-            if tr.get("kind") != "video" or tr.get("hidden"):
-                continue
+            if tr.get("kind") != "video" or tr.get("hidden"): continue
             clip = _track_clip_at(tr, t)
-            if clip is None:
-                continue
+            if clip is None: continue
             try:
                 src = src_get(clip["source"])
                 # v3.5.11：L2D 源必须先按 clip 灌 motion/expression，否则
@@ -1628,8 +1519,7 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                                     + float(clip.get("src_in") or 0.0)))
             except Exception:
                 continue
-            if img is None or img.size == 0:
-                continue
+            if img is None or img.size == 0: continue
             paste_layer(canvas, img, V.layout_at(clip))
     else:
         # ---- v3.5.6 分层合成（滤镜按 target 作用层）----
@@ -1638,11 +1528,9 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
         fig = None                                # v3.5.9：惰性分配（命中直接 over）
         bg_jobs, fig_jobs, main_jobs = [], [], []
         for tr in V._tracks_of(proj, aid):
-            if tr.get("kind") != "video" or tr.get("hidden"):
-                continue
+            if tr.get("kind") != "video" or tr.get("hidden"): continue
             clip = _track_clip_at(tr, t)
-            if clip is None:
-                continue
+            if clip is None: continue
             lay = V.layout_at(clip)
             is_fig = str(tr.get("name") or "").startswith("FIG")
             try:
@@ -1659,20 +1547,16 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                                     + float(clip.get("src_in") or 0.0)))
             except Exception:
                 continue
-            if img is None or img.size == 0:
-                continue
-            if bool(lay.get("cover")):
-                bg_jobs.append((img, lay, clip.get("source")))
+            if img is None or img.size == 0: continue
+            if bool(lay.get("cover")): bg_jobs.append((img, lay, clip.get("source")))
             elif is_fig:
                 fig_jobs.append((img, lay,
                                  bool(getattr(src, "is_static", False))))
-            else:
-                main_jobs.append((img, lay))
+            else: main_jobs.append((img, lay))
         bg_fx = fx_map.get("bg-main") or fx_map.get("bg")
         fig_fx = None
         for k, v in fx_map.items():
-            if k.startswith("fig"):
-                fig_fx = v
+            if k.startswith("fig"): fig_fx = v
 
         def _bg_pass():
             # v3.5.8：静态背景 + 纯空间滤镜 -> 整层结果缓存（bgc 是
@@ -1694,8 +1578,7 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
             # 非命中才分配 float32 bgc（命中路径零分配）
             bgc = np.zeros((H, W, 3), np.float32)
             _paste_bg_layer(bgc, bg_jobs, W, H)
-            if bg_fx:
-                _fx_chain(bgc, bg_fx, ctx)
+            if bg_fx: _fx_chain(bgc, bg_fx, ctx)
             np.clip(bgc, 0, 255, out=bgc)
             canvas[...] = bgc
             if ck2 is not None:
@@ -1737,13 +1620,10 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                                     + sub * (1 - a)).astype(np.uint8)
                     return
             for img, lay, st in fig_jobs:
-                if fig is None:
-                    fig = np.zeros((H, W, 4), np.uint8)   # 非命中才分配
+                if fig is None: fig = np.zeros((H, W, 4), np.uint8)   # 非命中才分配
                 _paste_rgba(fig, img, lay, static=st)
-            if fig_fx and fig is not None:
-                _fx_chain_rgba(fig, fig_fx, ctx)
-            if fkey is not None:
-                _fx_cache_put(_FIG_FX_CACHE, fkey, fig)
+            if fig_fx and fig is not None: _fx_chain_rgba(fig, fig_fx, ctx)
+            if fkey is not None: _fx_cache_put(_FIG_FX_CACHE, fkey, fig)
 
         # v3.5.8（task-74）任务3：bg 层与 fig 层完全独立（各自数组、ctx
         # 只读、_BG_CACHE/_PASTE_CACHE 分别单线程访问），numpy/cv2 大
@@ -1766,8 +1646,7 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
         if fig is not None:
             alpha = fig[..., 3]
             rows_nz = np.any(alpha > 0, axis=1)
-        else:
-            rows_nz = np.zeros(0, bool)
+        else: rows_nz = np.zeros(0, bool)
         if rows_nz.any():
             cols_nz = np.any(alpha > 0, axis=0)
             ys = np.nonzero(rows_nz)[0]
@@ -1780,8 +1659,7 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
             sub[...] = (sub_fig[..., :3] * a + sub * (1 - a)).astype(np.uint8)
         for img, lay in main_jobs:                  # 其余轨仍在最上层
             paste_layer(canvas, img, lay)
-    if subtitle:
-        _draw_dialogue(canvas, proj, t, aid)
+    if subtitle: _draw_dialogue(canvas, proj, t, aid)
     # v3.6.2：转场的视频侧近似——在背景轨（最底可见视频轨）的片段进出
     # 边界把整帧向黑场淡化（fade-through-black）。
     #   · 未设置转场 / 显式「无转场」 -> 返回 1.0，整帧**逐像素零改动**
@@ -1790,18 +1668,15 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
     #     WebGAL 可玩导出为准——compose_frame 无状态，拿不到上一画面，
     #     做不了真交叉淡化，黑场淡化是合法且观感一致的近似）
     f = _scene_fade(proj, t, aid)
-    if f < 1.0:
-        np.multiply(canvas, f, out=canvas, casting="unsafe")
+    if f < 1.0: np.multiply(canvas, f, out=canvas, casting="unsafe")
     return canvas
 
 
 def _scene_fade(proj, t, aid):
     """t 时刻整帧淡化系数 0..1（1=不淡）。见 compose_frame 调用点注释。"""
     tr = proj.get("transition") if isinstance(proj, dict) else None
-    if not isinstance(tr, dict):
-        return 1.0
-    if not (tr.get("enter") or tr.get("exit")):
-        return 1.0
+    if not isinstance(tr, dict): return 1.0
+    if not (tr.get("enter") or tr.get("exit")): return 1.0
     try:
         dur = float(tr.get("duration_ms") or 300) / 1000.0
     except (TypeError, ValueError):
@@ -1814,18 +1689,15 @@ def _scene_fade(proj, t, aid):
                 and not trk.get("hidden"):
             bottom = trk
             break
-    if bottom is None:
-        return 1.0
+    if bottom is None: return 1.0
     f = 1.0
     eps = 1e-6
     for c in (bottom.get("clips") or []):
         s = float(c.get("start") or 0.0)
         e = s + float(c.get("dur") or 0.0)
         if s - eps <= t < e - eps:
-            if t - s < dur:
-                f = min(f, (t - s) / dur)
-            if e - t < dur:
-                f = min(f, (e - t) / dur)
+            if t - s < dur: f = min(f, (t - s) / dur)
+            if e - t < dur: f = min(f, (e - t) / dur)
             break
     return max(0.0, min(1.0, f))
 
@@ -1845,10 +1717,7 @@ class SourceManager:
 
     def close_all(self):
         for s in self._cache.values():
-            try:
-                s.close()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): s.close()
         self._cache.clear()
         # v3.5.8：source 实例释放后其静态数组 id 可能被复用——贴层缓存
         # 必须随之清空（正确性兜底，见 _PASTE_CACHE 注释）。
@@ -1861,8 +1730,7 @@ def _place(buf, samples, at_sample):
     """把 samples 放到 buf[at_sample:]，饱和截断。"""
     n = len(samples)
     i0 = max(0, at_sample)
-    if i0 >= len(buf):
-        return
+    if i0 >= len(buf): return
     take = min(n, len(buf) - i0)
     buf[i0:i0 + take] = np.clip(buf[i0:i0 + take].astype(np.int64)
                                 + samples[:take].astype(np.int64),
@@ -1871,24 +1739,21 @@ def _place(buf, samples, at_sample):
 
 def extract_audio(path):
     """任意媒体 -> (int16 mono, sr)。wav 直读；其余 ffmpeg 转；失败 (None, 0)。"""
-    if not path or not os.path.isfile(path):
-        return None, 0
+    if not path or not os.path.isfile(path): return None, 0
     if path.lower().endswith(".wav"):
         try:
             with wave.open(path, "rb") as wf:
                 sr = wf.getframerate()
                 raw = wf.readframes(wf.getnframes())
             a = np.frombuffer(raw, dtype=np.int16)
-            if a.size % max(1, wf.getnchannels()):
-                a = a[:-(a.size % wf.getnchannels())]
+            if a.size % max(1, wf.getnchannels()): a = a[:-(a.size % wf.getnchannels())]
             ch = max(1, wf.getnchannels())
             mono = a.reshape(-1, ch).mean(axis=1).astype(np.int16) if ch > 1 else a
             return mono, sr
         except Exception:
             return None, 0
     ff = ffmpeg_path()
-    if not ff:
-        return None, 0
+    if not ff: return None, 0
     tmp = tempfile.mktemp(suffix=".wav")
     try:
         subprocess.run(
@@ -1900,10 +1765,7 @@ def extract_audio(path):
     except Exception:
         return None, 0
     finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError): os.remove(tmp)
 
 
 def mix_audio(proj, sr=44100):
@@ -1916,8 +1778,7 @@ def mix_audio(proj, sr=44100):
     后面一直在响」，相邻/重叠片段也互相串音。
     """
     dur = V.project_duration(proj)
-    if dur <= 0:
-        return None
+    if dur <= 0: return None
     total = int(dur * sr) + sr // 2
     buf = np.zeros(total, np.int16)
     any_a = False
@@ -1927,14 +1788,11 @@ def mix_audio(proj, sr=44100):
         for c in (tr.get("clips") or []):
             src = c.get("source") or {}
             kind = src.get("kind")
-            if kind in ("puppet", "image"):
-                continue
+            if kind in ("puppet", "image"): continue
             path = src.get("path")
-            if not path or str(path).startswith("color:"):
-                continue
+            if not path or str(path).startswith("color:"): continue
             samples, s2 = extract_audio(path)
-            if samples is None or not len(samples):
-                continue          # 素材没声音轨，正常
+            if samples is None or not len(samples): continue          # 素材没声音轨，正常
             # 先统一采样率
             if s2 != sr and s2 > 0:
                 k = sr / float(s2)
@@ -1944,8 +1802,7 @@ def mix_audio(proj, sr=44100):
 
             # ---- 关键：按 clip 语义切片 ----
             speed = float(c.get("speed") or 1.0)
-            if speed <= 0:
-                speed = 1.0
+            if speed <= 0: speed = 1.0
             clip_dur = float(c.get("dur") or 0.0)
             src_in = max(0.0, float(c.get("src_in") or 0.0))
             # 素材内起点（秒）-> 采样索引
@@ -1955,13 +1812,11 @@ def mix_audio(proj, sr=44100):
             need = int(round(clip_dur * sr * speed))
             s1 = s0 + need
             seg = samples[s0:s1]
-            if not len(seg):
-                continue
+            if not len(seg): continue
             if speed != 1.0:
                 # 变速：重采样到 clip_dur 的采样数
                 want = int(round(clip_dur * sr))
-                if want <= 0:
-                    continue
+                if want <= 0: continue
                 idx2 = (np.arange(want) * (len(seg) / float(want))
                         ).astype(np.int32)
                 idx2 = np.clip(idx2, 0, len(seg) - 1)
@@ -1972,8 +1827,7 @@ def mix_audio(proj, sr=44100):
             if at < 0:
                 seg = seg[-at:]
                 at = 0
-            if at >= total or not len(seg):
-                continue
+            if at >= total or not len(seg): continue
             take = min(len(seg), total - at)
             _place(buf, seg[:take], at)
             any_a = True
@@ -2002,8 +1856,7 @@ def export_audio_only(proj, path, sr=44100, fmt=None):
     返回 (ok, msg, real_path)。无音频轨时 ok=False，不产出空文件。
     """
     samples = mix_audio(proj, sr=sr)
-    if samples is None or not len(samples):
-        return False, "工程里没有可用的音频轨（或全部静音）", path
+    if samples is None or not len(samples): return False, "工程里没有可用的音频轨（或全部静音）", path
     ext = os.path.splitext(str(path))[1].lower()
     want = (fmt or ext.lstrip(".") or "wav").lower()
     if want in ("wav", ""):
@@ -2040,10 +1893,7 @@ def export_audio_only(proj, path, sr=44100, fmt=None):
     except Exception as e:
         return False, "导出失败：%s" % e, path
     finally:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        with contextlib.suppress(OSError): os.remove(tmp)
 
 
 def _srt_time(sec):
@@ -2072,39 +1922,32 @@ def dialogue_events(proj, aid=None):
     eps = 1e-6
     items = []
     for d in dlg:
-        if not isinstance(d, dict):
-            continue
+        if not isinstance(d, dict): continue
         try:
             t0 = float(d.get("t"))
             dur = float(d.get("dur"))
         except (TypeError, ValueError):
             continue
         text = str(d.get("text") or "")
-        if dur <= 0 or not text.strip():
-            continue
+        if dur <= 0 or not text.strip(): continue
         items.append((t0, t0 + dur, str(d.get("who") or ""), text))
-    if not items:
-        return []
+    if not items: return []
     # 所有边界（含工程末尾），去重排序
     bounds = sorted({round(x, 6) for it in items for x in (it[0], it[1])})
     events = []
     for i in range(len(bounds) - 1):
         a, b = bounds[i], bounds[i + 1]
-        if b - a <= eps:
-            continue
+        if b - a <= eps: continue
         mid = (a + b) / 2.0
         active = None
         for t0, t1, who, text in items:      # 顺序遍历 → 后者覆盖前者
-            if t0 - eps <= mid < t1 - eps:
-                active = (who, text)
-        if active is None:
-            continue
+            if t0 - eps <= mid < t1 - eps: active = (who, text)
+        if active is None: continue
         who, text = active
         if events and events[-1][2] == who and events[-1][3] == text \
                 and abs(events[-1][1] - a) <= eps:
             events[-1] = (events[-1][0], b, who, text)   # 合并同内容相邻段
-        else:
-            events.append((a, b, who, text))
+        else: events.append((a, b, who, text))
     return events
 
 
@@ -2115,13 +1958,11 @@ def export_srt(proj, path, aid=None, with_name=True):
     旁白（who 为空）不加前缀。返回 (ok, msg, n_events)。
     """
     evs = dialogue_events(proj, aid=aid)
-    if not evs:
-        return False, "工程里没有台词，未生成字幕", 0
+    if not evs: return False, "工程里没有台词，未生成字幕", 0
     lines = []
     for i, (t0, t1, who, text) in enumerate(evs, 1):
         body = text.replace("\r\n", "\n").replace("\r", "\n")
-        if with_name and who.strip():
-            body = "%s：%s" % (who.strip(), body)
+        if with_name and who.strip(): body = "%s：%s" % (who.strip(), body)
         lines.append(str(i))
         lines.append("%s --> %s" % (_srt_time(t0), _srt_time(t1)))
         lines.append(body)
@@ -2166,14 +2007,12 @@ def export_worker_limits():
 def normalize_workers(workers=None):
     """用户选择 -> 合法线程数；None/非法/越界一律回落到默认值。"""
     default, upper = export_worker_limits()
-    if workers is None:
-        return default
+    if workers is None: return default
     try:
         w = int(workers)
     except (TypeError, ValueError):
         return default
-    if w < 1:
-        return default
+    if w < 1: return default
     return max(1, min(upper, w))
 
 
@@ -2207,12 +2046,9 @@ try:
             # 由素材自身在 t 时刻的画面决定，与播放速度无关）。
             self.fps_override = None
             if fps is not None:
-                try:
+                with contextlib.suppress((TypeError, ValueError)):
                     f = float(fps)
-                    if 1.0 <= f <= 120.0:
-                        self.fps_override = f
-                except (TypeError, ValueError):
-                    pass
+                    if 1.0 <= f <= 120.0: self.fps_override = f
             # quality 保留占位：cv2 mp4v 后端实测不支持 QUALITY（set 后
             # 输出字节不变，H264 四元组假成功 0 字节），恒用默认质量。
             self.quality = quality
@@ -2232,11 +2068,9 @@ try:
             self._cancel = True
             # 叫醒可能卡在泵上的合成线程：泵在主线程被卡住的请求会占着
             # 窗口，不 abort 的话取消按钮要等到 REQUEST_TIMEOUT 才生效。
-            try:
+            with contextlib.suppress(Exception):
                 import l2d_pump as LPM
                 LPM.pump().abort()
-            except Exception:
-                pass
 
         def _compose_parallel(self, t):
             """帧级并行合成（v3.5.8）：每线程独立 SourceManager。
@@ -2258,11 +2092,9 @@ try:
             cv2.setNumThreads(1)
             if self.l2d_animate is False:
                 # 显式关：别让上一次导出残留的 enabled=True 泄漏进这次定格导出
-                try:
+                with contextlib.suppress(Exception):
                     import l2d_pump as LPM
                     LPM.pump().configure(False)
-                except Exception:
-                    pass
             try:
                 W = max(2, int(round(self.proj["width"] * self.scale)) & ~1)
                 H = max(2, int(round(self.proj["height"] * self.scale)) & ~1)
@@ -2326,13 +2158,9 @@ try:
                 if r.returncode == 0 and os.path.isfile(finalp):
                     os.replace(finalp, self.path)
                     msg = "已导出（含音轨）"
-                else:
-                    msg = "音轨合流失败，输出无声视频"
+                else: msg = "音轨合流失败，输出无声视频"
                 for p in (wavp, finalp):
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
+                    with contextlib.suppress(OSError): os.remove(p)
                 self.done.emit(True, "%s %s" % (self.path, msg))
             except Exception as e:
                 self.done.emit(False, "导出异常: %r" % e)

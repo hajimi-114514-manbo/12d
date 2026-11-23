@@ -5,6 +5,7 @@
 SeeThrough 拆分走 QThread，绝不阻塞 UI。
 引擎接口全部复用 l2d_rig_core / decompose（v2 副本）。
 """
+import contextlib
 import os
 import sys
 import copy
@@ -58,10 +59,8 @@ _VIDEO_WINS = []
 def _register_video_win(win, wb):
     """登记一个视频窗；窗口销毁时自动注销（防泄漏）。"""
     _VIDEO_WINS.append((win, wb))
-    try:
+    with contextlib.suppress(Exception):
         win.destroyed.connect(lambda *a, w=win: _unregister_video_win(w))
-    except Exception:
-        pass
 
 
 def _unregister_video_win(win):
@@ -214,10 +213,7 @@ def _install_menu_edge_fix():
 
     def _patched_adj(self):
         _orig_adj(self)
-        try:
-            self.move(_clamp(self, self.pos()))
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.move(_clamp(self, self.pos()))
 
     _qm.RoundMenu.adjustPosition = _patched_adj
     _qm._muppet_edge_fixed = True
@@ -242,6 +238,7 @@ def _clamp_menu_pos(pos, menu, screen_rect):
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import l2d_rig_core as C
+import ui_toast as TOAST
 
 IMG_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
 
@@ -562,10 +559,7 @@ class History:
         # 时间轴面板跟着刷新（撤销/重做后关键帧点要跟着变）
         panel = getattr(studio, "anim_panel", None)
         if panel is not None:
-            try:
-                panel.refresh()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): panel.refresh()
 
     def undo(self, studio):
         if len(self.undo_stack) < 2:
@@ -1125,12 +1119,10 @@ class RigCanvas(QWidget):
         if self._lasso_drag is not None:
             # 拖动已闭合选区的顶点
             si, vi = self._lasso_drag
-            try:
+            with contextlib.suppress(Exception):
                 ix, iy = self._to_full(e.position().toPoint())
                 self._lasso_done[si]["points"][vi] = (ix, iy)
                 self.update()
-            except Exception:
-                pass
             return
         if self._mv:
             name, sx, sy = self._mv
@@ -1247,11 +1239,9 @@ RECENT_MENU_MAX = 5
 def _recent_read_path():
     """最近工程的读取路径：RECENT_FILE 存在就读它（测试注入优先），
     否则回退旧位置（根目录），都没有则返回 None。"""
-    try:
+    with contextlib.suppress(Exception):
         if os.path.isfile(RECENT_FILE):
             return RECENT_FILE
-    except Exception:
-        pass
     return _runtime_read_path("recent_projects.json")
 
 def load_recent():
@@ -1307,11 +1297,9 @@ IMPORT_GDIR_FILE = _runtime_file("import_game_dir.json")
 
 def _import_gdir_read_path():
     """导入记忆读取路径：现算，不预存（同 _recent_read_path 的理由）。"""
-    try:
+    with contextlib.suppress(Exception):
         if os.path.isfile(IMPORT_GDIR_FILE):
             return IMPORT_GDIR_FILE
-    except Exception:
-        pass
     return _runtime_read_path("import_game_dir.json")
 
 def is_game_dir(d):
@@ -1509,11 +1497,9 @@ def _probe_comfy_parallel(timeout=1.0):
     hits = [None] * len(cands)
 
     def _try(i, base):
-        try:
+        with contextlib.suppress(Exception):
             CD.get_json(base, "/system_stats", timeout=timeout)
             hits[i] = base
-        except Exception:
-            pass
 
     threads = [threading.Thread(target=_try, args=(i, b), daemon=True)
                for i, b in enumerate(cands)]
@@ -1853,8 +1839,7 @@ class NewCanvasDialog(MessageBoxBase):
     def validate(self):
         # 工程名空则不允许关闭（MessageBoxBase 在 yes 时先调 validate）
         if not sanitize_proj_name(self.name_edit.text()):
-            InfoBar.warning("工程名不能为空", "请输入工程名后再创建",
-                            parent=self, position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "工程名不能为空", "请输入工程名后再创建", duration=2500)
             return False
         return super().validate()
 
@@ -1889,8 +1874,7 @@ class ProjectNameDialog(MessageBoxBase):
 
     def validate(self):
         if not sanitize_proj_name(self.name_edit.text()):
-            InfoBar.warning("工程名不能为空", "请输入工程名后再保存",
-                            parent=self, position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "工程名不能为空", "请输入工程名后再保存", duration=2500)
             return False
         return super().validate()
 
@@ -2125,20 +2109,12 @@ class AssetMenuMixin:
         menu = getattr(self, "asset_menu", None)
         if menu is None:
             return
-        try:
-            menu.clear()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception): menu.clear()
+        with contextlib.suppress(Exception):
             while menu.view.count() > 0:
                 menu.view.takeItem(0)
-        except Exception:
-            pass
         # 清掉旧的子菜单引用（防累积持有已废弃的 RoundMenu）
-        try:
-            self._asset_subs = []
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self._asset_subs = []
 
     def _rebuild_asset_menu(self):
         """构建「资产管理」菜单（平铺样式）。
@@ -2166,7 +2142,7 @@ class AssetMenuMixin:
         # import torch / socket**。首次无缓存显示"正在检测档位…"并触发一次
         # 后台预热（_start_tier_warmup 去重，预热中不重复 spawn）；预热完成
         # 后下次打开菜单自然显示真实档位。
-        try:
+        with contextlib.suppress(Exception):
             tier = _tier_display()
             if tier:
                 self.asset_menu.addAction(Action(
@@ -2177,8 +2153,6 @@ class AssetMenuMixin:
                     FluentIcon.UPDATE, "正在检测档位…"))
                 self.asset_menu.addSeparator()
                 _start_tier_warmup()
-        except Exception:
-            pass
 
         # 运行环境（最影响"装完能不能打开"；runtime_pack=WebGAL 官方运行时，
         # E1 条目 kind 用的是 runtime_pack，匹配必须带上，否则菜单不露出
@@ -2232,27 +2206,21 @@ class AssetMenuMixin:
     def _dsh_link_toggle(self):
         """切换 DSH 联动：开启则接管当前视频窗工作台，关闭则停服务。"""
         if RC is None:
-            InfoBar.warning("DSH 联动", "remote_control 模块缺失，无法开启",
-                            parent=self, position=InfoBarPosition.TOP, duration=3500)
+            TOAST.toast_warn(self, "DSH 联动", "remote_control 模块缺失，无法开启", duration=3500)
             return
         if _dsh_running():
             RC.stop()
-            InfoBar.info("DSH 联动", "已关闭远程命令通道",
-                         parent=self, position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_info(self, "DSH 联动", "已关闭远程命令通道", duration=2000)
             return
         wb = _current_video_wb()
         if wb is None:
-            InfoBar.warning("DSH 联动", "请先打开视频工程",
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "DSH 联动", "请先打开视频工程")
             return
         try:
             port = RC.start(wb)
-            InfoBar.success("DSH 联动",
-                            "远程命令通道已开启：127.0.0.1:%d（POST /cmd，仅本机）" % port,
-                            parent=self, position=InfoBarPosition.TOP, duration=3500)
+            TOAST.toast_ok(self, "DSH 联动", "远程命令通道已开启：127.0.0.1:%d（POST /cmd，仅本机）" % port, duration=3500)
         except Exception as e:
-            InfoBar.error("DSH 联动", "启动失败：%s" % e,
-                          parent=self, position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "DSH 联动", "启动失败：%s" % e, duration=4000)
 
     def _add_asset_action(self, a, done, menu=None):
         """往指定菜单加一条资产项：已装显示 ✔+占用，未装显示 ⬇+体积并可点击下载；
@@ -2294,8 +2262,7 @@ class AssetMenuMixin:
         try:
             import asset_downloader as AD
         except Exception as e:
-            InfoBar.warning("资产下载", "下载模块缺失: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "资产下载", "下载模块缺失: %s" % e, duration=4000)
             return
         # task-20 防重入：该资产已有后台线程在下载时不再起新线程
         # （AssetDownloadThread 本身无防重入，重复 start 会双线程抢同一
@@ -2305,28 +2272,22 @@ class AssetMenuMixin:
             got_b, total_b = prog
             pct = (" %d%%" % max(0, min(100, int(got_b * 100 / total_b)))
                    ) if total_b > 0 else ""
-            InfoBar.info("资产下载",
-                         "%s 已在下载中%s，可稍后重新打开菜单查看进度" %
+            TOAST.toast_info(self, "资产下载", "%s 已在下载中%s，可稍后重新打开菜单查看进度" %
                          (a.get("name", a.get("id", "")), pct),
-                         parent=self, position=InfoBarPosition.TOP,
-                         duration=4000)
+                       duration=4000)
             return
         url = a.get("url") or ""
         # parts 资产（如 CUDA 加速包）的链接在 parts[i]["url"]，顶层无 url 字段，
         # 不能只认 a["url"]——否则 parts 资产会被误挡在「还没有配置下载地址」。
         if not url and not a.get("parts"):
-            InfoBar.warning("资产下载",
-                            "%s 还没有配置下载地址" % a.get("name", a["id"]),
-                            parent=self, position=InfoBarPosition.TOP,
-                            duration=4000)
+            TOAST.toast_warn(self, "资产下载", "%s 还没有配置下载地址" % a.get("name", a["id"]), duration=4000)
             return
         dlg = AD.AssetDownloadDialog(a, V2, self)
         try:
             dlg.start()
             dlg.exec()
         except Exception as e:
-            InfoBar.warning("资产下载", "启动失败: %s" % e, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_warn(self, "资产下载", "启动失败: %s" % e, duration=4000)
 
 
 # ---------------- 工作台页 ----------------
@@ -2395,23 +2356,12 @@ class Workbench(AssetMenuMixin, QWidget):
             self._layer_title.setStyleSheet("color:%s;" % TH.t("text_hi"))
         except Exception:
             pass
-        try:
+        with contextlib.suppress(Exception):
             self.tool_bar.setStyleSheet(
                 "background:%s; border-radius:8px;" % TH.t("card_bg"))
-        except Exception:
-            pass
-        try:
-            self.split.setStyleSheet(SPLIT_QSS)
-        except Exception:
-            pass
-        try:
-            self.vsplit.setStyleSheet(SPLIT_QSS)
-        except Exception:
-            pass
-        try:
-            self.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.split.setStyleSheet(SPLIT_QSS)
+        with contextlib.suppress(Exception): self.vsplit.setStyleSheet(SPLIT_QSS)
+        with contextlib.suppress(Exception): self.update()
 
     def __init__(self, win):
         super().__init__(win)
@@ -2901,15 +2851,13 @@ class Workbench(AssetMenuMixin, QWidget):
     def load_dir(self, d, push=True):
         m = find_meta(d)
         if not m:
-            InfoBar.error("找不到元数据",
-                          "目录里没有 layers_meta.json（或 ComfyUI 的 *_layers.json）：%s" % d,
-                          parent=self, position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "找不到元数据", "目录里没有 layers_meta.json（或 ComfyUI 的 *_layers.json）：%s" % d,
+                      duration=4000)
             return False
         try:
             self.layers, self.W, self.H = C.load_layers(m, d)
         except Exception as e:
-            InfoBar.error("载入失败", zh_err(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=5000)
+            TOAST.toast_err(self, "载入失败", zh_err(e), duration=5000)
             return False
         self.rig = C.build_rig(self.layers, self.W, self.H)
         pos = {nm: k for k, nm in enumerate(self.rig["draw_order"])}
@@ -2929,13 +2877,11 @@ class Workbench(AssetMenuMixin, QWidget):
 
     def _read_proj_name(self, d):
         """读工程名：优先 rig_project.json 的 name，否则用目录名。"""
-        try:
+        with contextlib.suppress(Exception):
             p = json.load(open(os.path.join(d, "rig_project.json"), encoding="utf8"))
             nm = sanitize_proj_name(p.get("name") or "")
             if nm:
                 return nm
-        except Exception:
-            pass
         return os.path.basename(os.path.normpath(d))
 
     # ---------- v2.11.0 关键帧动画：载入/初始状态 ----------
@@ -2988,10 +2934,7 @@ class Workbench(AssetMenuMixin, QWidget):
         fn = getattr(getattr(self, "win", None), "add_project_entry", None)
         if fn is None:
             return
-        try:
-            fn(name, d)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): fn(name, d)
 
     def _write_project_placeholder(self, d, name, W, H):
         """写最小工程占位：rig_project.json + 空 layers_meta.json，导航一点就能 load。"""
@@ -3136,7 +3079,7 @@ class Workbench(AssetMenuMixin, QWidget):
     def _sync_canvas_options(self):
         """画布上方选项栏：套索模式显示羽化/曲线组，自由变换模式显示宽高角组。
         两者都不激活时整条隐藏。自由变换优先（激活时套索组让位）。"""
-        try:
+        with contextlib.suppress(Exception):
             ft = self.canvas.ft_active()
             lasso = (self.canvas.tool == "lasso") and not ft
             self.canvas_options.setVisible(ft or lasso)
@@ -3144,8 +3087,6 @@ class Workbench(AssetMenuMixin, QWidget):
             self.opt_lasso_group.setVisible(lasso)
             if ft:
                 self._update_ft_spins()
-        except Exception:
-            pass
 
     def _update_ft_spins(self):
         """把当前变换状态回填到宽/高/角度输入框（拖动控制点时实时刷新）。
@@ -3271,8 +3212,7 @@ class Workbench(AssetMenuMixin, QWidget):
         if not getattr(self, "_selection_active", False):
             return
         self._clear_selection()
-        InfoBar.info("取消选择", "选区已清除", parent=self,
-                     position=InfoBarPosition.TOP, duration=1500)
+        TOAST.toast_info(self, "取消选择", "选区已清除", duration=1500)
 
     def act_inpaint_layer(self):
         """图层补洞：填充当前选中图层的透明洞（Mocha Remove 简化版）。
@@ -3285,15 +3225,13 @@ class Workbench(AssetMenuMixin, QWidget):
             return
         name = self._selected
         if not name:
-            InfoBar.info("图层补洞", "请先选中一个图层", parent=self,
-                         position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_info(self, "图层补洞", "请先选中一个图层", duration=2000)
             return
         layer = self.layer_by_name(name)
         if layer is None:
             return
         if self.locked.get(name):
-            InfoBar.warning("图层已锁定", "「%s」已锁定，无法补洞" % name, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "图层已锁定", "「%s」已锁定，无法补洞" % name, duration=2500)
             return
         import lasso_tool
         img = layer.get("img")
@@ -3301,8 +3239,7 @@ class Workbench(AssetMenuMixin, QWidget):
             return
         holes = find_enclosed_holes(img[:, :, 3])
         if holes is None:
-            InfoBar.info("图层补洞", "该图层没有被包围的透明洞", parent=self,
-                         position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_info(self, "图层补洞", "该图层没有被包围的透明洞", duration=2000)
             return
         hole_mask, hole_area, hole_cnt = holes
         new_rgba = lasso_tool.inpaint_holes(img, radius=3, holes=hole_mask)
@@ -3321,9 +3258,9 @@ class Workbench(AssetMenuMixin, QWidget):
         self.history.push(self)
         self.reload_widgets()
         self._select_in_list(name)
-        InfoBar.success("图层补洞", "%s：填充了 %d 个洞（%d 像素）" % (
-            name, hole_cnt, hole_area), parent=self,
-            position=InfoBarPosition.TOP, duration=2500)
+        TOAST.toast_ok(self, "图层补洞", "%s：填充了 %d 个洞（%d 像素）" % (
+            name, hole_cnt, hole_area),
+                 duration=2500)
 
     def _replace_layer(self, name, newL):
         """把 layers / rig['_layers'] 里名为 name 的层换成 newL（新 dict）。
@@ -3354,15 +3291,13 @@ class Workbench(AssetMenuMixin, QWidget):
             return                              # 已在变换中：不重复进入
         name = self._selected
         if not name:
-            InfoBar.info("自由变换", "请先在图层面板选中一个图层", parent=self,
-                         position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_info(self, "自由变换", "请先在图层面板选中一个图层", duration=2500)
             return
         layer = self.layer_by_name(name)
         if layer is None or layer.get("img") is None:
             return
         if self.locked.get(name):
-            InfoBar.warning("图层已锁定", "「%s」已锁定，无法变换" % name, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "图层已锁定", "「%s」已锁定，无法变换" % name, duration=2500)
             return
         self._ft_layer = name
         self._ft_orig = {"img": layer["img"], "bbox": tuple(layer["bbox"])}
@@ -3370,9 +3305,9 @@ class Workbench(AssetMenuMixin, QWidget):
         self.redraw()                      # 进入变换：渲染一次（此后拖动实时预览）
         self._sync_canvas_options()
         self._sync_edit_menu_state()
-        InfoBar.info("自由变换", "%s：拖控制点缩放(Shift 等比)/框内移动/角外旋转，"
-                     "Enter 提交、Esc 取消" % name, parent=self,
-                     position=InfoBarPosition.TOP, duration=3200)
+        TOAST.toast_info(self, "自由变换", "%s：拖控制点缩放(Shift 等比)/框内移动/角外旋转，"
+                     "Enter 提交、Esc 取消" % name,
+                   duration=3200)
 
     def _on_ft_committed(self, st):
         """变换提交：warp 原图层 -> 新 img/bbox -> 替换 + 压历史。"""
@@ -3388,8 +3323,7 @@ class Workbench(AssetMenuMixin, QWidget):
         else:
             res = TT.warp_state(orig["img"], orig["bbox"], st)
         if res is None:
-            InfoBar.warning("自由变换", "变换结果退化（过小或空），未应用", parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "自由变换", "变换结果退化（过小或空），未应用")
             self._ft_layer = None
             self._ft_orig = None
             self._sync_canvas_options()
@@ -3411,9 +3345,9 @@ class Workbench(AssetMenuMixin, QWidget):
         self._ft_layer = None
         self._ft_orig = None
         self._sync_canvas_options()
-        InfoBar.success("已变换", "%s：%d×%d" % (name, new_bbox[2]-new_bbox[0],
+        TOAST.toast_ok(self, "已变换", "%s：%d×%d" % (name, new_bbox[2]-new_bbox[0],
                                                  new_bbox[3]-new_bbox[1]),
-                        parent=self, position=InfoBarPosition.TOP, duration=2200)
+                 duration=2200)
 
     def _on_ft_cancelled(self):
         """变换取消：图层未动，只清状态 + 重渲染（画面从预览帧切回原图）"""
@@ -3430,18 +3364,16 @@ class Workbench(AssetMenuMixin, QWidget):
         作用在未被圈住的部分。需要先有激活的选区。
         """
         if not getattr(self, "_selection_active", False) or not self._selection_data:
-            InfoBar.info("反选", "没有激活的选区（先用套索工具圈选并闭合）",
-                         parent=self, position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_info(self, "反选", "没有激活的选区（先用套索工具圈选并闭合）", duration=2500)
             self._sync_edit_menu_state()
             return
         self._selection_invert = not getattr(self, "_selection_invert", False)
         self.canvas._selection_invert = self._selection_invert
         self.canvas.update()
         self._sync_canvas_options()
-        InfoBar.success("已反选" if self._selection_invert else "已取消反选",
-                        "选区 = 多边形外全部区域" if self._selection_invert
+        TOAST.toast_ok(self, "已反选" if self._selection_invert else "已取消反选", "选区 = 多边形外全部区域" if self._selection_invert
                         else "选区 = 多边形内区域",
-                        parent=self, position=InfoBarPosition.TOP, duration=2200)
+                 duration=2200)
 
     def act_copy_selection(self, cut=False):
         """Ctrl+C / Ctrl+X：把选区内容复制到系统剪贴板（cut=True 则同时从原层抠掉）。"""
@@ -3454,19 +3386,16 @@ class Workbench(AssetMenuMixin, QWidget):
         layer = self._selection_layer()
         if layer is None:
             if not self._selected:
-                InfoBar.info("复制", "请先在图层面板选中一个图层", parent=self,
-                             position=InfoBarPosition.TOP, duration=2500)
+                TOAST.toast_info(self, "复制", "请先在图层面板选中一个图层", duration=2500)
             else:
-                InfoBar.info("复制", "没有激活的选区（先用套索工具圈选并双击闭合）",
-                             parent=self, position=InfoBarPosition.TOP, duration=2500)
+                TOAST.toast_info(self, "复制", "没有激活的选区（先用套索工具圈选并双击闭合）", duration=2500)
             return
         import lasso_tool
         sels = self._selection_data
         res = lasso_tool.extract_selection(layer, sels, feather=self.lasso_feather,
                                             invert=getattr(self, "_selection_invert", False))
         if res is None:
-            InfoBar.warning("复制", "选区与图层没有重叠", parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "复制", "选区与图层没有重叠", duration=2500)
             return
         rgba, px, py = res
         # PNG 进剪贴板（可粘到其它程序）；另用自定义 MIME 记住图层元信息
@@ -3489,8 +3418,7 @@ class Workbench(AssetMenuMixin, QWidget):
             mask = self._selection_mask(layer)
             # 选区落在空白处 -> 没有可剪切的内容，明确提示
             if mask is not None and not ((layer["img"][:, :, 3] > 0) & (mask > 0)).any():
-                InfoBar.warning("剪切", "选区落在图层的空白处，没有可剪切的内容",
-                                parent=self, position=InfoBarPosition.TOP, duration=3000)
+                TOAST.toast_warn(self, "剪切", "选区落在图层的空白处，没有可剪切的内容")
                 return
             newL = (lasso_tool.clip_layer_by_mask(layer, mask, invert=True)
                     if mask is not None else None)
@@ -3508,9 +3436,7 @@ class Workbench(AssetMenuMixin, QWidget):
                 self._select_in_list(layer["name"])
         self._clear_selection()
         self.history.push(self)
-        InfoBar.success("已剪切" if cut else "已复制",
-                        "选区内容 %dx%d" % (w, h), parent=self,
-                        position=InfoBarPosition.TOP, duration=2000)
+        TOAST.toast_ok(self, "已剪切" if cut else "已复制", "选区内容 %dx%d" % (w, h), duration=2000)
 
     def _selection_mask(self, layer):
         """当前选区在指定图层坐标系里的掩码（0..255）"""
@@ -3547,8 +3473,7 @@ class Workbench(AssetMenuMixin, QWidget):
                 meta = {}
         img = mime.imageData()
         if img is None or img.isNull():
-            InfoBar.info("粘贴", "剪贴板里没有图像", parent=self,
-                         position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_info(self, "粘贴", "剪贴板里没有图像", duration=2000)
             return
         img = img.convertToFormat(QImage.Format.Format_RGBA8888)
         w, h = img.width(), img.height()
@@ -3595,8 +3520,7 @@ class Workbench(AssetMenuMixin, QWidget):
         self.reload_widgets()
         self._select_in_list(name)
         self.history.push(self)
-        InfoBar.success("已粘贴", "新图层 %s（%dx%d）" % (name, w, h), parent=self,
-                        position=InfoBarPosition.TOP, duration=2200)
+        TOAST.toast_ok(self, "已粘贴", "新图层 %s（%dx%d）" % (name, w, h), duration=2200)
 
     def _on_lasso_committed(self, selections):
         """多边形套索提交：把当前选中图层裁剪到选区内。
@@ -3615,15 +3539,13 @@ class Workbench(AssetMenuMixin, QWidget):
             return
         name = self._selected
         if not name:
-            InfoBar.info("多边形套索", "请先在图层面板选中一个图层", parent=self,
-                         position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_info(self, "多边形套索", "请先在图层面板选中一个图层", duration=2500)
             return
         layer = self.layer_by_name(name)
         if layer is None:
             return
         if self.locked.get(name):
-            InfoBar.warning("图层已锁定", "「%s」已锁定，无法裁剪" % name, parent=self,
-                            position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_warn(self, "图层已锁定", "「%s」已锁定，无法裁剪" % name, duration=2500)
             return
         import lasso_tool
         bbox = layer.get("bbox")
@@ -3646,18 +3568,15 @@ class Workbench(AssetMenuMixin, QWidget):
                                         feather=self.lasso_feather,
                                         invert=getattr(self, "_selection_invert", False))
         if mask is None:
-            InfoBar.warning("选区无效", "选区与图层没有重叠，未做任何修改",
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "选区无效", "选区与图层没有重叠，未做任何修改")
             return
         # 选区与图层实际重叠像素为 0 -> 明确提示，别静默改层
         if not (mask > 0).any():
-            InfoBar.warning("选区无效", "选区与图层没有重叠，未做任何修改", parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "选区无效", "选区与图层没有重叠，未做任何修改")
             return
         # 有重叠但重叠处全透明（图层 bbox 的空白角很常见）-> 也提示，不清空图层
         if not ((img[:, :, 3] > 0) & (mask > 0)).any():
-            InfoBar.warning("选区为空", "选区落在图层的空白处，没有可保留的内容",
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "选区为空", "选区落在图层的空白处，没有可保留的内容")
             return
         # L2：保留原图（首次裁剪时存），供「还原」与"在原图上再次选取"
         if "_orig_img" not in layer or layer.get("_orig_bbox") is None:
@@ -3665,8 +3584,7 @@ class Workbench(AssetMenuMixin, QWidget):
             layer["_orig_bbox"] = tuple(bbox)
         newL = lasso_tool.clip_layer_by_mask(layer, mask)
         if newL is None:
-            InfoBar.warning("选区无效", "选区与图层没有重叠，或图层完全被裁空",
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "选区无效", "选区与图层没有重叠，或图层完全被裁空")
             return
         # _orig_img/_orig_bbox 随新 dict 传递（dict(layer) 是浅拷贝，引用仍在）
         newL["_orig_img"] = layer["_orig_img"]
@@ -3685,15 +3603,13 @@ class Workbench(AssetMenuMixin, QWidget):
         self.reload_widgets()
         self._select_in_list(name)
         self._clear_selection()              # 裁剪完成 -> 选区状态清空
-        InfoBar.success("已裁剪图层", "%s：保留选区内像素" % name, parent=self,
-                        position=InfoBarPosition.TOP, duration=2500)
+        TOAST.toast_ok(self, "已裁剪图层", "%s：保留选区内像素" % name, duration=2500)
 
     def _layer_restore_original(self, name):
         """还原图层到裁剪前的原始像素（L2：保留原图）。"""
         layer = self.layer_by_name(name)
         if layer is None or not layer.get("_orig_img") is not None:
-            InfoBar.info("还原原图", "该图层没有裁剪记录", parent=self,
-                         position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_info(self, "还原原图", "该图层没有裁剪记录", duration=2000)
             return
         orig_img = layer["_orig_img"]
         orig_bbox = layer["_orig_bbox"]
@@ -3712,8 +3628,7 @@ class Workbench(AssetMenuMixin, QWidget):
         self.history.push(self)
         self.reload_widgets()
         self._select_in_list(name)
-        InfoBar.success("已还原原图", name, parent=self,
-                        position=InfoBarPosition.TOP, duration=2000)
+        TOAST.toast_ok(self, "已还原原图", name, duration=2000)
 
     def toggle_visible(self, name):
         """切换某层显隐（delegate 的眼睛点击入口）。
@@ -3929,8 +3844,7 @@ class Workbench(AssetMenuMixin, QWidget):
         self.reload_widgets()
         self.history.push(self)
         self._select_in_list(new_name)
-        InfoBar.success("已复制图层", new_name, parent=self,
-                        position=InfoBarPosition.TOP, duration=2500)
+        TOAST.toast_ok(self, "已复制图层", new_name, duration=2500)
 
     # ---------- 图层右键菜单（置顶 / 重命名 / 复制 / 拆分 / 删除） ----------
     def _layer_menu(self, pos):
@@ -3976,8 +3890,7 @@ class Workbench(AssetMenuMixin, QWidget):
         if obj is None:
             return
         if self.locked.get(name):
-            InfoBar.warning("图层已锁定", "%s 已锁定，无法拆分（取消锁定后重试）" % name,
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "图层已锁定", "%s 已锁定，无法拆分（取消锁定后重试）" % name)
             return
         try:
             if mode == "basic":
@@ -3986,26 +3899,21 @@ class Workbench(AssetMenuMixin, QWidget):
                 import sam_subsplit
                 parts = sam_subsplit.sam_subsplit_layer(obj, verbose=lambda m: self.prog.setText(str(m)))
         except FileNotFoundError as e:
-            InfoBar.warning("无法智能拆分", str(e), parent=self,
-                            position=InfoBarPosition.TOP, duration=6000)
+            TOAST.toast_warn(self, "无法智能拆分", str(e), duration=6000)
             return
         except Exception as e:
-            InfoBar.error("拆分失败", zh_err(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=5000)
+            TOAST.toast_err(self, "拆分失败", zh_err(e), duration=5000)
             return
         if not parts:
             if mode == "basic":
-                InfoBar.info("无法再拆分",
-                             "%s 是单一连通整体（SeeThrough 已按部件分层），"
+                TOAST.toast_info(self, "无法再拆分", "%s 是单一连通整体（SeeThrough 已按部件分层），"
                              "可试“智能拆分（SAM）”按视觉块细分" % name,
-                             parent=self, position=InfoBarPosition.TOP, duration=4500)
+                           duration=4500)
             else:
-                InfoBar.info("SAM 未分出多块", "%s 未能拆出≥2个有效块" % name,
-                             parent=self, position=InfoBarPosition.TOP, duration=3500)
+                TOAST.toast_info(self, "SAM 未分出多块", "%s 未能拆出≥2个有效块" % name, duration=3500)
             return
         self._apply_subsplit(obj, parts)
-        InfoBar.success("已拆分", "%s → %d 个子层（Ctrl+Z 可撤销）" % (name, len(parts)),
-                        parent=self, position=InfoBarPosition.TOP, duration=3000)
+        TOAST.toast_ok(self, "已拆分", "%s → %d 个子层（Ctrl+Z 可撤销）" % (name, len(parts)))
 
     def _apply_subsplit(self, obj, parts):
         """用子层列表就地替换原层。"""
@@ -4035,8 +3943,7 @@ class Workbench(AssetMenuMixin, QWidget):
         if obj is None:
             return
         if self.locked.get(name):
-            InfoBar.warning("图层已锁定", "%s 已锁定，无法置顶（取消锁定后重试）" % name,
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "图层已锁定", "%s 已锁定，无法置顶（取消锁定后重试）" % name)
             return
         self.layers.remove(obj)
         self.layers.insert(0, obj)
@@ -4053,8 +3960,7 @@ class Workbench(AssetMenuMixin, QWidget):
         if obj is None:
             return
         if self.locked.get(name):
-            InfoBar.warning("图层已锁定", "%s 已锁定，无法删除（取消锁定后重试）" % name,
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "图层已锁定", "%s 已锁定，无法删除（取消锁定后重试）" % name)
             return
         self.layers = [l for l in self.layers if l["name"] != name]
         self.rig["draw_order"] = [n for n in self.rig["draw_order"] if n != name]
@@ -4068,8 +3974,7 @@ class Workbench(AssetMenuMixin, QWidget):
         self.rig.pop("_lite", None)      # LOD 缓存里有被删层，作废重建
         self.reload_widgets()
         self.history.push(self)
-        InfoBar.info("已删除图层", "%s（Ctrl+Z 可撤销）" % name, parent=self,
-                     position=InfoBarPosition.TOP, duration=2500)
+        TOAST.toast_info(self, "已删除图层", "%s（Ctrl+Z 可撤销）" % name, duration=2500)
 
     # ---------- 拖入图片 = 新增一个图层（不再触发拆分） ----------
     def _drop_add_layer(self, img_path):
@@ -4080,12 +3985,10 @@ class Workbench(AssetMenuMixin, QWidget):
             w, h = pil.size
             arr = np.asarray(pil)
         except Exception as e:
-            InfoBar.error("无法读取图片", zh_err(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "无法读取图片", zh_err(e), duration=4000)
             return
         if arr.ndim != 3 or arr.shape[2] != 4 or w <= 0 or h <= 0:
-            InfoBar.error("图片格式不支持", img_path, parent=self,
-                          position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "图片格式不支持", img_path, duration=4000)
             return
 
         # 空工作台 -> 建空 rig（只有 root 语义），并播基线快照让 Ctrl+Z 能回空
@@ -4149,8 +4052,7 @@ class Workbench(AssetMenuMixin, QWidget):
         self.reload_widgets()
         self.history.push(self)
         self.redraw()
-        InfoBar.success("已添加图层", name, parent=self,
-                        position=InfoBarPosition.TOP, duration=2500)
+        TOAST.toast_ok(self, "已添加图层", name, duration=2500)
 
     def _toggle_all(self):
         """显示/隐藏全部图层。
@@ -4193,20 +4095,15 @@ class Workbench(AssetMenuMixin, QWidget):
     # ---------- v2.11.0 时间轴联动 ----------
     def push_history(self):
         """时间轴改关键帧前先存快照（等价于 history.push(self)）。"""
-        try:
-            self.history.push(self)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.history.push(self)
 
     def _on_timeline_seek(self, t):
         """拖播放头 / 点时间轴空白：跳到该时刻。"""
         self.t = max(0.0, min(float(getattr(self, "duration", 4.0)), float(t)))
         self.playing = False
-        try:
+        with contextlib.suppress(Exception):
             self.timer.stop()
             self.btn_play.setText("播放")
-        except Exception:
-            pass
         dur = max(0.2, float(getattr(self, "duration", 4.0)))
         self.slider.blockSignals(True)
         self.slider.setValue(int(round(self.t / dur * 1000)))
@@ -4216,18 +4113,13 @@ class Workbench(AssetMenuMixin, QWidget):
 
     def _on_keyframes_changed(self):
         """关键帧变了：清 LOD 缓存（不改像素，但保险）并重绘。"""
-        try:
+        with contextlib.suppress(Exception):
             if isinstance(self.rig, dict):
                 self.rig.pop("_lite", None)
-        except Exception:
-            pass
         self.redraw()
         # 时间轴自己的播放头位置也跟着刷新
         if getattr(self, "anim_panel", None) is not None:
-            try:
-                self.anim_panel.area.update()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self.anim_panel.area.update()
 
     def _on_duration_changed(self, d):
         """时长改了：把当前 t 夹回范围内，滑块重映射。"""
@@ -4260,13 +4152,11 @@ class Workbench(AssetMenuMixin, QWidget):
     # ---------- 菜单动作 ----------
     def act_undo(self):
         if not self.history.undo(self):
-            InfoBar.info("撤销", "没有更多可撤销的操作", parent=self,
-                         position=InfoBarPosition.TOP, duration=1800)
+            TOAST.toast_info(self, "撤销", "没有更多可撤销的操作", duration=1800)
 
     def act_redo(self):
         if not self.history.redo(self):
-            InfoBar.info("重做", "没有可重做的操作", parent=self,
-                         position=InfoBarPosition.TOP, duration=1800)
+            TOAST.toast_info(self, "重做", "没有可重做的操作", duration=1800)
 
     def _record_recent(self, d):
         """把工程目录写入最近列表（去重、置顶、上限 5）。无效目录不记。"""
@@ -4275,11 +4165,9 @@ class Workbench(AssetMenuMixin, QWidget):
         d = os.path.normpath(d)
         name = os.path.basename(d)
         n = 0
-        try:
+        with contextlib.suppress(Exception):
             meta = json.load(open(os.path.join(d, "layers_meta.json"), encoding="utf8"))
             n = len(meta.get("layers", []))
-        except Exception:
-            pass
         items = [it for it in load_recent() if os.path.normpath(it["dir"]) != d]
         items.insert(0, {"dir": d, "name": name, "layers": n})
         save_recent(items[:RECENT_MAX])
@@ -4308,12 +4196,10 @@ class Workbench(AssetMenuMixin, QWidget):
         """闭包捕获目录，避免 lambda 延迟绑定错乱"""
         def open_():
             if not os.path.isfile(os.path.join(d, "layers_meta.json")):
-                InfoBar.warning("工程已失效", "目录或 layers_meta.json 不存在：\n%s" % d,
-                                parent=self, position=InfoBarPosition.TOP, duration=4000)
+                TOAST.toast_warn(self, "工程已失效", "目录或 layers_meta.json 不存在：\n%s" % d, duration=4000)
                 return
             if self.load_dir(d):
-                InfoBar.success("已打开", os.path.basename(d), parent=self,
-                                position=InfoBarPosition.TOP, duration=2000)
+                TOAST.toast_ok(self, "已打开", os.path.basename(d), duration=2000)
         return open_
 
     def act_open_project(self):
@@ -4323,13 +4209,11 @@ class Workbench(AssetMenuMixin, QWidget):
         if not d:
             return
         if not find_meta(d):
-            InfoBar.error("不是工程目录",
-                          "所选文件夹里没有 layers_meta.json（也没有 ComfyUI 的 *_layers.json）：\n%s" % d,
-                          parent=self, position=InfoBarPosition.TOP, duration=5000)
+            TOAST.toast_err(self, "不是工程目录", "所选文件夹里没有 layers_meta.json（也没有 ComfyUI 的 *_layers.json）：\n%s" % d,
+                      duration=5000)
             return
         if self.load_dir(d):
-            InfoBar.success("已打开工程", os.path.basename(d), parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_ok(self, "已打开工程", os.path.basename(d), duration=2000)
 
     def _create_project_dir(self, name, W, H):
         """建工程目录 + 占位工程（act_new 与空画布拖图共用，勿复制粘贴）。
@@ -4449,11 +4333,9 @@ class Workbench(AssetMenuMixin, QWidget):
                       open(os.path.join(out, "layers_meta.json"), "w", encoding="utf8"),
                       ensure_ascii=False)
             if self.load_dir(out):
-                InfoBar.success("导入成功", "%d 层" % len(entries), parent=self,
-                                position=InfoBarPosition.TOP, duration=2500)
+                TOAST.toast_ok(self, "导入成功", "%d 层" % len(entries), duration=2500)
         except Exception as e:
-            InfoBar.error("导入失败", zh_err(e), parent=self,
-                          position=InfoBarPosition.TOP, duration=6000)
+            TOAST.toast_err(self, "导入失败", zh_err(e), duration=6000)
 
     def _project_payload(self):
         return {"name": getattr(self, "proj_name", None),
@@ -4507,39 +4389,33 @@ class Workbench(AssetMenuMixin, QWidget):
                 dst = os.path.join(d, os.path.basename(src))
                 if os.path.abspath(src) != os.path.abspath(dst):
                     shutil.copy2(src, dst)
-            InfoBar.success("已保存", os.path.join(d, "rig_project.json"),
-                            parent=self, position=InfoBarPosition.TOP, duration=2500)
+            TOAST.toast_ok(self, "已保存", os.path.join(d, "rig_project.json"), duration=2500)
             # v3.4.0 未保存退出守卫：写盘成功才刷新干净基线（save/saveas 都走这）
             self._saved_changes = getattr(self.history, "changes", 0)
         except Exception as e:
-            InfoBar.error("保存失败", str(e)[:200], parent=self,
-                          position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "保存失败", str(e)[:200], duration=4000)
 
     # ---------- 导出 ----------
     def _need_rig(self):
         if self.rig is None:
-            InfoBar.warning("提示", "工作台是空的", parent=self,
-                            position=InfoBarPosition.TOP, duration=1800)
+            TOAST.toast_warn(self, "提示", "工作台是空的", duration=1800)
             return False
         return True
 
     def act_export_psd(self):
         if self._need_rig():
             C.export_psd(self.rig, os.path.join(self.cur_dir or V2, "rig_character.psd"))
-            InfoBar.success("完成", "rig_character.psd", parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_ok(self, "完成", "rig_character.psd", duration=2000)
 
     def act_export_ae(self):
         if self._need_rig():
             C.export_ae_jsx(self.rig, os.path.join(self.cur_dir or V2, "rig_build.jsx"))
-            InfoBar.success("完成", "rig_build.jsx", parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_ok(self, "完成", "rig_build.jsx", duration=2000)
 
     def act_export_json(self):
         if self._need_rig():
             C.export_json(self.rig, os.path.join(self.cur_dir or V2, "rig_spec.json"))
-            InfoBar.success("完成", "rig_spec.json", parent=self,
-                            position=InfoBarPosition.TOP, duration=2000)
+            TOAST.toast_ok(self, "完成", "rig_spec.json", duration=2000)
 
     # ---------- Live2D 工程导出（后台线程，防重入） ----------
     def act_export_l2d(self):
@@ -4551,12 +4427,10 @@ class Workbench(AssetMenuMixin, QWidget):
         if not self._need_rig():
             return
         if not getattr(self, "cur_dir", None):
-            InfoBar.warning("提示", "还没有打开工程，无法导出 Live2D 工程",
-                            parent=self, position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_warn(self, "提示", "还没有打开工程，无法导出 Live2D 工程")
             return
         if getattr(self, "_l2d_busy", False):
-            InfoBar.info("导出中", "请等待当前导出完成", parent=self,
-                         position=InfoBarPosition.TOP, duration=1800)
+            TOAST.toast_info(self, "导出中", "请等待当前导出完成", duration=1800)
             return
         default = os.path.join(self.cur_dir, "l2d_export")
         out_dir = QFileDialog.getExistingDirectory(self, "导出 Live2D 工程", default)
@@ -4586,18 +4460,14 @@ class Workbench(AssetMenuMixin, QWidget):
         self._l2d_busy = False
         if ok:
             self.prog.setText("Live2D 导出完成")
-            InfoBar.success("Live2D 导出完成", msg, parent=self,
-                            position=InfoBarPosition.TOP, duration=4000)
-            try:
+            TOAST.toast_ok(self, "Live2D 导出完成", msg, duration=4000)
+            with contextlib.suppress(Exception):
                 from PySide6.QtGui import QDesktopServices
                 from PySide6.QtCore import QUrl
                 QDesktopServices.openUrl(QUrl.fromLocalFile(out_dir))
-            except Exception:
-                pass
         else:
             self.prog.setText("Live2D 导出失败")
-            InfoBar.error("Live2D 导出失败", str(msg)[:200], parent=self,
-                          position=InfoBarPosition.TOP, duration=5000)
+            TOAST.toast_err(self, "Live2D 导出失败", str(msg)[:200], duration=5000)
 
     # ---------- 视频/GIF 导出（后台线程） ----------
     def _choose_mp4(self):
@@ -4610,8 +4480,7 @@ class Workbench(AssetMenuMixin, QWidget):
         if not self._need_rig():
             return
         if getattr(self, "export_worker", None) is not None and self.export_worker.isRunning():
-            InfoBar.info("导出中", "请等待当前导出完成", parent=self,
-                         position=InfoBarPosition.TOP, duration=1800)
+            TOAST.toast_info(self, "导出中", "请等待当前导出完成", duration=1800)
             return
         default = os.path.join(self.cur_dir or V2,
                                "rig_anim." + ("mp4" if kind == "mp4" else "gif"))
@@ -4638,12 +4507,10 @@ class Workbench(AssetMenuMixin, QWidget):
     def _export_done(self, ok, msg):
         if ok:
             self.prog.setText("导出完成")
-            InfoBar.success("导出完成", msg, parent=self,
-                            position=InfoBarPosition.TOP, duration=3500)
+            TOAST.toast_ok(self, "导出完成", msg, duration=3500)
         else:
             self.prog.setText("导出失败")
-            InfoBar.error("导出失败", msg[:200], parent=self,
-                          position=InfoBarPosition.TOP, duration=5000)
+            TOAST.toast_err(self, "导出失败", msg[:200], duration=5000)
 
     # ---------- 拆分 ----------
     def _pick_image(self):
@@ -4654,12 +4521,10 @@ class Workbench(AssetMenuMixin, QWidget):
 
     def start_decompose(self, img_path):
         if self.busy:
-            InfoBar.info("正在拆分", "请等待当前任务", parent=self,
-                         position=InfoBarPosition.TOP, duration=1800)
+            TOAST.toast_info(self, "正在拆分", "请等待当前任务", duration=1800)
             return
         if not os.path.exists(img_path):
-            InfoBar.error("文件不存在", img_path, parent=self,
-                          position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_err(self, "文件不存在", img_path)
             return
         # task-15 四档链：先告知当前命中的档位。无 CUDA 默认仍走 ComfyUI
         # （触发条件不动）；ComfyUI 也不可用才是 CPU 兜底——确认框由 worker
@@ -4671,17 +4536,15 @@ class Workbench(AssetMenuMixin, QWidget):
         except Exception:
             tier = "comfy" if _engine_mode() == "comfy" else "system_cuda"
         if tier == "comfy":
-            InfoBar.info("引擎档位：%s" % TIER_LABELS["comfy"],
-                         "前提：本机 ComfyUI 已启动且装了 See-through 插件"
+            TOAST.toast_info(self, "引擎档位：%s" % TIER_LABELS["comfy"], "前提：本机 ComfyUI 已启动且装了 See-through 插件"
                          "（安装器勾选「A 卡拆图支持」可代下 ComfyUI 安装器与插件（也可自行下载））。"
                          "推理用 bf16，首次运行插件会自动下载约 12.5GB 模型，耗时较长且可重跑续传。",
-                         parent=self, position=InfoBarPosition.TOP, duration=9000)
+                       duration=9000)
         elif tier == "cpu":
-            InfoBar.warning("引擎档位：%s" % TIER_LABELS["cpu"],
-                            "未检测到可用 CUDA，也没发现在跑的 ComfyUI。"
+            TOAST.toast_warn(self, "引擎档位：%s" % TIER_LABELS["cpu"], "未检测到可用 CUDA，也没发现在跑的 ComfyUI。"
                             "即将弹出 CPU 兜底确认框：约 2-3 小时/张（CUDA 约 14 分钟/张），"
                             "装 CUDA 加速包或启动 ComfyUI 都快得多。",
-                            parent=self, position=InfoBarPosition.TOP, duration=9000)
+                       duration=9000)
         self.busy = True
         self.prog.setText("准备中…")
         self._nav_pct = 0
@@ -4734,9 +4597,7 @@ class Workbench(AssetMenuMixin, QWidget):
                 self.busy = False
                 self.set_nav_progress(None)
                 self.prog.setText("已取消 CPU 兜底拆图")
-                InfoBar.warning("已取消", "可安装 CUDA 加速包或启动 ComfyUI 后重试",
-                                parent=self, position=InfoBarPosition.TOP,
-                                duration=5000)
+                TOAST.toast_warn(self, "已取消", "可安装 CUDA 加速包或启动 ComfyUI 后重试", duration=5000)
         except Exception as e:
             self.busy = False
             self.prog.setText("CPU 确认流程异常: %s" % e)
@@ -4758,10 +4619,7 @@ class Workbench(AssetMenuMixin, QWidget):
         msg = str(msg)
         self.prog.setText(msg[-120:])
         if msg.startswith("#pct="):          # 引擎侧直接上报百分比（估算法）
-            try:
-                self.set_nav_progress(int(msg[5:].split()[0]))
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self.set_nav_progress(int(msg[5:].split()[0]))
             return
         pct = progress_for_msg(msg)
         if pct is not None:
@@ -4808,12 +4666,10 @@ class Workbench(AssetMenuMixin, QWidget):
         if meta:
             self.prog.setText("完成，已载入骨架")
             self.load_dir(out_dir)
-            InfoBar.success("拆分完成", out_dir, parent=self,
-                            position=InfoBarPosition.TOP, duration=3000)
+            TOAST.toast_ok(self, "拆分完成", out_dir)
         else:
             self.prog.setText("拆分失败")
-            InfoBar.error("拆分失败", "SeeThrough 未返回结果", parent=self,
-                          position=InfoBarPosition.TOP, duration=4000)
+            TOAST.toast_err(self, "拆分失败", "SeeThrough 未返回结果", duration=4000)
 
 def _gif_frames(rgba_list):
     """RGBA 帧序列 -> GIF P 帧：255 色量化 + 索引 255 专属透明。
@@ -4941,10 +4797,7 @@ def _refresh_styles():
     global SPLIT_QSS
     SPLIT_QSS = _split_qss()
     for w in list(_STYLED_WIDGETS):
-        try:
-            w._apply_theme()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): w._apply_theme()
 
 
 TH.register(_refresh_styles)
@@ -4969,10 +4822,8 @@ class MainWindow(FluentWindow):
             self.navigationInterface.setReturnButtonVisible(False)
         except Exception:
             # 库版本差异兜底：直接隐藏控件
-            try:
+            with contextlib.suppress(Exception):
                 self.navigationInterface.panel.returnButton.setVisible(False)
-            except Exception:
-                pass
         # 去掉导航栏「工作台」按钮（用户需求）：保留 addSubInterface 让 wb 进
         # stackedWidget，但把导航项隐藏（最小改动，内容显示不受影响）。
         self.nav_item = self.navigationInterface.widget("workbench")
@@ -4982,10 +4833,7 @@ class MainWindow(FluentWindow):
         self._proj_items = {}          # routeKey -> 工程目录
         # 拆分进度注入：工作台按钮已隐藏，写进工作台状态栏（prog）即可，进度不丢
         def _set_nav(text, tip):
-            try:
-                self.wb.prog.setText(text)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self.wb.prog.setText(text)
         self.wb.nav_setter = _set_nav
         # 导航栏：默认隐藏（单页应用常驻导航无益，用户要求直接去掉）。
         # 标题栏侧栏按钮可唤出，唤出时 140px 完整显示工程列表（图标+文字）。
@@ -4996,10 +4844,7 @@ class MainWindow(FluentWindow):
         ni.setCollapsible(False)
         ni.setExpandWidth(self.nav_width)
         ni.setMinimumExpandWidth(0)
-        try:
-            ni.expand(useAni=False)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): ni.expand(useAni=False)
         for tgt in (ni, ni.panel):
             tgt.setMinimumWidth(self.nav_width)
             tgt.setFixedWidth(self.nav_width)
@@ -5008,12 +4853,9 @@ class MainWindow(FluentWindow):
         # 导航栏顶部留出标题栏高度：库只给内容区加了 48 的顶部边距
         # （widgetLayout.setContentsMargins(0,48,0,0)），导航栏没加，
         # 所以展开后第一项会被标题栏压住、看起来像"顶部空白"。
-        try:
-            ni.setContentsMargins(0, 48, 0, 0)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): ni.setContentsMargins(0, 48, 0, 0)
         # 导航栏内部的滚动区/布局也补一下顶部间距（不同版本结构不同，逐个试）
-        try:
+        with contextlib.suppress(Exception):
             panel = ni.panel
             for attr in ('scrollWidget', 'viewport', 'vBoxLayout'):
                 o = getattr(panel, attr, None)
@@ -5022,8 +4864,6 @@ class MainWindow(FluentWindow):
                 if hasattr(o, 'setContentsMargins'):
                     o.setContentsMargins(0, 48, 0, 0)
                     break
-        except Exception:
-            pass
         # 导航栏宽度调节：在导航栏右缘挂一条 4px 拖拽把手（悬停变蓝）。
         # 原来宽度被 setFixedWidth(140) 钉死，用户想拉宽看长工程名没法弄。
         self.nav_min_w = 120
@@ -5097,19 +4937,11 @@ class MainWindow(FluentWindow):
                 "#navGrip:hover{background:%s;}" % TH.t("accent"))
         except Exception:
             pass
-        try:
-            self.wb._apply_theme()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception): self.wb._apply_theme()
+        with contextlib.suppress(Exception):
             self.wb.canvas.update()
             self.wb.layer_list.viewport().update()
-        except Exception:
-            pass
-        try:
-            self.update()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.update()
 
     def _switch_theme(self, mode):
         """切换界面主题（"light" 半透明磨砂白 / "dark" 黑），并记住选择。"""
@@ -5153,10 +4985,7 @@ class MainWindow(FluentWindow):
         self._place_nav_grip()
         if not self.nav_collapsed:
             ni.raise_()
-            try:
-                self.nav_grip.raise_()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): self.nav_grip.raise_()
 
     # ---------------- 导航栏宽度调节 ----------------
     NAV_W_DEFAULT = 140
@@ -5200,10 +5029,7 @@ class MainWindow(FluentWindow):
                 return
             self.nav_width = w
             ni = self.navigationInterface
-            try:
-                ni.setExpandWidth(w)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): ni.setExpandWidth(w)
             for tgt in (ni, ni.panel):
                 tgt.setMinimumWidth(w)
                 tgt.setFixedWidth(w)
@@ -5215,7 +5041,7 @@ class MainWindow(FluentWindow):
 
     def eventFilter(self, obj, ev):
         """导航栏宽度拖拽把手。"""
-        try:
+        with contextlib.suppress(Exception):
             if obj is getattr(self, "nav_grip", None):
                 et = ev.type()
                 if et == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton:
@@ -5232,18 +5058,14 @@ class MainWindow(FluentWindow):
                 if et == QEvent.MouseButtonDblClick:
                     self._apply_nav_width(self.NAV_W_DEFAULT)
                     return True
-        except Exception:
-            pass
         return super().eventFilter(obj, ev)
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
         # 窗口尺寸变化时把手与标题栏偏移都要跟着重算
-        try:
+        with contextlib.suppress(Exception):
             self._sync_titlebar_offset()
             self._place_nav_grip()
-        except Exception:
-            pass
 
     def add_project_entry(self, name, d):
         """导航栏加入/更新工程项。同目录只一项（更新文字）。"""
@@ -5258,23 +5080,18 @@ class MainWindow(FluentWindow):
             items = self._proj_items = {}
         for key, dd in list(items.items()):
             if os.path.normpath(dd) == d:
-                try:
-                    ni.widget(key).setText(name)
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception): ni.widget(key).setText(name)
                 return
         n = len(items) + 1
         key = "proj:%d" % n
         while key in items:
             n += 1
             key = "proj:%d" % n
-        try:
+        with contextlib.suppress(Exception):
             ni.addItem(key, FluentIcon.FOLDER, name,
                        onClick=lambda checked=False, dd=d: self.wb.load_dir(dd),
                        tooltip=d)
             items[key] = d
-        except Exception:
-            pass
 
     def _scan_projects(self):
         """启动时扫描 PROJ_BASE 目录，把已有工程加进导航栏。"""
@@ -5308,10 +5125,8 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
         try:
             self.navigationInterface.setReturnButtonVisible(False)
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 self.navigationInterface.panel.returnButton.setVisible(False)
-            except Exception:
-                pass
         self.navigationInterface.setVisible(False)
 
     def _apply_theme(self):
@@ -5321,26 +5136,20 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
         缺了这个钩子的话：白主题下标题栏仍是暗色底，而标题文字已经跟着
         主题变深 —— 用户看到的就是「顶部整条黑、字看不见」。
         """
-        try:
+        with contextlib.suppress(Exception):
             bg = TH.t("window_flat") if TH.is_light() else TH.t("window_bg")
             self.setStyleSheet(
                 "QWidget{color:%s;}"
                 "TitleBar, TitleBarBase{background:%s;}"
                 % (TH.t("text"), bg))
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             wb = getattr(self, "_wb", None)
             if wb is not None:
                 wb._apply_theme()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             self.titleBar.update()
             self.titleBar.repaint()
             self.update()
-        except Exception:
-            pass
 
     def closeEvent(self, ev):
         """v3.4.0（task-30/B2）：视频窗未保存退出守卫（wb.project_dirty 直读）。"""
@@ -5381,10 +5190,7 @@ def _video_new_project(wb, set_proj):
     import video_model as VM
     wb.proj = VM.new_project()
     wb.proj_dir = None
-    try:
-        wb._apply_project(None)
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): wb._apply_project(None)
     if wb.save_project(ask=True):
         set_proj(os.path.basename(wb.proj_dir))
 
@@ -5398,8 +5204,7 @@ def _video_open_project(win, wb, set_proj):
     if not d:
         return
     if not VW.VideoWorkbench.is_video_project(d):
-        InfoBar.error("不是视频工程", "所选文件夹里没有 video_project.json：\n%s" % d,
-                      parent=win, position=InfoBarPosition.TOP, duration=5000)
+        TOAST.toast_err(win, "不是视频工程", "所选文件夹里没有 video_project.json：\n%s" % d, duration=5000)
         return
     if wb.load_dir(d):
         set_proj(os.path.basename(d))
@@ -5421,8 +5226,7 @@ def _video_open_recent(win, wb, d, set_proj):
     """最近工程 → 打开：失效目录给提示，成功更新标题。"""
     import video_workbench as VW
     if not os.path.isfile(os.path.join(d, VW.META_NAME)):
-        InfoBar.warning("工程已失效", "目录或 video_project.json 不存在：\n%s" % d,
-                        parent=win, position=InfoBarPosition.TOP, duration=4000)
+        TOAST.toast_warn(win, "工程已失效", "目录或 video_project.json 不存在：\n%s" % d, duration=4000)
         return
     if wb.load_dir(d):
         set_proj(os.path.basename(d))
@@ -5463,8 +5267,7 @@ def _video_import_script(win, wb):
     QObject.after，见 remote_control._schedule 的同款处理）。
     """
     if getattr(wb, "_script_busy", False):
-        InfoBar.info("导入中", "请等待当前导入完成", parent=win,
-                     position=InfoBarPosition.TOP, duration=1800)
+        TOAST.toast_info(win, "导入中", "请等待当前导入完成", duration=1800)
         return
     script, _ = QFileDialog.getOpenFileName(
         win, "选择 WebGAL 场景脚本", "", "WebGAL 场景脚本 (*.txt)")
@@ -5527,14 +5330,12 @@ def _video_import_script(win, wb):
                     wb._loading = False
                 wb.push_history()
                 wb.seek(0.0)
-                InfoBar.success("导入脚本", msg, parent=win,
-                                position=InfoBarPosition.TOP, duration=4000)
+                TOAST.toast_ok(win, "导入脚本", msg, duration=4000)
             else:
                 pg = getattr(wb, "prog", None)
                 if pg is not None:
                     pg.setText("导入脚本失败")
-                InfoBar.warning("导入脚本", msg or "导入失败", parent=win,
-                                position=InfoBarPosition.TOP, duration=5000)
+                TOAST.toast_warn(win, "导入脚本", msg or "导入失败", duration=5000)
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, wb, done)
 
@@ -5568,14 +5369,12 @@ def _webgal_precheck_text(wb):
                             % (len(dead), "、".join(str(x) for x in dead[:3])))
     except Exception:
         pass
-    try:
+    with contextlib.suppress(Exception):
         import asset_audit as AA
         hint = AA.audit_hint(getattr(wb, "proj", None),
                              getattr(wb, "proj_dir", None))
         if hint:
             bits.append("⚠ " + hint)
-    except Exception:
-        pass
     return "\n".join(bits)
 
 
@@ -5586,8 +5385,7 @@ def _video_export_webgal(win, wb):
     export_game，完成后 QTimer 回主线程 InfoBar 报 stats + 开目录。
     """
     if getattr(wb, "_webgal_busy", False):
-        InfoBar.info("导出中", "请等待当前导出完成", parent=win,
-                     position=InfoBarPosition.TOP, duration=1800)
+        TOAST.toast_info(win, "导出中", "请等待当前导出完成", duration=1800)
         return
     out_dir = QFileDialog.getExistingDirectory(win, "导出 WebGAL 工程", "")
     if not out_dir:
@@ -5636,17 +5434,13 @@ def _video_export_webgal(win, wb):
         def done():
             wb._webgal_busy = False
             if ok:
-                InfoBar.success("WebGAL 导出", msg, parent=win,
-                                position=InfoBarPosition.TOP, duration=4000)
-                try:
+                TOAST.toast_ok(win, "WebGAL 导出", msg, duration=4000)
+                with contextlib.suppress(Exception):
                     from PySide6.QtGui import QDesktopServices
                     from PySide6.QtCore import QUrl
                     QDesktopServices.openUrl(QUrl.fromLocalFile(out_dir))
-                except Exception:
-                    pass
             else:
-                InfoBar.warning("WebGAL 导出", msg or "导出失败", parent=win,
-                                position=InfoBarPosition.TOP, duration=5000)
+                TOAST.toast_warn(win, "WebGAL 导出", msg or "导出失败", duration=5000)
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, wb, done)
 
@@ -5702,7 +5496,7 @@ def _build_video_menus(win, wb, set_proj):
     # 并在 tooltip 里说清原因和怎么修。
     _act_webgal = Action(FluentIcon.SEND, "导出 WebGAL 工程…",
                          triggered=lambda: _video_export_webgal(win, wb))
-    try:
+    with contextlib.suppress(Exception):
         import asset_paths as _AP
         if not _AP.available():
             _act_webgal.setEnabled(False)
@@ -5713,8 +5507,6 @@ def _build_video_menus(win, wb, set_proj):
                 "MUPPET_ASSET_INDEX 指向它。")
         else:
             _act_webgal.setToolTip("素材库：%s" % _AP.asset_library_dir())
-    except Exception:
-        pass
     mf.addAction(_act_webgal)
     mf.addSeparator()
     # 最近工程：只列 type=video 的工程，点击=打开工程同款流程
@@ -5769,10 +5561,7 @@ def _show_maximized(win):
     「无效的窗口句柄」，这里吞掉降级为普通尺寸窗口——测试不因平台崩，
     真 Windows 桌面正常最大化。"""
     win.show()
-    try:
-        win.showMaximized()
-    except Exception:
-        pass
+    with contextlib.suppress(Exception): win.showMaximized()
 
 
 _prewarm_done = False       # 进程内只预热一次（反复开视频窗不重复扫盘）
@@ -5808,14 +5597,10 @@ def _prewarm_asset_library(win=None):
         def done():
             if ok and d:
                 return          # 正常：不打扰
-            try:
-                InfoBar.warning(
-                    "素材库未找到",
-                    "导出 WebGAL 需要素材库（含 asset_index.json 与 figure/）。\n"
+            with contextlib.suppress(Exception):
+                TOAST.toast_warn(win, "素材库未找到", "导出 WebGAL 需要素材库（含 asset_index.json 与 figure/）。\n"
                     "已把「导出 WebGAL 工程」暂时灰掉；放好素材库后重开视频窗口即可。",
-                    parent=win, position=InfoBarPosition.TOP, duration=8000)
-            except Exception:
-                pass
+                           duration=8000)
 
         if win is not None:
             QTimer.singleShot(0, win, done)
@@ -5874,10 +5659,7 @@ def _welcome_gate():
         holder["main"] = win
         _show_maximized(win)
         wel.close()
-        try:
-            fn(win)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): fn(win)
 
     def _enter_video(proj_dir=None):
         r = _open_video_window(proj_dir)
@@ -5905,8 +5687,7 @@ def _welcome_gate():
 
         def _load(win):
             if win.wb.load_dir(d):
-                InfoBar.success("已打开", os.path.basename(d), parent=win.wb,
-                                position=InfoBarPosition.TOP, duration=2000)
+                TOAST.toast_ok(win.wb, "已打开", os.path.basename(d), duration=2000)
         _enter(_load)
 
     wel.new_requested.connect(_on_new)
@@ -5971,21 +5752,15 @@ def run_app():
     def _shutdown_l2d():
         # 顺序要紧：泵持有 renderer 引用，stop() 里还要跑一次 JS
         # （退出手动时钟）。必须先让泵放手，再关渲染器，最后清预渲染缓存。
-        try:
+        with contextlib.suppress(Exception):
             import l2d_pump as LPM
             LPM.shutdown()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             import l2d_renderer as L2R
             L2R.shutdown()
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             import l2d_prefetch as LP
             LP.prefetch().clear()
-        except Exception:
-            pass
 
     app.aboutToQuit.connect(_shutdown_l2d)
 

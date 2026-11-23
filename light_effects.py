@@ -441,16 +441,14 @@ LIGHT_NAMES = tuple(p["name"] for p in LIGHT_PRESETS)
 
 def by_name(name):
     for p in LIGHT_PRESETS:
-        if p["name"] == name:
-            return p
+        if p["name"] == name: return p
     return None
 
 
 def params_for(name, layer="fig"):
     """取某条预设在某层的参数（layer = 'bg' / 'fig'）。无则 None。"""
     p = by_name(name)
-    if not p:
-        return None
+    if not p: return None
     v = p.get(layer)
     return dict(v) if isinstance(v, dict) else None
 
@@ -460,11 +458,9 @@ def to_transform_cmd(name, target="fig-center", duration=0):
     import json as _json
     layer = "bg" if str(target).startswith("bg") else "fig"
     params = params_for(name, layer)
-    if not params:
-        return None
+    if not params: return None
     # 只发该层真正需要的键；alpha 只对 fig 有意义
-    if layer == "bg":
-        params.pop("alpha", None)
+    if layer == "bg": params.pop("alpha", None)
     body = _json.dumps(params, ensure_ascii=False, separators=(",", ":"))
     return "setTransform:%s -target=%s -duration=%d;" % (
         body, target, int(duration))

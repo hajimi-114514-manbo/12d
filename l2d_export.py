@@ -40,6 +40,7 @@ import shutil
 
 import anim as A
 import l2d_rig_core as C
+import contextlib
 
 # ---------------- 常量 ----------------
 MOTION_FPS = 30.0
@@ -99,8 +100,7 @@ EASE_BEZIER_K = {            # (k1,k2)：归一化值域 0..1 里的贝塞尔控
 def _safe(d, *keys, default=None):
     cur = d
     for k in keys:
-        if not isinstance(cur, dict):
-            return default
+        if not isinstance(cur, dict): return default
         cur = cur.get(k)
     return cur if cur is not None else default
 
@@ -118,16 +118,11 @@ def _part_name(layer):
 
 
 def _norm_val(v, kind, W, H):
-    if kind == "angle":
-        return float(v)
-    if kind == "px_x":
-        return float(v) / max(1.0, W / 2.0)
-    if kind == "px_y":
-        return float(v) / max(1.0, H / 2.0)
-    if kind == "open01":
-        return float(min(1.0, max(0.0, v)))
-    if kind == "sc1":
-        return float(v) - 1.0
+    if kind == "angle": return float(v)
+    if kind == "px_x": return float(v) / max(1.0, W / 2.0)
+    if kind == "px_y": return float(v) / max(1.0, H / 2.0)
+    if kind == "open01": return float(min(1.0, max(0.0, v)))
+    if kind == "sc1": return float(v) - 1.0
     return float(v)
 
 
@@ -140,22 +135,16 @@ def _param_of(node, prop, W, H):
         return pid, kind, "custom"
     pid, kind = m
     # 表里 Y 位移统一写 px_x 占位，按属性名修正半轴
-    if prop == "ty" and kind == "px_x" and not pid.endswith(("X",)):
-        kind = "px_y"
+    if prop == "ty" and kind == "px_x" and not pid.endswith(("X",)): kind = "px_y"
     return pid, kind, ""
 
 
 def _coef_note(kind, W, H):
-    if kind == "angle":
-        return "度（编辑器默认范围 ±30）"
-    if kind == "px_x":
-        return "1.0 = %.1f px（半画布宽）" % (W / 2.0)
-    if kind == "px_y":
-        return "1.0 = %.1f px（半画布高）" % (H / 2.0)
-    if kind == "open01":
-        return "0..1；注意我们眨眼闭合值=0.06 而非 0"
-    if kind == "sc1":
-        return "v-1；建议编辑器参数范围 ±0.5"
+    if kind == "angle": return "度（编辑器默认范围 ±30）"
+    if kind == "px_x": return "1.0 = %.1f px（半画布宽）" % (W / 2.0)
+    if kind == "px_y": return "1.0 = %.1f px（半画布高）" % (H / 2.0)
+    if kind == "open01": return "0..1；注意我们眨眼闭合值=0.06 而非 0"
+    if kind == "sc1": return "v-1；建议编辑器参数范围 ±0.5"
     return "原值直传"
 
 
@@ -173,8 +162,7 @@ def _segs_from_keyframes(ks, kind, W, H):
     (1-τ)³v0+3(1-τ)²τ·c1+3(1-τ)τ²·c2+τ³v1 ≡ ease(τ)，逐点相等）。
     """
     ks = A.sort_track(ks)
-    if not ks:
-        return [], 0, 0
+    if not ks: return [], 0, 0
     v0 = _norm_val(ks[0]["v"], kind, W, H)
     segs = [_r(ks[0]["t"]), _r(v0)]
     n_seg = n_pt = 0
@@ -182,8 +170,7 @@ def _segs_from_keyframes(ks, kind, W, H):
         ta, tb = _safe(a, "t", default=0.0), _safe(b, "t", default=0.0)
         va = _norm_val(_safe(a, "v", default=0.0), kind, W, H)
         vb = _norm_val(_safe(b, "v", default=0.0), kind, W, H)
-        if tb - ta <= 1e-9:
-            continue
+        if tb - ta <= 1e-9: continue
         ease = A.normalize_ease(a.get("ease"))
         if ease == "hold":
             segs += [2, _r(tb), _r(vb)]
@@ -209,8 +196,7 @@ def _segs_from_samples(ts, vs):
     """等间隔采样折线 → 线性段序列；相邻共线合并（省段数，不引入新误差）。"""
     pts = list(zip(ts, vs))
     if len(pts) < 2:
-        if not pts:
-            return [], 0, 0
+        if not pts: return [], 0, 0
         return [_r(pts[0][0]), _r(pts[0][1])], 0, 0
     keep = [pts[0]]
     for i in range(1, len(pts) - 1):
@@ -220,8 +206,7 @@ def _segs_from_samples(ts, vs):
         # 中间点到保留点连线的相对偏离 <1e-6 视为共线（含同值平台）
         cross = (t1 - t0) * (v2 - v0) - (t2 - t0) * (v1 - v0)
         span = max(abs(v2 - v0), 1e-9)
-        if abs(cross) / (abs(t2 - t0) * span + 1e-12) > 1e-6:
-            keep.append(pts[i])
+        if abs(cross) / (abs(t2 - t0) * span + 1e-12) > 1e-6: keep.append(pts[i])
     keep.append(pts[-1])
     segs = [_r(keep[0][0]), _r(keep[0][1])]
     n_seg = n_pt = 0
@@ -247,19 +232,16 @@ def _motion(curves, duration, loop):
         while i < len(s):
             typ = s[i]
             if typ == 1:
-                if i + 6 >= len(s):
-                    raise ValueError("segments 越界")
+                if i + 6 >= len(s): raise ValueError("segments 越界")
                 pts += 3
                 segs += 1
                 i += 7
             elif typ in (0, 2, 3):
-                if i + 2 >= len(s):
-                    raise ValueError("segments 越界")
+                if i + 2 >= len(s): raise ValueError("segments 越界")
                 pts += 1
                 segs += 1
                 i += 3
-            else:
-                raise ValueError("未知段类型 %r" % typ)
+            else: raise ValueError("未知段类型 %r" % typ)
         n_seg += segs
         n_pt += pts
     dur = round(max(float(duration), 0.2), 4)
@@ -293,11 +275,9 @@ def _idle_curves(rig, W, H, fps=MOTION_FPS, duration=IDLE_DURATION):
     seen = set()
     for nd in rig.get("nodes", []):
         node = nd.get("node")
-        if not node:
-            continue
+        if not node: continue
         props = list(NODE_PARAM_MAP.get(node, {}).keys())
-        if not props:
-            continue
+        if not props: continue
         series = {p: [] for p in props}
         for t in ts:
             a = C.animation_for(node, t, nd, None)
@@ -305,18 +285,15 @@ def _idle_curves(rig, W, H, fps=MOTION_FPS, duration=IDLE_DURATION):
                 series[p].append(a.get(p))
         for p in props:
             vals = series[p]
-            if any(v is None for v in vals):
-                continue
+            if any(v is None for v in vals): continue
             if all(abs(v - vals[0]) < 1e-12 for v in vals):
                 continue                     # 全程不动的属性不发曲线
             pid, kind, _ = _param_of(node, p, W, H)
-            if pid in seen:
-                continue
+            if pid in seen: continue
             seen.add(pid)
             vnorm = [_norm_val(v, kind, W, H) for v in vals]
             segs, _, _ = _segs_from_samples(ts, vnorm)
-            if segs:
-                curves.append(_curve("Parameter", pid, segs))
+            if segs: curves.append(_curve("Parameter", pid, segs))
     return curves
 
 
@@ -335,21 +312,17 @@ def _kf_curves(rig, tracks, W, H):
                     if n not in nodes_order]
     for node in nodes_order:
         ntr = (tracks or {}).get(node)
-        if not isinstance(ntr, dict):
-            continue
+        if not isinstance(ntr, dict): continue
         for p in A.PARAMS:
             ks = ntr.get(p)
-            if not (isinstance(ks, list) and ks):
-                continue
+            if not (isinstance(ks, list) and ks): continue
             ks = A.sort_track(ks)
             max_t = max(max_t, _safe(ks[-1], "t", default=0.0))
             pid, kind, _ = _param_of(node, p, W, H)
-            if pid in seen:
-                continue                     # 同参数多来源：首个节点优先
+            if pid in seen: continue                     # 同参数多来源：首个节点优先
             seen.add(pid)
             segs, _, _ = _segs_from_keyframes(ks, kind, W, H)
-            if segs:
-                curves.append(_curve("Parameter", pid, segs))
+            if segs: curves.append(_curve("Parameter", pid, segs))
     return curves, max(0.2, max_t)
 
 
@@ -362,8 +335,7 @@ def _opacity_curves(rig, duration):
     seen = set()
     for L in rig.get("_layers", []):
         pn = _part_name(L)
-        if pn in seen:
-            continue
+        if pn in seen: continue
         seen.add(pn)
         out.append(_curve("PartOpacity", pn, [0.0, 1.0, 0, _r(duration), 1.0]))
     return out
@@ -387,17 +359,14 @@ def _copy_textures(rig, tex_dir, W, H):
         if fn in used:
             used[fn] += 1
             fn = "%s_%d" % (fn, used[fn])
-        else:
-            used[fn] = 0
+        else: used[fn] = 0
         dst_name = fn + ".png"
         rel = "textures/" + dst_name
         copied = False
         if src and os.path.isfile(src):
-            try:
+            with contextlib.suppress(OSError):
                 shutil.copy2(src, os.path.join(tex_dir, dst_name))
                 copied = True
-            except OSError:
-                pass
         if not copied:                        # 源丢失：纯 alpha 占位图（不阻断导出）
             try:
                 import PIL.Image as _I
@@ -424,8 +393,7 @@ def _param_table(rig, W, H):
             prop_src.append((p, pid, kind, custom))
         seen = set()
         for p, pid, kind, custom in prop_src:
-            if pid in seen:
-                continue
+            if pid in seen: continue
             seen.add(pid)
             params.append({"src": p, "param": pid, "kind": kind,
                            "coef": _coef_note(kind, W, H),
@@ -484,12 +452,10 @@ def export_project(rig, out_dir, psd_path=None, name=None,
             return False, "rig 不是 build_rig 产物 dict"
         W = int(rig.get("width") or 0)
         H = int(rig.get("height") or 0)
-        if W <= 0 or H <= 0:
-            return False, "rig 尺寸非法 %dx%d" % (W, H)
+        if W <= 0 or H <= 0: return False, "rig 尺寸非法 %dx%d" % (W, H)
         name = _sanitize(name or rig.get("name") or "muppet", "muppet")
         tr = tracks if tracks is not None else rig.get("keyframes")
-        if not isinstance(tr, dict):
-            tr = {}
+        if not isinstance(tr, dict): tr = {}
 
         os.makedirs(out_dir, exist_ok=True)
         mot_dir = os.path.join(out_dir, "motions")
@@ -510,10 +476,8 @@ def export_project(rig, out_dir, psd_path=None, name=None,
                 _write_json(km, os.path.join(mot_dir, "keyframes.motion3.json"))
                 group_refs[Kf_GROUP] = [{"Id": "", "Priority": 1,
                                          "File": "motions/keyframes.motion3.json"}]
-            else:
-                notes.append("tracks 非空但未产出曲线（全部未知节点?）")
-        else:
-            notes.append("工程无用户关键帧：仅生成 idle")
+            else: notes.append("tracks 非空但未产出曲线（全部未知节点?）")
+        else: notes.append("工程无用户关键帧：仅生成 idle")
 
         # ---- textures ----
         recs = _copy_textures(rig, tex_dir, W, H)
@@ -567,8 +531,7 @@ def export_project(rig, out_dir, psd_path=None, name=None,
         if psd_path:
             if os.path.isfile(psd_path):
                 shutil.copy2(psd_path, os.path.join(out_dir, "%s.psd" % name))
-            else:
-                notes.append("psd_path 不存在，跳过拷贝: %s" % psd_path)
+            else: notes.append("psd_path 不存在，跳过拷贝: %s" % psd_path)
 
         # ---- guide ----
         with open(os.path.join(out_dir, GUIDE_NAME), "w", encoding="utf-8-sig") as f:
@@ -578,8 +541,7 @@ def export_project(rig, out_dir, psd_path=None, name=None,
             name, idle["Meta"]["CurveCount"],
             "keyframes" if Kf_GROUP in group_refs else "无kf",
             len(textures))
-        if notes:
-            msg += "；备注: " + "；".join(notes)
+        if notes: msg += "；备注: " + "；".join(notes)
         return True, msg
     except Exception as e:
         return False, "导出异常 %s: %s" % (type(e).__name__, str(e)[:160])
@@ -608,18 +570,14 @@ def read_project_rig(proj_dir):
             p = json.load(open(proj_json, encoding="utf8"))
         except Exception:
             p = {}
-        if isinstance(p.get("keyframes"), dict):
-            tracks = A.clone_tracks(p["keyframes"])
+        if isinstance(p.get("keyframes"), dict): tracks = A.clone_tracks(p["keyframes"])
         an = p.get("anim")
         if isinstance(an, dict):
             d2 = an.get("duration")
-            if isinstance(d2, (int, float)) and 0.2 <= float(d2) <= 600:
-                dur = float(d2)
+            if isinstance(d2, (int, float)) and 0.2 <= float(d2) <= 600: dur = float(d2)
             f2 = an.get("fps")
-            if isinstance(f2, int) and 1 <= f2 <= 120:
-                f = float(f2)
-        if p.get("name"):
-            name = str(p["name"])
+            if isinstance(f2, int) and 1 <= f2 <= 120: f = float(f2)
+        if p.get("name"): name = str(p["name"])
     rig["keyframes"] = tracks
     return rig, {"duration": dur, "fps": f, "name": name}
 
@@ -649,12 +607,10 @@ def eval_motion(motion_obj, param_id, t, target="Parameter"):
 
 
 def _eval_segments(s, t):
-    if len(s) < 2:
-        return None
+    if len(s) < 2: return None
     i = 2
     p0t, p0v = s[0], s[1]
-    if t < p0t:
-        return p0v
+    if t < p0t: return p0v
     while i < len(s):
         typ = s[i]
         if typ == 1:
@@ -676,16 +632,13 @@ def _eval_segments(s, t):
             i += 3
         elif typ == 2:
             t1, v1 = s[i + 1], s[i + 2]
-            if t < t1:
-                return p0v
+            if t < t1: return p0v
             p0t, p0v = t1, v1
             i += 3
         elif typ == 3:
             t1, v1 = s[i + 1], s[i + 2]
-            if t <= t1:
-                return v1
+            if t <= t1: return v1
             p0t, p0v = t1, v1
             i += 3
-        else:
-            return None
+        else: return None
     return p0v

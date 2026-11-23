@@ -27,6 +27,7 @@ import base64
 import io
 import json
 import os
+import contextlib
 
 V_DIR = os.path.dirname(os.path.abspath(__file__))
 RUNTIME = os.path.join(V_DIR, "templates", "webgal_runtime")
@@ -40,12 +41,9 @@ LIBSQL = "libsql"
 
 def runtime_es_rel():
     ad = os.path.join(RUNTIME, "assets")
-    try:
+    with contextlib.suppress(OSError):
         for fn in sorted(os.listdir(ad)):
-            if fn.startswith("index.es-") and fn.endswith(".js"):
-                return "assets/" + fn
-    except OSError:
-        pass
+            if fn.startswith("index.es-") and fn.endswith(".js"): return "assets/" + fn
     return None
 
 
@@ -55,8 +53,7 @@ def lib_files():
         root = AP.ensure_library(scan=False)
     except Exception:
         root = None
-    if not root:
-        return (None, None)
+    if not root: return (None, None)
     d = os.path.join(root, "lib")
     a = os.path.join(d, "live2d.min.js")
     b = os.path.join(d, "live2dcubismcore.min.js")
@@ -73,8 +70,7 @@ def available():
 def build_host_html():
     """生成宿主页（覆盖写），返回路径；不可用返回 None。"""
     es = runtime_es_rel()
-    if not es or not os.path.isfile(TPL):
-        return None
+    if not es or not os.path.isfile(TPL): return None
     l2, l4 = lib_files()
     html = io.open(TPL, encoding="utf-8").read()
     html = html.replace("__MUPPET_ES__", json.dumps("/" + es))
@@ -128,12 +124,10 @@ def has_thumb(model_dir):
 
 def del_thumb(model_dir):
     p = thumb_file(model_dir)
-    try:
+    with contextlib.suppress(Exception):
         if p and os.path.isfile(p):
             os.remove(p)
             return True
-    except Exception:
-        pass
     return False
 
 
@@ -151,12 +145,10 @@ def crop_png_bytes(raw, pad_ratio=0.03, dst_ratio=(3, 4)):
         im = Image.open(_io.BytesIO(raw)).convert("RGBA")
         w, h = im.size
         bbox = im.getbbox()          # 基于 alpha 的包围盒
-        if not bbox:
-            return raw
+        if not bbox: return raw
         x0, y0, x1, y1 = bbox
         cw, ch = x1 - x0, y1 - y0
-        if cw < 8 or ch < 8:
-            return raw
+        if cw < 8 or ch < 8: return raw
         # 留白
         pw = int(cw * pad_ratio) + 2
         ph = int(ch * pad_ratio) + 2
@@ -202,17 +194,14 @@ def crop_png_bytes(raw, pad_ratio=0.03, dst_ratio=(3, 4)):
 
 def save_data_url(data_url, model_dir, min_bytes=3000):
     """data:image/png;base64,... -> _thumb.png（太小的空白图丢弃）。"""
-    if not data_url or not model_dir:
-        return ""
+    if not data_url or not model_dir: return ""
     head = "data:image/png;base64,"
-    if not str(data_url).startswith(head):
-        return ""
+    if not str(data_url).startswith(head): return ""
     try:
         raw = base64.b64decode(str(data_url)[len(head):])
     except Exception:
         return ""
-    if len(raw) < min_bytes:
-        return ""
+    if len(raw) < min_bytes: return ""
     # 裁掉透明边：否则角色在卡片里只有中间一小块（用户实报「显示太小」）
     raw = crop_png_bytes(raw)
     try:

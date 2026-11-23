@@ -41,8 +41,7 @@ def _num(v, d=0.0):
         f = float(v)
     except (TypeError, ValueError):
         return d
-    if f != f or f in (float("inf"), float("-inf")):
-        return d
+    if f != f or f in (float("inf"), float("-inf")): return d
     return f
 
 
@@ -74,15 +73,13 @@ def fix_ids(proj, aid=None):
     views = []
     if isinstance(p.get("acts"), list) and p.get("acts"):
         views = [a for a in p["acts"] if isinstance(a, dict)]
-    else:
-        views = [p]
+    else: views = [p]
 
     # ---- 第一趟：统计 clip id 频次（全工程，跨幕唯一） ----
     clip_freq = {}
     for view in views:
         for tr in (view.get("tracks") or []):
-            if not isinstance(tr, dict):
-                continue
+            if not isinstance(tr, dict): continue
             for c in (tr.get("clips") or []):
                 if isinstance(c, dict) and c.get("id"):
                     cid = str(c["id"])
@@ -103,8 +100,7 @@ def fix_ids(proj, aid=None):
     for view in views:
         seen_track = set()
         for tr in (view.get("tracks") or []):
-            if not isinstance(tr, dict):
-                continue
+            if not isinstance(tr, dict): continue
             tid = str(tr.get("id") or "")
             if not tid or tid in seen_track:
                 base = tid or "t"
@@ -117,8 +113,7 @@ def fix_ids(proj, aid=None):
                 n_track += 1
             seen_track.add(str(tr.get("id")))
             for c in (tr.get("clips") or []):
-                if not isinstance(c, dict):
-                    continue
+                if not isinstance(c, dict): continue
                 cid = str(c.get("id") or "")
                 if not cid or clip_freq.get(cid, 0) > 1:
                     c["id"] = _fresh_clip_id()
@@ -148,28 +143,23 @@ def add_next_to_dialogue(proj, aid=None, only_continuous=True,
     views = []
     if isinstance(p.get("acts"), list) and p.get("acts"):
         views = [a for a in p["acts"] if isinstance(a, dict)]
-    else:
-        views = [p]
+    else: views = [p]
 
     for view in views:
         dlg = view.get("dialogue")
-        if not isinstance(dlg, list):
-            continue
+        if not isinstance(dlg, list): continue
         # 按时刻排序后判断间隔（原列表可能乱序）
         items = [(i, d) for i, d in enumerate(dlg)
                  if isinstance(d, dict) and isinstance(d.get("text"), str)]
         items.sort(key=lambda x: _num(x[1].get("t"), 0.0))
         for k, (idx, d) in enumerate(items):
-            if "-next" in str(d.get("text") or ""):
-                continue            # 幂等
+            if "-next" in str(d.get("text") or ""): continue            # 幂等
             if only_continuous:
-                if k + 1 >= len(items):
-                    continue        # 最后一句不加
+                if k + 1 >= len(items): continue        # 最后一句不加
                 t0 = _num(d.get("t"), 0.0)
                 t1 = _num(items[k + 1][1].get("t"), 0.0)
                 gap = t1 - (t0 + _num(d.get("dur"), 0.0))
-                if gap < -min_gap or gap > max_gap:
-                    continue
+                if gap < -min_gap or gap > max_gap: continue
             d["text"] = str(d.get("text") or "").rstrip() + " -next"
             n += 1
     return p, {"updated": n}
@@ -194,40 +184,32 @@ def auto_exit_figures(proj, aid=None):
     views = []
     if isinstance(p.get("acts"), list) and p.get("acts"):
         views = [a for a in p["acts"] if isinstance(a, dict)]
-    else:
-        views = [p]
+    else: views = [p]
 
     LINGER = 0.3     # 收尾余量（秒）：留一点缓冲，别切得太生硬
 
     for view in views:
         dlg = [d for d in (view.get("dialogue") or [])
                if isinstance(d, dict) and isinstance(d.get("who"), str)]
-        if not dlg:
-            continue
+        if not dlg: continue
         # 每个角色的「最后一句结束时刻」
         last_end = {}
         for d in dlg:
             who = str(d.get("who") or "").strip()
-            if not who:
-                continue
+            if not who: continue
             end = _num(d.get("t"), 0.0) + _num(d.get("dur"), 0.0)
-            if who not in last_end or end > last_end[who]:
-                last_end[who] = end
+            if who not in last_end or end > last_end[who]: last_end[who] = end
         for tr in (view.get("tracks") or []):
-            if not isinstance(tr, dict) or tr.get("kind") != "video":
-                continue
+            if not isinstance(tr, dict) or tr.get("kind") != "video": continue
             name = str(tr.get("name") or "")
             m = re.match(r"^FIG[-_](.+)$", name)
-            if not m:
-                continue
+            if not m: continue
             who = m.group(1)
             target_end = last_end.get(who)
-            if target_end is None:
-                continue            # 该角色没台词（可能全程无对白的立绘），不动
+            if target_end is None: continue            # 该角色没台词（可能全程无对白的立绘），不动
             touched = False
             for c in (tr.get("clips") or []):
-                if not isinstance(c, dict):
-                    continue
+                if not isinstance(c, dict): continue
                 start = _num(c.get("start"), 0.0)
                 dur = _num(c.get("dur"), 0.0)
                 end = start + dur
@@ -236,8 +218,7 @@ def auto_exit_figures(proj, aid=None):
                     c["dur"] = round(want - start, 3)
                     n_clip += 1
                     touched = True
-            if touched:
-                n_tr += 1
+            if touched: n_tr += 1
     return p, {"tracks_touched": n_tr, "clips_trimmed": n_clip}
 
 
@@ -257,23 +238,19 @@ def retime_dialogue(proj, aid=None, chars_per_sec=CHARS_PER_SEC,
     views = []
     if isinstance(p.get("acts"), list) and p.get("acts"):
         views = [a for a in p["acts"] if isinstance(a, dict)]
-    else:
-        views = [p]
+    else: views = [p]
 
     for view in views:
         for d in (view.get("dialogue") or []):
-            if not isinstance(d, dict):
-                continue
+            if not isinstance(d, dict): continue
             text = str(d.get("text") or "")
             # 去掉参数（-next 等）再数字数，避免「-next」被算进朗读时长
             spoken = re.sub(r"\s-\w[\w-]*(=\S+)?", "", text).strip()
-            if not spoken:
-                continue
+            if not spoken: continue
             need = max(min_dur, len(spoken) / cps)
             need = min(MAX_DUR, need)
             cur = _num(d.get("dur"), 0.0)
-            if keep_longer and cur >= need - 1e-6:
-                continue
+            if keep_longer and cur >= need - 1e-6: continue
             d["dur"] = round(need, 3)
             n += 1
     return p, {"updated": n}
@@ -298,25 +275,18 @@ def apply_filter_batch(proj, filt, clip_ids=None, tracks=None, aid=None,
     views = []
     if isinstance(p.get("acts"), list) and p.get("acts"):
         views = [a for a in p["acts"] if isinstance(a, dict)]
-    else:
-        views = [p]
+    else: views = [p]
 
     for view in views:
         for tr in (view.get("tracks") or []):
-            if not isinstance(tr, dict) or tr.get("kind") != "video":
-                continue
+            if not isinstance(tr, dict) or tr.get("kind") != "video": continue
             nm = str(tr.get("name") or "")
-            if tnames and nm not in tnames:
-                continue
-            if which == "fig" and not nm.upper().startswith("FIG"):
-                continue
-            if which == "bg" and nm.upper().startswith("FIG"):
-                continue
+            if tnames and nm not in tnames: continue
+            if which == "fig" and not nm.upper().startswith("FIG"): continue
+            if which == "bg" and nm.upper().startswith("FIG"): continue
             for c in (tr.get("clips") or []):
-                if not isinstance(c, dict):
-                    continue
-                if ids and str(c.get("id") or "") not in ids:
-                    continue
+                if not isinstance(c, dict): continue
+                if ids and str(c.get("id") or "") not in ids: continue
                 if filt is None:
                     if "filter" in c:
                         c.pop("filter", None)

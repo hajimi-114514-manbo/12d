@@ -12,6 +12,7 @@
     asset_catalog 只管"有哪些资产、装没装"
     asset_downloader 只管"怎么下、下到哪、解压"
 """
+import contextlib
 import os
 import re
 import shutil
@@ -29,6 +30,7 @@ from PySide6.QtCore import QThread, Signal, Qt
 from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QWidget)
 from qfluentwidgets import (ProgressBar, BodyLabel, CaptionLabel, PushButton,
                             InfoBar, InfoBarPosition)
+import ui_toast as TOAST
 
 # 模型多镜像（与安装器保持一致：国内镜像优先）
 HOSTS = ["https://hf-mirror.com/", "https://huggingface.co/"]
@@ -42,8 +44,7 @@ def human_mb(n):
         return "?"
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024.0 or unit == "GB":
-            if unit == "B":
-                return "%d B" % int(n)
+            if unit == "B": return "%d B" % int(n)
             return "%.1f %s" % (n, unit)
         n /= 1024.0
     return "%.1f GB" % n
@@ -59,26 +60,21 @@ def asset_file_urls(asset):
     """
     out = []
     multi = asset.get("urls")
-    if isinstance(multi, (list, tuple)):
-        out.extend(str(u) for u in multi if u)
+    if isinstance(multi, (list, tuple)): out.extend(str(u) for u in multi if u)
     url = (asset.get("url") or "").strip()
-    if url and url not in out:
-        out.append(url)
+    if url and url not in out: out.append(url)
     if out:
         # 前缀镜像追加在末尾（官方/主源优先，镜像兜底）
         for m in (asset.get("mirrors") or []):
             m = str(m or "").strip()
-            if not m:
-                continue
+            if not m: continue
             pref = m if m.endswith("/") else m + "/"
             for u in list(out):
                 cand = pref + u
-                if cand not in out:
-                    out.append(cand)
+                if cand not in out: out.append(cand)
         return out
     repo = asset.get("repo") or ""
-    if not repo:
-        return []
+    if not repo: return []
     # 模型以打包形式提供（单文件下载，避免几十个文件的复杂续传）
     name = repo.split("/")[-1] + ".zip"
     return [h + "24yearsold/" + repo.split("/")[-1] + "/resolve/main/" + name
@@ -106,8 +102,7 @@ class AssetDownloadThread(QThread):
         total<=0（未知总大小）返回 (got, 0)——菜单层负责容错显示。"""
         try:
             st = cls._ACTIVE.get(aid)
-            if st is None:
-                return None
+            if st is None: return None
             return (int(st.get("got", 0)), int(st.get("total", 0)))
         except Exception:
             return None
@@ -124,18 +119,14 @@ class AssetDownloadThread(QThread):
     # ---------- 登记表维护（task-20） ----------
     def _register_active(self):
         """run() 入口登记：菜单层由此得知"该资产正在下载"。"""
-        try:
+        with contextlib.suppress(Exception):
             AssetDownloadThread._ACTIVE[self.asset.get("id")] = {
                 "got": 0, "total": int(self.asset.get("size") or 0)}
-        except Exception:
-            pass
 
     def _clear_active(self):
         """出口清除（成功/失败/取消/异常全路径经 finally 到这里，幂等）。"""
-        try:
+        with contextlib.suppress(Exception):
             AssetDownloadThread._ACTIVE.pop(self.asset.get("id"), None)
-        except Exception:
-            pass
 
     def _emit_progress(self, got, total):
         """progressed 信号统一出口：先更新登记表再发信号。
@@ -164,31 +155,26 @@ class AssetDownloadThread(QThread):
         import urllib.request
         have = os.path.getsize(part_path) if os.path.exists(part_path) else 0
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        if have > 0:
-            req.add_header("Range", "bytes=%d-" % have)
+        if have > 0: req.add_header("Range", "bytes=%d-" % have)
         try:
             resp = urllib.request.urlopen(req, timeout=30)
         except Exception as e:
             self.status.emit("镜像不通：%s" % str(e)[:60])
             return False
         code = getattr(resp, "status", 200)
-        if code == 206:
-            mode = "ab"
+        if code == 206: mode = "ab"
         else:
             # 服务器不支持 Range -> 从头来
             have = 0
             mode = "wb"
         # 总大小：Content-Range 或 Content-Length
         total = total_hint
-        try:
+        with contextlib.suppress(Exception):
             cr = resp.headers.get("Content-Range") or ""
             m = re.search(r"/(\d+)", cr)
-            if m:
-                total = int(m.group(1))
+            if m: total = int(m.group(1))
             elif resp.headers.get("Content-Length"):
                 total = have + int(resp.headers["Content-Length"])
-        except Exception:
-            pass
         got = have
         with open(part_path, mode) as f:
             while True:
@@ -196,8 +182,7 @@ class AssetDownloadThread(QThread):
                     self.status.emit("已取消")
                     return False
                 chunk = resp.read(1024 * 256)
-                if not chunk:
-                    break
+                if not chunk: break
                 f.write(chunk)
                 got += len(chunk)
                 self._emit_progress(got, total or got)
@@ -218,16 +203,12 @@ class AssetDownloadThread(QThread):
             strip = None
             if len(tops) == 1:
                 top = tops.pop()
-                if any(n.startswith(top + "/") for n in names):
-                    strip = top + "/"
+                if any(n.startswith(top + "/") for n in names): strip = top + "/"
             for i, n in enumerate(names):
-                if self._cancel:
-                    return False
-                if n.endswith("/"):
-                    continue
+                if self._cancel: return False
+                if n.endswith("/"): continue
                 rel = n[len(strip):] if strip and n.startswith(strip) else n
-                if not rel:
-                    continue
+                if not rel: continue
                 target = os.path.join(dest_dir, rel.replace("/", os.sep))
                 # 防 zip slip
                 # 防 zip slip：必须带分隔符比较，否则 dest 末段名是兄弟目录名前缀时
@@ -238,8 +219,7 @@ class AssetDownloadThread(QThread):
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with z.open(n) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
-                if i % 50 == 0:
-                    self.status.emit("解压中 %d/%d" % (i, len(names)))
+                if i % 50 == 0: self.status.emit("解压中 %d/%d" % (i, len(names)))
         return True
 
     def run(self):
@@ -264,23 +244,17 @@ class AssetDownloadThread(QThread):
                 self.failed.emit("该资产没有配置下载地址")
                 return
             dest_dir = self._dest_dir()
-            try:
-                os.makedirs(dest_dir, exist_ok=True)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): os.makedirs(dest_dir, exist_ok=True)
 
             is_multi = bool(self.asset.get("files"))
-            if is_multi:
-                self._run_multi_file(plan, dest_dir)
+            if is_multi: self._run_multi_file(plan, dest_dir)
             else:
                 urls = plan[0][1] or []
                 first = urls[0] if urls else ""
                 # 以 .zip 结尾才当压缩包；否则是单文件（如 mobile_sam.pt）
                 low = first.lower().split("?")[0]
-                if low.endswith(".zip"):
-                    self._run_single_zip(urls, dest_dir)
-                else:
-                    self._run_single_file(urls, dest_dir)
+                if low.endswith(".zip"): self._run_single_zip(urls, dest_dir)
+                else: self._run_single_file(urls, dest_dir)
         except Exception as e:
             self.failed.emit("%s: %s" % (type(e).__name__, e))
         finally:
@@ -341,8 +315,7 @@ class AssetDownloadThread(QThread):
             return os.path.getsize(target)
 
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        if have > 0:
-            req.add_header("Range", "bytes=%d-" % have)
+        if have > 0: req.add_header("Range", "bytes=%d-" % have)
         try:
             resp = urllib.request.urlopen(req, timeout=30)
         except Exception as e:
@@ -351,10 +324,7 @@ class AssetDownloadThread(QThread):
             code = getattr(e, "code", None)
             if code == 416 and have > 0:
                 self.status.emit("残留分卷与服务器不符，重新下载")
-                try:
-                    os.remove(part)
-                except OSError:
-                    pass
+                with contextlib.suppress(OSError): os.remove(part)
                 req = urllib.request.Request(
                     url, headers={"User-Agent": "Mozilla/5.0"})
                 try:
@@ -362,22 +332,17 @@ class AssetDownloadThread(QThread):
                 except Exception:
                     return None
                 have = 0
-            else:
-                return None
+            else: return None
         code = getattr(resp, "status", 200)
         mode = "ab" if code == 206 else "wb"
-        if code != 206:
-            have = 0
+        if code != 206: have = 0
         total = 0
-        try:
+        with contextlib.suppress(Exception):
             cr = resp.headers.get("Content-Range") or ""
             mm = re.search(r"/(\d+)", cr)
-            if mm:
-                total = int(mm.group(1))
+            if mm: total = int(mm.group(1))
             elif resp.headers.get("Content-Length"):
                 total = have + int(resp.headers["Content-Length"])
-        except Exception:
-            pass
         got = have
         with open(part, mode) as f:
             while True:
@@ -385,8 +350,7 @@ class AssetDownloadThread(QThread):
                     f.flush()
                     return None
                 chunk = resp.read(1024 * 256)
-                if not chunk:
-                    break
+                if not chunk: break
                 f.write(chunk)
                 got += len(chunk)
                 self._emit_progress(base_bytes + got,
@@ -396,20 +360,14 @@ class AssetDownloadThread(QThread):
             return None
         # 校验通过 -> .part 转正
         if os.path.exists(target):
-            try:
-                os.remove(target)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): os.remove(target)
         os.replace(part, target)
         return got
 
     # ---------- 单文件模式（如 mobile_sam.pt）----------
     def _run_single_file(self, urls, dest_dir):
         """把单个文件下到 dest_dir/<url 末段文件名>，下完做 check 校验。"""
-        try:
-            os.makedirs(dest_dir, exist_ok=True)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): os.makedirs(dest_dir, exist_ok=True)
         fname = ""
         for u in urls:
             seg = u.split("?")[0].rstrip("/").split("/")[-1]
@@ -453,10 +411,7 @@ class AssetDownloadThread(QThread):
     def _run_single_zip(self, urls, dest_dir):
         import zipfile
         parent = os.path.dirname(dest_dir.rstrip("\\/")) or self.base_dir
-        try:
-            os.makedirs(parent, exist_ok=True)
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): os.makedirs(parent, exist_ok=True)
         base_name = os.path.basename(dest_dir.rstrip("\\/")) or "asset"
         part = os.path.join(parent, base_name + ".zip.part")
         size = None
@@ -488,27 +443,20 @@ class AssetDownloadThread(QThread):
                 with open(zpath, "rb") as f:
                     while True:
                         blk = f.read(1024 * 1024)
-                        if not blk:
-                            break
+                        if not blk: break
                         h.update(blk)
             except OSError as e:
                 self.failed.emit("校验读取失败：%s" % str(e)[:80])
                 return
             if h.hexdigest().lower() != want:
-                try:
-                    os.remove(zpath)
-                except OSError:
-                    pass
+                with contextlib.suppress(OSError): os.remove(zpath)
                 self.failed.emit("sha256 校验不符，坏包已删除（镜像内容可能被篡改）")
                 return
         if zipfile.is_zipfile(zpath):
             if not self._extract_zip(zpath, dest_dir):
                 self.failed.emit("解压失败")
                 return
-            try:
-                os.remove(zpath)
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): os.remove(zpath)
         # 解压后校验：check 指向的目标必须存在且够大（否则报错而非静默成功）
         try:
             import asset_catalog as AC
@@ -547,15 +495,13 @@ class AssetDownloadThread(QThread):
             return
         # 磁盘预检：size 已知按 1.2x 估，未知按 300MB 兜底（WebEngine wheel 量级）
         need = int(asset.get("size") or 300 * 2 ** 20)
-        try:
+        with contextlib.suppress(Exception):
             drive = os.path.splitdrive(os.path.abspath(target))[0] + os.sep
             free = shutil.disk_usage(drive).free
             if free < need * 1.2:
                 self.failed.emit("磁盘空间不足：约需 %s，%s 仅剩 %s"
                                  % (human_mb(need * 1.2), drive, human_mb(free)))
                 return
-        except Exception:
-            pass
         # 下载（单包断点续传；.part 落临时工作目录，与 cuda_pack 同款隔离）
         work = os.path.join(os.environ.get("TEMP") or target,
                             "muppet_wheel_dl")
@@ -595,8 +541,7 @@ class AssetDownloadThread(QThread):
         with open(dl_path, "rb") as f:
             while True:
                 b = f.read(4 * 1024 * 1024)
-                if not b:
-                    break
+                if not b: break
                 h.update(b)
         if h.hexdigest().lower() != want.lower():
             try:
@@ -660,15 +605,13 @@ class AssetDownloadThread(QThread):
             return
         # 磁盘预检：卷大小已知按 1.2x 估，未知按 4GB 兜底
         need = sum(int(p.get("size") or 0) for p in parts) or 4 * 2 ** 30
-        try:
+        with contextlib.suppress(Exception):
             drive = os.path.splitdrive(os.path.abspath(target))[0] + os.sep
             free = shutil.disk_usage(drive).free
             if free < need * 1.2:
                 self.failed.emit("磁盘空间不足：约需 %s，%s 仅剩 %s"
                                  % (human_mb(need * 1.2), drive, human_mb(free)))
                 return
-        except Exception:
-            pass
         work = os.path.join(os.environ.get("TEMP") or target,
                             "muppet_%s_dl" % ("rt" if _tgt_sem == "dest"
                                               else "cuda"))
@@ -689,8 +632,7 @@ class AssetDownloadThread(QThread):
             # v3.6.2：分卷也支持多源（p["urls"] 给出时按序全试，Gitee 优先）；
             # 否则退回「url + ghfast 镜像」老口径。
             urls = [str(u) for u in (p.get("urls") or []) if u]
-            if not urls:
-                urls = [url, AC.GH_MIRROR + url] if url else []
+            if not urls: urls = [url, AC.GH_MIRROR + url] if url else []
             sz = None
             for u in urls:
                 self.status.emit("下载卷 %d/%d（%s）" % (i + 1, len(parts), fname))
@@ -699,8 +641,7 @@ class AssetDownloadThread(QThread):
                 except Exception as e:
                     self.status.emit("镜像失败：%s" % str(e)[:60])
                     sz = None
-                if sz is not None:
-                    break
+                if sz is not None: break
             if sz is None:
                 self.failed.emit("卷 %d/%d 下载失败；已下部分保留，可重试续传"
                                  % (i + 1, len(parts)))
@@ -727,10 +668,7 @@ class AssetDownloadThread(QThread):
         want = (asset.get("zip_sha256") or "").strip()
         note = ""
         if not want:
-            try:
-                os.remove(zip_path)
-            except OSError:
-                pass
+            with contextlib.suppress(OSError): os.remove(zip_path)
             self.failed.emit("加速包清单未声明 zip_sha256，拒绝安装（安全策略）")
             return
         self.status.emit("校验整包 sha256…")
@@ -738,24 +676,17 @@ class AssetDownloadThread(QThread):
         with open(zip_path, "rb") as f:
             while True:
                 b = f.read(4 * 1024 * 1024)
-                if not b:
-                    break
+                if not b: break
                 h.update(b)
         if h.hexdigest().lower() != want.lower():
-            try:
-                os.remove(zip_path)
-            except OSError:
-                pass
+            with contextlib.suppress(OSError): os.remove(zip_path)
             # 坏包必须连分卷一起删：只删 zip 留着错卷，下次拼接还是坏的
             for p in parts:
                 fn = os.path.basename(
                     (p.get("url") or "").split("?")[0]) or "part"
                 for cand in (os.path.join(work, fn),
                              os.path.join(work, fn + ".part")):
-                    try:
-                        os.remove(cand)
-                    except OSError:
-                        pass
+                    with contextlib.suppress(OSError): os.remove(cand)
             self.failed.emit("校验失败（sha256 不符，坏包与分卷已删除）——"
                              "重试将完整重新下载")
             return
@@ -795,10 +726,7 @@ def _refresh_dlg_theme():
         if d is None:
             _DLGS.remove(wr)
             continue
-        try:
-            d._apply_theme()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): d._apply_theme()
 
 
 TH.register(_refresh_dlg_theme)
@@ -844,14 +772,12 @@ class AssetDownloadDialog(QDialog):
 
     def _apply_theme(self):
         """按当前主题重刷对话框底色与文字色（切主题时由 _refresh_dlg 调用）。"""
-        try:
+        with contextlib.suppress(Exception):
             self.setStyleSheet(
                 "QDialog{background:%s;}"
                 "QDialog BodyLabel{color:%s;}"
                 "QDialog CaptionLabel{color:%s;}"
                 % (TH.t("panel_bg"), TH.t("text"), TH.t("text_dim")))
-        except Exception:
-            pass
 
     def start(self):
         self.worker = AssetDownloadThread(self.asset, self.base_dir, self)
@@ -873,23 +799,15 @@ class AssetDownloadDialog(QDialog):
         self.bar.setValue(100)
         self.detail.setText("已安装到 %s" % path)
         self.btn_cancel.setText("完成")
-        try:
-            self.btn_cancel.clicked.disconnect()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.btn_cancel.clicked.disconnect()
         self.btn_cancel.clicked.connect(self.accept)
-        InfoBar.success("下载完成", "%s 已就位" % self.asset.get("name", ""),
-                        parent=self.parent() or self,
-                        position=InfoBarPosition.TOP, duration=3000)
+        TOAST.toast_ok(self.parent() or self, "下载完成", "%s 已就位" % self.asset.get("name", ""))
 
     def _on_fail(self, why):
         self.title.setText("下载失败")
         self.detail.setText(str(why)[:200])
         self.btn_cancel.setText("关闭")
-        try:
-            self.btn_cancel.clicked.disconnect()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception): self.btn_cancel.clicked.disconnect()
         self.btn_cancel.clicked.connect(self.reject)
 
     def _on_cancel(self):
@@ -897,8 +815,7 @@ class AssetDownloadDialog(QDialog):
             self.worker.cancel()
             self.title.setText("正在取消…")
             self.btn_cancel.setEnabled(False)
-        else:
-            self.reject()
+        else: self.reject()
 
     def closeEvent(self, e):
         if self.worker is not None and self.worker.isRunning():

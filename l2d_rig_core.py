@@ -21,6 +21,7 @@ import numpy as np
 import cv2
 from PIL import Image
 from scipy import ndimage
+import contextlib
 
 # ---------------- ① 语义映射（CA 官方标签）----------------
 CA_TAG = {
@@ -109,15 +110,12 @@ def depth_for_name(name):
     """按语义表推断深度：raw 名 -> CA 标签 -> TAG_DEPTH；配饰走 RAW_DEPTH。"""
     key = name.replace(" ", "_")
     tag = CA_TAG.get(key, CA_TAG.get(name, None))
-    if tag is not None and tag in TAG_DEPTH:
-        return TAG_DEPTH[tag]
+    if tag is not None and tag in TAG_DEPTH: return TAG_DEPTH[tag]
     # 层名本身就是 CA 标签（PSD 往返导入："Hair Front" / "+Hair Front"）
     for cand in (name, "+" + name.lstrip("+"), tag):
-        if cand in TAG_DEPTH:
-            return TAG_DEPTH[cand]
+        if cand in TAG_DEPTH: return TAG_DEPTH[cand]
     base = key.split("-")[0]          # handwear-l -> handwear
-    if base in RAW_DEPTH:
-        return RAW_DEPTH[base]
+    if base in RAW_DEPTH: return RAW_DEPTH[base]
     return DEFAULT_DEPTH
 
 
@@ -213,21 +211,16 @@ def subsplit_layer(layer, min_area=400, dilate=3):
     h, w = img.shape[:2]
     x0, y0 = int(layer["bbox"][0]), int(layer["bbox"][1])
     mask = img[:, :, 3] > 16
-    if not mask.any():
-        return []
+    if not mask.any(): return []
     m = mask.astype(np.uint8)
-    if dilate and dilate > 1:
-        m = cv2.dilate(m, np.ones((dilate, dilate), np.uint8))
+    if dilate and dilate > 1: m = cv2.dilate(m, np.ones((dilate, dilate), np.uint8))
     n, labels, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
-    if n <= 1:
-        return []
+    if n <= 1: return []
     keep = []
     for i in range(1, n):
         area = int(stats[i, cv2.CC_STAT_AREA])
-        if area >= min_area:
-            keep.append((area, i))
-    if len(keep) < 2:
-        return []
+        if area >= min_area: keep.append((area, i))
+    if len(keep) < 2: return []
     keep.sort(key=lambda t: -t[0])            # 面积降序，k 从 1 编号
     base = {k: v for k, v in layer.items() if k != "img"}
     out = []
@@ -235,8 +228,7 @@ def subsplit_layer(layer, min_area=400, dilate=3):
         # 取该连通域 **dilate 前** 的真实像素（dilation 只用来把邻近碎片粘成一个
         # 连通域，最终像素/外接框都用原掩码，保证 bbox 紧凑）
         comp = mask & (labels == i)
-        if not comp.any():
-            continue
+        if not comp.any(): continue
         ys, xs = np.where(comp)
         cx0, cx1 = int(xs.min()), int(xs.max()) + 1
         cy0, cy1 = int(ys.min()), int(ys.max()) + 1
@@ -289,10 +281,8 @@ def detect_pivots(layers, W, H):
             continue
         bx0, bx1, by0, by1 = int(xs.min()), int(xs.max()), int(ys.min()), int(ys.max())
         mode = PIVOT_MODE.get(node, "bbox_center")
-        if mode == "bbox_center":
-            pivots[node] = [(bx0 + bx1) / 2.0, (by0 + by1) / 2.0]
-        elif mode == "bbox_bottom":
-            pivots[node] = [(bx0 + bx1) / 2.0, float(by1)]
+        if mode == "bbox_center": pivots[node] = [(bx0 + bx1) / 2.0, (by0 + by1) / 2.0]
+        elif mode == "bbox_bottom": pivots[node] = [(bx0 + bx1) / 2.0, float(by1)]
         elif mode == "bbox_top":
             # 眼睛：支点在框顶边中点（保留模式，供非压扁类 rig 用）
             pivots[node] = [(bx0 + bx1) / 2.0, float(by0)]
@@ -300,10 +290,8 @@ def detect_pivots(layers, W, H):
             par = NODE_PARENT.get(node)
             if par in by_node:
                 pivots[node] = list(_contact_point(ua, _union_alpha(by_node[par], W, H)))
-            else:
-                pivots[node] = [(bx0 + bx1) / 2.0, (by0 + by1) / 2.0]
-        else:
-            pivots[node] = [(bx0 + bx1) / 2.0, (by0 + by1) / 2.0]
+            else: pivots[node] = [(bx0 + bx1) / 2.0, (by0 + by1) / 2.0]
+        else: pivots[node] = [(bx0 + bx1) / 2.0, (by0 + by1) / 2.0]
     return pivots, by_node
 
 
@@ -341,8 +329,7 @@ def _affine(rot_deg, tx, ty, sc, pivot, sc_y=None):
     """绕 pivot 旋转+缩放（sc_y 可与 sc 不同，供眼睛纵向眨眼），再整体平移 tx/ty。
     正确形式：M = T(pivot+t) @ (R @ S) @ T(-pivot)
     注意别漏掉左边的 T(pivot) —— 写成 T(t) @ R @ T(-pivot) 会把支点搬走、整张图飞出画布。"""
-    if sc_y is None:
-        sc_y = sc
+    if sc_y is None: sc_y = sc
     r = math.radians(rot_deg)
     c, s = math.cos(r), math.sin(r)
     px, py = pivot
@@ -359,10 +346,8 @@ def _blink_s(t):
     """眨眼开合系数：1=全开，0.06=闭合。周期 4.6s，闭合占 0.16s。"""
     period, d = 4.6, 0.16
     ph = t % period
-    if ph < d:
-        return 1.0 - 0.94 * (ph / d)
-    elif ph < 2 * d:
-        return 0.06 + 0.94 * ((ph - d) / d)
+    if ph < d: return 1.0 - 0.94 * (ph / d)
+    elif ph < 2 * d: return 0.06 + 0.94 * ((ph - d) / d)
     return 1.0
 
 
@@ -374,15 +359,12 @@ def animation_for(node, t, nd=None, tracks=None):
       - 有轨道    -> 先算 sin 基线，再用关键帧覆盖用户显式打过帧的通道
     """
     a = {"rot": 0.0, "tx": 0.0, "ty": 0.0, "sc": 1.0, "sc_y": None}
-    if node == "body":
-        a["ty"] = 3.0 * math.sin(t * 2.1)
+    if node == "body": a["ty"] = 3.0 * math.sin(t * 2.1)
     elif node == "head":
         a["rot"] = 1.4 * math.sin(t * 0.9)
         a["ty"] = 1.2 * math.sin(t * 2.1)
-    elif node == "hair_front":
-        a["rot"] = 2.6 * math.sin(t * 1.5)
-    elif node == "hair_back":
-        a["rot"] = 1.9 * math.sin(t * 1.1 + 0.7)
+    elif node == "hair_front": a["rot"] = 2.6 * math.sin(t * 1.5)
+    elif node == "hair_back": a["rot"] = 1.9 * math.sin(t * 1.1 + 0.7)
     elif node in ("eye_left", "eye_right"):
         # 眼睛：只纵向压扁（支点在框底，眼缝塌到下缘），不再连眉毛睫毛一起缩
         a["sc_y"] = _blink_s(t)
@@ -394,11 +376,9 @@ def animation_for(node, t, nd=None, tracks=None):
         pass
     # 关键帧覆盖（只覆盖确实有轨道的通道）
     if tracks:
-        try:
+        with contextlib.suppress(Exception):
             import anim as _A
             _A.apply_to(node, t, a, tracks)
-        except Exception:
-            pass
     return a
 
 
@@ -419,8 +399,7 @@ def _cum_transforms(rig, t):
     while i < len(queue):
         node = queue[i]; i += 1
         for ch in children.get(node, []):
-            if ch in seen:
-                continue
+            if ch in seen: continue
             seen.add(ch)
             nd = next(n for n in rig["nodes"] if n["node"] == ch)
             a = animation_for(ch, t, nd, tracks)
@@ -478,8 +457,7 @@ def render_frame_rgba(rig, t, hidden=None, scale=None, premul=False):
     scale=0.5 走半分辨率简化 rig（播放用）。
     premul=True：跳过出口除法，直接返回预乘 RGBA（供 Qt ARGB32_Premultiplied
     消费，画布播放路径专用；透明处 RGB=0 无影响）。"""
-    if scale:
-        rig = _lite_rig(rig, scale)
+    if scale: rig = _lite_rig(rig, scale)
     hidden = hidden or set()
     W, H = rig["width"], rig["height"]
     canvas = np.zeros((H, W, 4), np.float32)   # 预乘画布：RGB=0-255 域预乘值，A=0-1
@@ -491,8 +469,7 @@ def render_frame_rgba(rig, t, hidden=None, scale=None, premul=False):
     by_name = {l["name"]: l for l in rig["_layers"]}
     seen = set()
     for ln in rig.get("draw_order", []) + list(node_of.keys()):
-        if ln in seen or ln in hidden or ln not in by_name:
-            continue
+        if ln in seen or ln in hidden or ln not in by_name: continue
         seen.add(ln)
         L = by_name[ln]
         img = L["img"]                       # 裁剪 uint8 RGBA
@@ -504,8 +481,7 @@ def render_frame_rgba(rig, t, hidden=None, scale=None, premul=False):
             itx = int(round(M[0, 2])); ity = int(round(M[1, 2]))
             sx0 = max(0, x0 + itx); sy0 = max(0, y0 + ity)
             sx1 = min(W, x1 + itx); sy1 = min(H, y1 + ity)
-            if sx1 <= sx0 or sy1 <= sy0:
-                continue
+            if sx1 <= sx0 or sy1 <= sy0: continue
             src = img[sy0 - ity - y0:sy1 - ity - y0, sx0 - itx - x0:sx1 - itx - x0]
             _blend_premul(canvas, sy0, sy1, sx0, sx1, src)
             continue
@@ -519,8 +495,7 @@ def render_frame_rgba(rig, t, hidden=None, scale=None, premul=False):
         rx1 = min(W - 1, int(np.ceil(corners[:, 0].max())) + 1)
         ry0 = max(0, int(np.floor(corners[:, 1].min())) - 1)
         ry1 = min(H - 1, int(np.ceil(corners[:, 1].max())) + 1)
-        if rx1 <= rx0 or ry1 <= ry0:
-            continue
+        if rx1 <= rx0 or ry1 <= ry0: continue
         # 源数组是裁剪图：其 (0,0) 对应画布 (x0,y0)。
         # 完整映射 = T(-(rx0,ry0)) @ M @ T(x0,y0)
         M2 = M.copy()
@@ -531,8 +506,7 @@ def render_frame_rgba(rig, t, hidden=None, scale=None, premul=False):
                                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
         _blend_premul(canvas, ry0, ry1 + 1, rx0, rx1 + 1, warped)
     A = canvas[:, :, 3:4]
-    if premul:
-        out = np.dstack([canvas[:, :, :3], A * 255.0])   # 预乘直出，无除法
+    if premul: out = np.dstack([canvas[:, :, :3], A * 255.0])   # 预乘直出，无除法
     else:
         rgb = canvas[:, :, :3] / np.maximum(A, 1e-6)     # 出口一次性除回 straight
         out = np.dstack([rgb, A * 255.0])
@@ -564,8 +538,7 @@ def export_psd(rig, out_path):
     def arr_of(tag):
         """把该 tag 的裁剪层贴回全画布 uint8 RGBA（导出用，不做动画）"""
         ls = by_tag.get(tag, [])
-        if not ls:
-            return None
+        if not ls: return None
         arr = np.zeros((H, W, 4), np.uint8)
         for l in ls:
             x0, y0, x1, y1 = l["bbox"]
@@ -579,8 +552,7 @@ def export_psd(rig, out_path):
 
     def add(group, tag):
         a = arr_of(tag)
-        if a is None:
-            return
+        if a is None: return
         group.create_pixel_layer_from_array(a, name=tag)
 
     body = psd.create_group(name="Body")
@@ -620,8 +592,7 @@ def export_ae_jsx(rig, out_path, dur=10.0, fps=30):
     a("  main.bgColor = [0.10, 0.10, 0.12];")
     a("")
     for nd in rig["nodes"]:
-        if nd["node"] == "root":
-            continue
+        if nd["node"] == "root": continue
         a("  // ---- %s (父 %s) ----" % (nd["node"], nd["parent"]))
         a("  var c_%s = proj.items.addComp('node_%s', MW, MH, 1.0, %.1f, %d);"
           % (nd["node"], nd["node"], dur, fps))
@@ -637,8 +608,7 @@ def export_ae_jsx(rig, out_path, dur=10.0, fps=30):
         a("  h_%s.property('Position').setValue([MW/2, MH/2]);" % nd["node"])
         a("")
     for nd in rig["nodes"]:
-        if nd["node"] == "root":
-            continue
+        if nd["node"] == "root": continue
         p = nd["parent"]
         if p == "root":
             a("  var L_%s = main.layers.add(c_%s); L_%s.name='%s';" % (nd["node"], nd["node"], nd["node"], nd["node"]))
@@ -647,8 +617,7 @@ def export_ae_jsx(rig, out_path, dur=10.0, fps=30):
     a("")
     for nd in rig["nodes"]:
         n = nd["node"]
-        if n == "root":
-            continue
+        if n == "root": continue
         if n == "body":
             a("  L_%s.property('Position').expression = '[value[0], value[1] + 3*Math.sin(time*2.1)]';" % n)
         elif n == "head":
@@ -715,5 +684,4 @@ def self_test():
         print("   PSD 导出失败:", type(e).__name__, str(e)[:160])
 
 
-if __name__ == "__main__":
-    self_test()
+if __name__ == "__main__": self_test()

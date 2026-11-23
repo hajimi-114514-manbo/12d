@@ -57,12 +57,10 @@ def _num(v, d=0.0):
 
 def _clean_kf(kf):
     """把单个关键帧归一成 {duration, <channel>: <值>}；脏通道丢弃。"""
-    if not isinstance(kf, dict):
-        return None
+    if not isinstance(kf, dict): return None
     out = {"duration": max(0.0, _num(kf.get("duration"), 0.0))}
     for ch in CHANNELS:
-        if ch not in kf:
-            continue
+        if ch not in kf: continue
         raw = kf.get(ch)
         if ch == "scale":
             if isinstance(raw, dict):
@@ -75,8 +73,7 @@ def _clean_kf(kf):
             if isinstance(raw, dict):
                 out["position"] = {"x": _num(raw.get("x"), 0.0),
                                    "y": _num(raw.get("y"), 0.0)}
-        else:
-            out[ch] = _num(raw, DEFAULTS[ch])
+        else: out[ch] = _num(raw, DEFAULTS[ch])
     return out
 
 
@@ -89,12 +86,9 @@ def normalize_keys(keyframes):
     out = []
     for kf in (keyframes or []):
         c = _clean_kf(kf)
-        if c is not None:
-            out.append(c)
-    if not out:
-        out = [{"duration": 0.0}]
-    if len(out) == 1:
-        out.append(dict(out[0], duration=0.0))
+        if c is not None: out.append(c)
+    if not out: out = [{"duration": 0.0}]
+    if len(out) == 1: out.append(dict(out[0], duration=0.0))
     return out
 
 
@@ -122,8 +116,7 @@ def _val_at(kfs, idx, ch):
     """取第 idx 段的某通道值；该帧没有则向前回溯（与预览端 _val 一致）。"""
     for i in range(min(idx, len(kfs) - 1), -1, -1):
         v = kfs[i].get(ch)
-        if v is not None:
-            return v
+        if v is not None: return v
     return DEFAULTS.get(ch)
 
 
@@ -142,8 +135,7 @@ def sample_at(keyframes, ms):
     # 段定位：落在 [times[i], times[i+1]) 的段 i（段 i 从 kf[i] 到 kf[i+1]）
     idx = 0
     for i in range(len(times) - 1):
-        if m >= times[i] - 1e-6:
-            idx = i
+        if m >= times[i] - 1e-6: idx = i
     seg_start = times[idx]
     seg_end = times[idx + 1] if idx + 1 < len(times) else total
     seg_dur = seg_end - seg_start
@@ -184,8 +176,7 @@ def build_cmd(keyframes, target=TARGET_STAGE, t0=0.0, duration=None):
     body = _json.dumps(kfs, ensure_ascii=False, separators=(",", ":"))
     tgt = target if target in VALID_TARGETS else TARGET_STAGE
     cmd = "setTempAnimation:%s -target=%s" % (body, tgt)
-    if duration is not None:
-        cmd += " -duration=%d" % int(_num(duration, 0))
+    if duration is not None: cmd += " -duration=%d" % int(_num(duration, 0))
     return cmd + ";"
 
 
@@ -198,17 +189,14 @@ def parse_cmd(cmd):
     import json as _json
     import re as _re
     s = str(cmd or "").strip()
-    if not s.startswith("setTempAnimation"):
-        return None, None
+    if not s.startswith("setTempAnimation"): return None, None
     m = _re.search(r"\[.*\]", s, _re.S)
-    if not m:
-        return None, None
+    if not m: return None, None
     try:
         kfs = _json.loads(m.group(0))
     except Exception:
         return None, None
-    if not isinstance(kfs, list) or not kfs:
-        return None, None
+    if not isinstance(kfs, list) or not kfs: return None, None
     tm = _re.search(r"-target=(\S+?)(?:\s|;|$)", s)
     target = tm.group(1) if tm else TARGET_FIG
     return normalize_keys(kfs), target
@@ -287,7 +275,6 @@ def template_keys(name, level="stage"):
     """取模板关键帧（深拷贝，防止调用方改坏常量表）。"""
     import copy
     tpl = TEMPLATES.get(name)
-    if not tpl:
-        return None
+    if not tpl: return None
     kfs = tpl.get(level if level in ("stage", "fig") else "stage")
     return copy.deepcopy(kfs) if kfs is not None else None

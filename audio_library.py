@@ -38,8 +38,7 @@ def _index_path():
         d = AP.ensure_library(scan=False)
     except Exception:
         d = None
-    if not d:
-        return None
+    if not d: return None
     p = os.path.join(d, "asset_index.json")
     return p if os.path.isfile(p) else None
 
@@ -59,18 +58,14 @@ def _load(p):
             raw = json.load(f)
     except Exception:
         return []
-    if not isinstance(raw, list):
-        return []
+    if not isinstance(raw, list): return []
     out = []
     for it in raw:
-        if not isinstance(it, dict):
-            continue
+        if not isinstance(it, dict): continue
         kind = str(it.get("kind") or "")
-        if kind not in AUDIO_KINDS:
-            continue
+        if kind not in AUDIO_KINDS: continue
         rel = str(it.get("file") or "").replace("\\", "/").strip()
-        if not rel:
-            continue
+        if not rel: continue
         if not rel.lower().endswith(AUDIO_EXTS):
             # 索引里偶尔有同名但非音频的条目，按扩展名再筛一道
             continue
@@ -111,8 +106,7 @@ def items(force=False):
     """全部音频条目（带缓存）。库不可用返回 []。"""
     global _cache, _cache_stamp
     p = _index_path()
-    if not p:
-        return []
+    if not p: return []
     st = _stamp(p)
     with _lock:
         if force or _cache is None or _cache_stamp != st:
@@ -131,11 +125,9 @@ def by_kind(kind):
 
 def find(rel):
     rel = str(rel or "").replace("\\", "/").strip()
-    if not rel:
-        return None
+    if not rel: return None
     for e in items():
-        if e["file"] == rel:
-            return e
+        if e["file"] == rel: return e
     return None
 
 
@@ -145,8 +137,7 @@ def audio_path(item):
         root = AP.ensure_library(scan=False)
     except Exception:
         root = None
-    if not root:
-        return ""
+    if not root: return ""
     rel = str((item or {}).get("file") or "").replace("/", os.sep)
     return os.path.join(root, rel) if rel else ""
 
@@ -154,14 +145,12 @@ def audio_path(item):
 def search(query):
     """按名字 / 标签 / 相对路径模糊搜（大小写无关）。"""
     q = str(query or "").strip().lower()
-    if not q:
-        return items()
+    if not q: return items()
     out = []
     for e in items():
         hay = " ".join([e["name"].lower(), e["file"].lower(),
                         " ".join(e["tags"]).lower()])
-        if q in hay:
-            out.append(e)
+        if q in hay: out.append(e)
     return out
 
 
@@ -226,13 +215,11 @@ def groups():
     out = []
     for gid, cn, _pred in _GROUP_DEFS:
         arr = buckets.get(gid) or []
-        if arr:
-            out.append({"id": gid, "name": cn, "items": arr})
+        if arr: out.append({"id": gid, "name": cn, "items": arr})
     return out
 
 
 def group_of(gid):
     for g in groups():
-        if g["id"] == gid:
-            return g
+        if g["id"] == gid: return g
     return None

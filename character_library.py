@@ -43,8 +43,7 @@ ROLE_INFO = [
 _ROLE_NAME = dict(ROLE_INFO)
 _ROLE_ORDER = {s: i for i, (s, _) in enumerate(ROLE_INFO)}
 # 「其他」永远排最后（模型数可能很多，但优先级最低）
-if "lib" in _ROLE_ORDER:
-    _ROLE_ORDER["lib"] = 999
+if "lib" in _ROLE_ORDER: _ROLE_ORDER["lib"] = 999
 
 # ---- 改模作者登记 ----------------------------------------------------------
 # 键 = 模型目录名（figure/<角色>/ 下那一层），值 = 作者名。
@@ -120,16 +119,14 @@ def _author_from_dir(d):
         bilibili北极暖水港.txt」），os.listdir 顺序不可靠 —— 必须优先取
         能解析出真名的那一个。
     """
-    if not d or not os.path.isdir(d):
-        return ""
+    if not d or not os.path.isdir(d): return ""
     try:
         names = os.listdir(d)
     except Exception:
         return ""
     best = ""
     for n in names:
-        if not any(h in n for h in _AUTHOR_FILE_HINTS):
-            continue
+        if not any(h in n for h in _AUTHOR_FILE_HINTS): continue
         stem = os.path.splitext(n)[0]
         # 「改模作者：bilibili北极暖水港」/「改模作者：B站xxx」/「改模作者.txt」
         for sep in (":", "：", "-", "—"):
@@ -138,12 +135,10 @@ def _author_from_dir(d):
                 break
         a = stem.strip()
         for pre in ("bilibili", "Bilibili", "BILIBILI", "B站", "b站"):
-            if a.startswith(pre):
-                a = a[len(pre):]
+            if a.startswith(pre): a = a[len(pre):]
         a = a.strip(" _-—·.")
         # 剥完只剩标签本身 => 这个文件没写作者名，跳过
-        if not a or a in _AUTHOR_FILE_HINTS:
-            continue
+        if not a or a in _AUTHOR_FILE_HINTS: continue
         # 只有一个作者名，取第一个有效即可；无效的已被跳过
         return a
     return best
@@ -164,8 +159,7 @@ def _index_path():
         d = AP.ensure_library(scan=False)
     except Exception:
         d = None
-    if not d:
-        return None
+    if not d: return None
     p = os.path.join(d, "asset_index.json")
     return p if os.path.isfile(p) else None
 
@@ -181,8 +175,7 @@ def _stamp(p):
 def _role_of(rel):
     """figure/<slug>/<dir> -> slug；不符合形态返回 None。"""
     parts = str(rel or "").replace("\\", "/").strip().split("/")
-    if len(parts) < 2 or parts[0] != "figure":
-        return None
+    if len(parts) < 2 or parts[0] != "figure": return None
     return parts[1] or None
 
 
@@ -197,19 +190,15 @@ def _load(p):
             raw = json.load(f)
     except Exception:
         return []
-    if not isinstance(raw, list):
-        return []
+    if not isinstance(raw, list): return []
     out = []
     for it in raw:
-        if not isinstance(it, dict) or it.get("kind") != "model":
-            continue
+        if not isinstance(it, dict) or it.get("kind") != "model": continue
         rel = str(it.get("file_rel") or it.get("file") or "").replace(
             "\\", "/").strip()
-        if not rel:
-            continue
+        if not rel: continue
         slug = _role_of(rel)
-        if not slug:
-            continue
+        if not slug: continue
         cdir = _costume_dir(rel)
         name = str(it.get("name") or "")
         # 服装名 = 「角色·服装」里 · 之后那段；没有 · 就用目录名
@@ -239,8 +228,7 @@ def refresh(force=True):
 def items(force=False):
     global _cache, _cache_stamp
     p = _index_path()
-    if not p:
-        return []
+    if not p: return []
     st = _stamp(p)
     with _lock:
         if force or _cache is None or _cache_stamp != st:
@@ -256,13 +244,11 @@ def _enrich(cache):
         root = AP.ensure_library(scan=False)
     except Exception:
         root = None
-    if not root:
-        return
+    if not root: return
     for m in cache:
         d = os.path.join(root, str(m["file"]).replace("/", os.sep))
         a = _author_from_dir(d)
-        if not a:
-            a = _AUTHOR_OF.get(m.get("dir", ""), "")
+        if not a: a = _AUTHOR_OF.get(m.get("dir", ""), "")
         m["author"] = a
         m["_dir_abs"] = d
 
@@ -276,12 +262,10 @@ def roles():
         seen[m["slug"]] += 1
     out = []
     for slug, cn in ROLE_INFO:
-        if slug in seen:
-            out.append({"slug": slug, "cn": cn, "count": seen[slug]})
+        if slug in seen: out.append({"slug": slug, "cn": cn, "count": seen[slug]})
     # 未登记的角色兜底排在后面
     for slug, n in seen.items():
-        if slug not in _ROLE_NAME:
-            out.append({"slug": slug, "cn": slug, "count": n})
+        if slug not in _ROLE_NAME: out.append({"slug": slug, "cn": slug, "count": n})
     return out
 
 
@@ -298,8 +282,7 @@ _OFFICIAL_CACHE = None
 def _official_whitelist():
     """懒加载白名单 {slug: set(目录名)}；文件缺失返回 {}。"""
     global _OFFICIAL_CACHE
-    if _OFFICIAL_CACHE is not None:
-        return _OFFICIAL_CACHE
+    if _OFFICIAL_CACHE is not None: return _OFFICIAL_CACHE
     out = {}
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                      "data", "official_models.json")
@@ -329,18 +312,13 @@ def is_official(m):
     slug = str(m.get("slug") or "")
     d = m.get("_dir_abs") or model_path(m)
     name = os.path.basename(d.rstrip("\\/")) if d else ""
-    if wl:
-        return name in wl.get(slug, set())
+    if wl: return name in wl.get(slug, set())
     # ---- 回退：白名单文件缺失时用结构特征 ----
-    if str(m.get("author") or "").strip():
-        return False
-    if not d or not os.path.isdir(d):
-        return False
-    if os.path.isdir(os.path.join(d, "live2d")):
-        return False
+    if str(m.get("author") or "").strip(): return False
+    if not d or not os.path.isdir(d): return False
+    if os.path.isdir(os.path.join(d, "live2d")): return False
     p = os.path.join(d, "model.json")
-    if not os.path.isfile(p):
-        return False
+    if not os.path.isfile(p): return False
     try:
         with io.open(p, encoding="utf-8") as f:
             dd = json.load(f)
@@ -365,10 +343,8 @@ def authors_of(slug):
     ms = models_of(slug)
     groups = {}
     for m in ms:
-        if is_official(m):
-            key = "__official__"
-        else:
-            key = str(m.get("author") or "").strip()
+        if is_official(m): key = "__official__"
+        else: key = str(m.get("author") or "").strip()
         groups.setdefault(key, []).append(m)
     out = []
     for key, arr in groups.items():
@@ -384,8 +360,7 @@ def authors_of(slug):
 def author_label(a):
     """作者分组显示名：官方组、未署名组、真作者名。"""
     a = str(a or "").strip()
-    if a == "__official__":
-        return OFFICIAL_LABEL
+    if a == "__official__": return OFFICIAL_LABEL
     return a if a else "未署名"
 
 
@@ -398,8 +373,7 @@ def model_path(m):
         root = AP.ensure_library(scan=False)
     except Exception:
         root = None
-    if not root:
-        return ""
+    if not root: return ""
     rel = str((m or {}).get("file") or "").replace("/", os.sep)
     return os.path.join(root, rel) if rel else ""
 
@@ -421,16 +395,13 @@ def thumb_path(m):
       3. Cubism2 图集（.chara/texture_00）—— 散件图，仅作最后兜底
     """
     d = (m or {}).get("_dir_abs") or model_path(m)
-    if not d or not os.path.isdir(d):
-        return ""
+    if not d or not os.path.isdir(d): return ""
     # 渲染产物优先
     t = os.path.join(d, "_thumb.png")
-    if os.path.isfile(t):
-        return t
+    if os.path.isfile(t): return t
     for n in _PREVIEW_NAMES:
         p = os.path.join(d, n)
-        if os.path.isfile(p):
-            return p
+        if os.path.isfile(p): return p
     # 改模包常见结构 ①：live2d/chara/<编号角色>/texture_*.png
     l2d = os.path.join(d, "live2d")
     if os.path.isdir(l2d):
@@ -448,8 +419,7 @@ def thumb_path(m):
                         return os.path.join(dp, f)
     # 兜底：模型目录下任意一层找 texture_*.png
     for dp, dn, fn in os.walk(d):
-        if os.path.basename(dp).startswith("."):
-            continue
+        if os.path.basename(dp).startswith("."): continue
         for f in sorted(fn):
             if f.lower().startswith("texture") and f.lower().endswith(
                     (".png", ".webp")):
@@ -465,12 +435,10 @@ def thumb_path(m):
             if f.lower().endswith((".png", ".webp", ".jpg")) and "texture" in f:
                 return os.path.join(ch, f)
         for f in files:
-            if f.lower().endswith((".png", ".webp", ".jpg")):
-                return os.path.join(ch, f)
+            if f.lower().endswith((".png", ".webp", ".jpg")): return os.path.join(ch, f)
     for f in ("texture_00.png", "texture.png"):
         p = os.path.join(d, f)
-        if os.path.isfile(p):
-            return p
+        if os.path.isfile(p): return p
     return ""
 
 
@@ -493,16 +461,12 @@ def needs_render(m):
       · 目录不存在
     """
     d = (m or {}).get("_dir_abs") or model_path(m)
-    if not d or not os.path.isdir(d):
-        return False
-    if os.path.isfile(os.path.join(d, "_thumb.png")):
-        return False
+    if not d or not os.path.isdir(d): return False
+    if os.path.isfile(os.path.join(d, "_thumb.png")): return False
     for n in _PREVIEW_NAMES:
-        if os.path.isfile(os.path.join(d, n)):
-            return False
+        if os.path.isfile(os.path.join(d, n)): return False
     # 必须有真实 model.json 才能渲染（空壳目录跳过）
-    if not os.path.isfile(os.path.join(d, "model.json")):
-        return False
+    if not os.path.isfile(os.path.join(d, "model.json")): return False
     return True
 
 

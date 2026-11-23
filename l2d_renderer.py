@@ -34,10 +34,10 @@ import json
 import threading
 
 import numpy as np
+import contextlib
 
 _V_DIR = os.path.dirname(os.path.abspath(__file__))
-if _V_DIR not in sys.path:
-    sys.path.insert(0, _V_DIR)
+if _V_DIR not in sys.path: sys.path.insert(0, _V_DIR)
 
 # 默认画布：导出侧 1080p 竖构图立绘（由调用方按需指定）
 DEFAULT_SIZE = (1080, 1920)
@@ -87,14 +87,12 @@ class L2DRenderer(object):
 
     def _ensure_view(self):
         """懒建离屏 WebPreviewView（移出屏幕，不打扰用户）。"""
-        if self._preview is not None:
-            return True
+        if self._preview is not None: return True
         try:
             import webgal_preview as WP
             from PySide6.QtWidgets import QApplication
             app = QApplication.instance()
-            if app is None:
-                return False
+            if app is None: return False
             # 复用预览视图：它把 scheme/宿主页/WebChannel 都装好了
             self._preview = WP.WebPreviewView()
             v = self._preview
@@ -135,23 +133,19 @@ class L2DRenderer(object):
         实测：页面 loadFinished 后 module 还需 ~1-2s 才把 __muppetOnCmd 挂上
         （runtime 主包 body 很大）；检测太早会误判"未就绪"（我踩过）。
         """
-        if self._booted:
-            return True
-        if not self._ensure_view():
-            return False
+        if self._booted: return True
+        if not self._ensure_view(): return False
         t0 = time.time()
         self._preview.start()
         ok = self._wait(lambda: self._api_ready(), timeout)
         self._booted = ok
         self._boot_wait = time.time() - t0
-        if not ok:
-            self._last_err = "boot timeout (%.1fs)" % self._boot_wait
+        if not ok: self._last_err = "boot timeout (%.1fs)" % self._boot_wait
         return ok
 
     def _js(self, code, timeout=6.0):
         """同步执行 JS 并拿回结果（阻塞式，导出逐帧要用）。"""
-        if self._preview is None:
-            return None
+        if self._preview is None: return None
         Qt, QTimer, QEventLoop, *_ = _qt_imports()
         # WebPreviewView 内部真正的 QWebEngineView 是 .view（见 grab_shot）
         wv = getattr(self._preview, "view", None)
@@ -185,8 +179,7 @@ class L2DRenderer(object):
     # ---------------- 模型注册 ----------------
     def register(self, model_dir):
         """注册模型目录 -> scheme 引用（如 model/ab12cd34/relative/dir）。"""
-        if self._preview is None and not self._ensure_view():
-            return None
+        if self._preview is None and not self._ensure_view(): return None
         try:
             return self._preview.register_model_dir(model_dir)
         except Exception as e:
@@ -206,13 +199,11 @@ class L2DRenderer(object):
               "}catch(e){return 'ERR:'+(e&&e.message||e);}})()"
               % json.dumps(env))
         r = self._js(js, timeout=timeout)
-        if not isinstance(r, str):
-            return {"err": "no_return"}
+        if not isinstance(r, str): return {"err": "no_return"}
         if r.startswith("ERR:"):
             self._last_err = r[:200]
             return {"err": r[4:][:200]}
-        if not r:
-            return {}
+        if not r: return {}
         try:
             return json.loads(r)
         except Exception as e:
@@ -253,8 +244,7 @@ class L2DRenderer(object):
             return False
         deadline = time.time() + max(8.0, timeout - 2.0)
         while time.time() < deadline:
-            if self._model_ready(mid):
-                return True
+            if self._model_ready(mid): return True
             self._wait(lambda: False, 0.15)
         self._last_err = "model wait timeout (%s)" % mid
         return False
@@ -271,16 +261,13 @@ class L2DRenderer(object):
           变换交回导出侧。
         """
         with self._lock:
-            if not self._bootn():
-                return None
+            if not self._bootn(): return None
             ref = state.get("ref") or ""
-            if not ref:
-                return None
+            if not ref: return None
             mid = state.get("modelId") or ("m%d" % (abs(hash(ref)) % 997))
             mo = str(state.get("motion") or "")
             ex = str(state.get("expression") or "")
-            if not self._apply_state(ref, mo, ex, mid, timeout):
-                return None
+            if not self._apply_state(ref, mo, ex, mid, timeout): return None
             # v3.5.11 性能：原先是固定 _wait(0.25) 死等 250ms（占单帧耗时
             # 的 94%，实测 render 265ms 里只有 ~24ms 是真实工作）。
             # 现在按须等待：仅在**姿态/动作变化**时给 ticker 一两帧刷新，
@@ -293,8 +280,7 @@ class L2DRenderer(object):
             img = self._grab()
             self._renders += 1
             self._last_ms = (time.time() - t0) * 1000.0
-            if img is None:
-                return None
+            if img is None: return None
             return self._autocrop(img)
 
     # ---------------- 逐帧动画（手动时钟，导出泵用） ----------------
@@ -311,8 +297,7 @@ class L2DRenderer(object):
         的 onTickerUpdate 挂在 Ticker.shared 上，见 bundle），所以必须
         单独有这条。"""
         with self._lock:
-            if on and not self._bootn():
-                return False
+            if on and not self._bootn(): return False
             if self._manual_on == bool(on):
                 return True        # 幂等：连 JS 往返都省掉（页面侧同样有
                                    # noop 保护，防止把相位重置成 0）
@@ -321,8 +306,7 @@ class L2DRenderer(object):
                 self._last_err = "set_manual: %s" % r["err"]
                 return False
             self._manual_on = bool(on)
-            if not on:
-                self._sig_by_mid.clear()     # 退出手动：slot 状态作废，防脏签名
+            if not on: self._sig_by_mid.clear()     # 退出手动：slot 状态作废，防脏签名
             return True
 
     def seek(self, mid, k, dt_ms, max_steps=64, timeout=30.0):
@@ -343,8 +327,7 @@ class L2DRenderer(object):
         r = self._js("window.__muppetBox ? (function(){var b=window.__muppetBox(%s,%d);"
                      "return b?JSON.stringify(b):'';})() : ''"
                      % (json.dumps(str(mid)), int(margin)), timeout=4.0)
-        if not isinstance(r, str) or not r:
-            return None
+        if not isinstance(r, str) or not r: return None
         try:
             v = json.loads(r)
         except Exception:
@@ -366,8 +349,7 @@ class L2DRenderer(object):
         img = None
         for i in range(tries):
             img = self.grab_rgba(roi)
-            if img is not None and img.size and int(img[..., 3].max()) > 8:
-                return img
+            if img is not None and img.size and int(img[..., 3].max()) > 8: return img
             self._js("window.__muppetRedraw && window.__muppetRedraw()",
                      timeout=4.0)
             self._wait(lambda: False, 0.02)
@@ -392,21 +374,18 @@ class L2DRenderer(object):
         N 帧动画），再加一次抓图。"""
         t0 = time.time()
         with self._lock:
-            if not self._bootn():
-                return None, None
+            if not self._bootn(): return None, None
             if not self.set_manual(True):        # 幂等；确保时钟已接管
                 return None, None
             ref = state.get("ref") or ""
-            if not ref:
-                return None, None
+            if not ref: return None, None
             mid = model_id or ("m%d" % (abs(hash(ref)) % 997))
             mo = str(state.get("motion") or "")
             ex = str(state.get("expression") or "")
             sig = (ref, mo, ex)
             fresh = self._sig_by_mid.get(mid) != sig
             if fresh:
-                if not self._apply_state(ref, mo, ex, mid, timeout):
-                    return None, None
+                if not self._apply_state(ref, mo, ex, mid, timeout): return None, None
                 self._sig_by_mid[mid] = sig
                 roi = None                       # 换模型/动作：旧框作废
                 # 首帧宽限：loadModel 后纹理上传是异步的，立刻 render 会
@@ -421,8 +400,7 @@ class L2DRenderer(object):
                 if geo is None:
                     full = self._grab_ready(None)   # 老缓存页没这两个函数
                     box = self._autocrop_box(full, margin=24) if full else None
-                    if box is None:
-                        return None, None
+                    if box is None: return None, None
                     y0, y1, x0, x1 = box
                     img = np.ascontiguousarray(full[y0:y1, x0:x1])
                     return img, (x0, y0, x1 - x0, y1 - y0)
@@ -465,17 +443,14 @@ class L2DRenderer(object):
             self._renders += 1
             img = self._grab_ready(roi)
             self._last_ms = (time.time() - t0) * 1000.0
-            if img is None or not getattr(img, "size", 0):
-                return None, None
-            if not first:
-                return img, None
+            if img is None or not getattr(img, "size", 0): return None, None
+            if not first: return img, None
             # k=0：把几何框收到立绘实际占用的紧框。余量取 4px：既给发丝/
             # 呼吸留动量，又贴近定格路径的 2px —— 余量差太多会让两种模式
             # 的人物尺寸差 1-2%（用户切开关会看到人物忽大忽小）。
             gx, gy, gw, gh = roi
             box = self._autocrop_box(img, margin=4)
-            if box is None:
-                return img, (gx, gy, gw, gh)
+            if box is None: return img, (gx, gy, gw, gh)
             y0, y1, x0, x1 = box
             tx, ty = gx + x0, gy + y0
             tw, th = x1 - x0, y1 - y0
@@ -515,8 +490,7 @@ class L2DRenderer(object):
         大小的透明边会让 fit 基准失真（人物缩水）。裁掉后与普通图片源
         语义一致，_paste_rgba 直接可用。"""
         box = self._autocrop_box(rgba)
-        if box is None:
-            return None
+        if box is None: return None
         y0, y1, x0, x1 = box
         return np.ascontiguousarray(rgba[y0:y1, x0:x1])
 
@@ -591,8 +565,7 @@ class L2DRenderer(object):
         裁不出立绘边界——实测踩过）。toDataURL 失败才退回 grab。
         """
         img = self._grab_canvas()
-        if img is not None:
-            return img
+        if img is not None: return img
         return self._grab_widget()
 
     def _grab_canvas(self):
@@ -615,12 +588,10 @@ class L2DRenderer(object):
         except Exception as e:
             self._last_err = "grab: %r" % (e,)
             return None
-        if pix is None or pix.isNull():
-            return None
+        if pix is None or pix.isNull(): return None
         img = pix.toImage().convertToFormat(QImage.Format_RGBA8888)
         w, h = img.width(), img.height()
-        if w <= 0 or h <= 0:
-            return None
+        if w <= 0 or h <= 0: return None
         ptr = img.bits()
         try:
             buf = np.frombuffer(ptr, np.uint8, count=w * h * 4)
@@ -641,36 +612,23 @@ class L2DRenderer(object):
             self._sig_by_mid.clear()
             self._manual_on = None      # 页面没了，幂等镜像必须一起作废
             if p is not None:
-                try:
-                    p.clear_all()
-                except Exception:
-                    pass
+                with contextlib.suppress(Exception): p.clear_all()
                 # v3.5.11：先把内部 QWebEngineView 的页面置空再销毁，
                 # 否则 Qt 报 "WebEnginePage still not deleted"
                 wv = getattr(p, "view", None)
                 if wv is not None:
-                    try:
-                        wv.setPage(None)
-                    except Exception:
-                        pass
-                    try:
-                        wv.deleteLater()
-                    except Exception:
-                        pass
-                try:
+                    with contextlib.suppress(Exception): wv.setPage(None)
+                    with contextlib.suppress(Exception): wv.deleteLater()
+                with contextlib.suppress(Exception):
                     p.close()
                     p.deleteLater()
-                except Exception:
-                    pass
                 # 让 Qt 真正处理 deleteLater（否则退到解释器清理时报错）
-                try:
+                with contextlib.suppress(Exception):
                     from PySide6.QtWidgets import QApplication
                     app = QApplication.instance()
                     if app is not None:
                         for _ in range(8):
                             app.processEvents()
-                except Exception:
-                    pass
 
     def stats(self):
         return {"renders": self._renders, "reloads": self._reloads,
@@ -696,8 +654,5 @@ def shutdown():
     global _RENDERER
     with _RENDERER_LOCK:
         if _RENDERER is not None:
-            try:
-                _RENDERER.close()
-            except Exception:
-                pass
+            with contextlib.suppress(Exception): _RENDERER.close()
             _RENDERER = None
