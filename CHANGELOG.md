@@ -7,6 +7,87 @@
 
 ---
 
+## 未发布（2026-11-24）语音引擎分四档发行（9.3GB -> 2.8~4.0GB）
+
+需求池【语音引擎分档】落地。**端到端真机验证**：原始引擎 -> 构建 -> pip 装
+torch -> 起服务 -> 合成中文成功。
+
+### 四档实测体积
+
+| 档 | 引擎包 | +CPU torch | +CUDA torch | 说明 |
+|---|---|---|---|---|
+| 中文基础 | 2.78 GB | 2.99 GB | 5.26 GB | 不含 G2PW（多音字判读退化）、不含日文 |
+| 中文完整 | 3.84 GB | 4.05 GB | 6.33 GB | 加 G2PW（onnxruntime 481 + G2PWModel 608） |
+| 日文 | 2.97 GB | 3.18 GB | 5.45 GB | 加 pyopenjtalk/ipadic/ja_userdic |
+| 中日双语 | 4.03 GB | 4.24 GB | 6.51 GB | 两者都带 |
+
+（整包 13.34 GB -> 引擎 2.8~4.0 GB，是原来的 21%~30%）
+
+### 两大块拿出安装包
+
+- **音色 3.97 GB 不随包分发** —— CC-BY-NC 禁止二次配布，用户自备
+  （已有「导入音色」入口）。
+- **torch 3.78 GB 让用户自己 pip 装** —— 用户的显卡决定装 CPU(164MB) 还是
+  CUDA(2.5GB)；引擎包里塞一份 CUDA torch 会让包大 3.8GB，而 CPU 用户根本
+  用不上。
+
+### 引擎源码改了 4 处
+
+都是「本来用不到却会连带崩」的**模块级 import**：
+
+1. `text/g2pw/onnx_api.py` —— onnxruntime 改懒加载
+2. `text/cleaner.py` —— 语言模块按可用性挑选（缺某语言依赖不再崩全链路；
+   完整安装时结果与原来完全一样）
+3. `text/chinese2.py` —— is_g2pw 走环境变量，默认 False
+4. `TTS_infer_pack/TTS.py` —— BigVGAN 改懒加载（v2ProPlus 不用它）
+
+**回归底线已验**：打补丁后的原引擎 + 原配置 + 原音色，三种配置都能合成中文
+（235KB / 222KB / 207KB 音频），补丁没破坏任何原有行为。
+
+### 五个必须记住的坑
+
+1. **users.pth 必须重写（最隐蔽）** —— 它写死了开发机源码路径，`.pth` 在
+   site-packages 初始化时就把路径塞进 `sys.path`，优先级**高于**
+   `api_v2.py` 的 `sys.path.append` —— 引擎永远加载开发机那份，我们裁剪/
+   打过的补丁**根本不生效**。但不能直接删：它同时让 `import text` 找得到。
+   做法：改写成相对路径（3 级上 = 引擎根）。
+2. **pip 装 torch 会卸载 torchmetrics** —— 装完 `torch==2.0.0` 后
+   torchmetrics 消失 -> `pytorch_lightning.callbacks` 报
+   ModuleNotFoundError。必须装完 torch 再补装 torchmetrics。
+   `torchaudio` 只在 PyPI 上有 cp39 win wheel，pytorch 的 cpu 源里没有。
+3. **mecab / wordfreq / ipadic 不能删**（59+50MB）—— 依赖链是
+   `chinese2 -> jieba_fast -> wordfreq/mecab.py -> import mecab`，而
+   wordfreq 会为**所有**语言建 analyzer（日文那个也要 ipadic）。跟日文无关，
+   是**中文分词**要 —— 我一开始按「mecab 是日文分词器」把它跟韩文系一起
+   删了，中文合成直接挂。
+4. **报错信息有误导性** —— 缺 onnxruntime 却报 `'mecab'` 缺失。定位靠
+   import hook 打栈，不靠读报错。
+5. **引擎整目录必须同盘** —— `tools/i18n/i18n.py` 用 `os.path.relpath`，
+   跨盘抛 ValueError。
+
+### 木偶侧接线
+
+- `asset_catalog.py` —— 4 个 `voice_engine` 条目；`parts_target_dir` 新增
+  `"voice"` 落点语义；四档各装 `voice/<档位>/` **独立目录**（用户可能先试
+  「中文基础」，不满意再装「中日双语」，覆盖就白下 3GB）。
+- `asset_downloader.py` —— 新增 `mode == "voice_engine"`（单 zip 下载 +
+  sha256 fail-closed 校验 + 解压 + 落地校验 + 提示装 torch）。
+- `voice_paths.py` —— 按档位查找已装引擎（`installed_tier` / `ensure_voice`）。
+- `tools/build_voice_engine.py`（新） —— 可复现的构建脚本。
+- `tools/voice_engine_patches/`（新） —— 4 个引擎补丁文件（打完补丁后的完整
+  源文件，一眼能看出改了哪几行）；`tools/apply_voice_patches.py` 负责应用
+  （幂等，首次应用备份 `.orig`）。引擎源码在仓库外（被 .gitignore 排除），
+  只能靠补丁复现 —— 所以补丁必须在仓库里。
+
+### 验证
+
+- 新增 `tests/test_voice_tiers.py`，共 **20 套测试全过**；全模块导入 55/55；
+  真实启动烟测 13 项全过。
+- 端到端：还原引擎到原始状态 -> 构建（补丁在拷贝后应用到产物里，源引擎
+  保持干净）-> pip 装 torch -> 起服务 -> 合成中文（3.32 秒音频 / 峰值 22265）。
+
+---
+
 ## 未发布（2026-11-24）语音链 V1 打通 + 删除 V1 归档
 
 ### 一、语音 V1：服务连通性探测
