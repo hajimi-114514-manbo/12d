@@ -280,9 +280,14 @@ def refs_for(role, root=None):
                 continue
             seen.add(key)
             info = _wav_info(p) or {"dur": 0.0, "sr": 0, "ch": 0, "bits": 0}
-            out.append({"name": n, "path": p, "dur": round(info["dur"], 3),
-                        "size": os.path.getsize(p), "sr": info["sr"],
-                        "ch": info["ch"], "bits": info["bits"]})
+            e = {"name": n, "path": p, "dur": round(info["dur"], 3),
+                 "size": os.path.getsize(p), "sr": info["sr"],
+                 "ch": info["ch"], "bits": info["bits"]}
+            # prompt_text 一起给出来 —— DSH 联动要求「必须有」，
+            # AI 得能从列表里看出哪段配不出文本（不能选那些）
+            e["prompt_text"] = prompt_of(p)
+            e["prompt_ok"] = bool(e["prompt_text"])
+            out.append(e)
     return out
 
 
@@ -736,3 +741,30 @@ def prompt_for_role(role, name="", root=None):
     """
     p = pick_ref(role, name, root)
     return p, prompt_of(p) if p else ""
+
+
+def require_prompt(role, name="", root=None, override=""):
+    """严格版：**必须**有 prompt_text，否则拒绝。
+
+    DSH 联动（AI 控制）用这个，而不是 prompt_for_role —— 因为 AI 看不见
+    听感，一旦静默降级成 naive_infer，它只会觉得「输出好像有点怪」，
+    没法自己发现是参考音频的问题。宁可报错让它换个参考音频。
+
+    返回 (ok, path, prompt_text, msg)：
+      ok=True  ->  path 和 prompt_text 都可用
+      ok=False ->  msg 说明差什么（path 可能仍非空，但 prompt_text 缺失）
+
+    override 显式传了文本时以它为准（AI 可以从 voice.refs 的
+    `prompt_text` 字段取，或自己写）。
+    """
+    p = pick_ref(role, name, root)
+    if not p:
+        return False, "", "", ("角色「%s」没有参考音频" % role)
+    pt = str(override or "").strip() or prompt_of(p)
+    if not pt:
+        return False, p, "", (
+            "参考音频「%s」推不出 prompt_text（文件名不是说话内容）。"
+            "DSH 联动要求必须提供 prompt_text —— 请改用按内容命名的参考音频，"
+            "或在 args.prompt_text 里显式给出「参考音频里说的那句话」。"
+            % os.path.basename(p))
+    return True, p, pt, "ok"

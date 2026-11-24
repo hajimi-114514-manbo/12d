@@ -20,6 +20,7 @@ remote_control.py 已经 1997 行，再往里塞语音逻辑会让它更难读�
     voice.refs.rm   删除一段参考音频
     voice.refs.pick 给某角色挑一段参考音频（**只查询**，不改状态）
     voice.refs.sel  **选定**某角色用哪段参考音频（写入记忆，合成会用它）
+                    **要求该段能配出 prompt_text，否则拒绝**（DSH 联动不能降级）
     voice.refs.unsel 清掉某个角色的已选（留空 = 清掉全部）
 
 **不暴露 voice.map / voice.synth / voice.batch** —— 那是 V2/V3 的事，
@@ -202,6 +203,13 @@ def _voice_refs_add(_wb, args):
     if not role:
         return False, "缺少 role（角色名）", None
     ok, msg, info = VR.import_ref(p, role, name)
+    if ok and info:
+        # 导入成功但配不出 prompt_text -> 明确标出来（该段在 DSH 里不可用）
+        pt = VR.prompt_of(info.get("path", ""))
+        info["prompt_text"] = pt
+        info["prompt_ok"] = bool(pt)
+        if not pt:
+            msg += "（注意：文件名推不出 prompt_text，DSH 联动里这段不可用；"                   "建议用「说话内容」命名）"
     return ok, msg, info
 
 
@@ -241,11 +249,16 @@ def _voice_refs_pick(_wb, args):
             "hint": ("会退回引擎自带 ref.wav（凑友希娜的声音，音色会串）"
                      if fb else "引擎也没有 ref.wav"),
         }
+    pt = VR.prompt_of(p)
     return True, "当前会用到 %s" % os.path.basename(p), {
         "role": role, "path": p, "name": os.path.basename(p),
         # 是「选定的」还是「兜底取第一段」—— 让 AI 能分清
         "selected": sel or "",
         "is_selected": bool(sel) and os.path.basename(p) == sel,
+        # DSH 联动**必须有** prompt_text，配不出就是不可用
+        "prompt_text": pt,
+        "prompt_ok": bool(pt),
+        "usable": bool(pt),
     }
 
 
@@ -267,9 +280,16 @@ def _voice_refs_sel(_wb, args):
         return False, "缺少 role（角色名）", None
     if not name:
         return False, "缺少 name（参考音频文件名）", None
+    # **DSH 联动要求参考音频必须有 prompt_text** —— 选定前先校验，
+    # 配不出就拒绝选定（宁可让 AI 换个段，也不要它静默拿到会吞字的结果）。
+    okp, _p, pt, pmsg = VR.require_prompt(role, name)
+    if not okp:
+        return False, pmsg, {"role": role, "name": name, "prompt_ok": False}
     ok, msg, info = VR.select_ref(role, name)
     if ok and info:
         info["pick"] = VR.pick_ref(role)
+        info["prompt_text"] = pt
+        info["prompt_ok"] = True
     return ok, msg, info
 
 

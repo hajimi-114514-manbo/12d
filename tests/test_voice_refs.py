@@ -228,6 +228,32 @@ chk("prompt_text_ok" in _src, "info 里带 prompt_text_ok")
 chk("降级" in _src or "naive" in _src, "降级时有提示文案")
 
 print()
+print("== require_prompt：DSH 联动必须有 prompt_text，不能静默降级")
+# 造一段「名字推不出文本」的参考音频（模拟 ref.wav）
+_nr = os.path.join(TMP, "refs", "测试角色")
+os.makedirs(_nr, exist_ok=True)
+_bad = make_wav(os.path.join(_nr, "001_002.5s_3.0s.wav"), dur=3.5)
+_good = make_wav(os.path.join(_nr, "今天天气很好.wav"), dur=3.5)
+
+_ok, _p, _pt, _msg = VR.require_prompt("测试角色", "001_002.5s_3.0s.wav")
+chk(not _ok, "编号命名 -> require_prompt 拒绝")
+chk("prompt_text" in _msg, "拒绝时说明了原因：%s" % _msg[:50])
+chk(_p, "但仍给出路径（方便排查）")
+
+_ok2, _p2, _pt2, _msg2 = VR.require_prompt("测试角色", "今天天气很好.wav")
+chk(_ok2, "内容命名 -> require_prompt 通过")
+chk(_pt2 == "今天天气很好", "prompt 推导对：%r" % _pt2)
+
+_ok3, _p3, _pt3, _msg3 = VR.require_prompt(
+    "测试角色", "001_002.5s_3.0s.wav", override="我自己写的文本")
+chk(_ok3 and _pt3 == "我自己写的文本",
+    "显式 override 能救回编号命名的段")
+
+# refs_for 每条都带 prompt_ok，AI 能看出哪段能选
+for _x in VR.refs_for("测试角色"):
+    chk("prompt_ok" in _x, "refs_for 条目带 prompt_ok：%s" % _x["name"])
+
+print()
 print("== DSH 命令接线")
 import voice_commands as VC
 for c in ("voice.refs", "voice.refs.add", "voice.refs.rm",
@@ -253,6 +279,18 @@ chk(ok_u, "voice.refs.unsel 可用：%s" % msg_u)
 chk(VR.selection_of("千早爱音") == "", "unsel 清掉了记忆")
 ok_m, msg_m, _ = VC.run("voice.refs.sel", {"role": "千早爱音"})
 chk(not ok_m, "sel 缺 name 被拒")
+
+# **DSH 强制**：选定一段配不出 prompt_text 的，必须拒绝
+_ok_bad, _msg_bad, _d_bad = VC.run(
+    "voice.refs.sel", {"role": "测试角色", "name": "001_002.5s_3.0s.wav"})
+chk(not _ok_bad, "sel 目标配不出 prompt_text -> 拒绝")
+chk("prompt_text" in (_msg_bad or ""),
+    "拒绝原因说清了：%s" % (_msg_bad or "")[:60])
+
+# pick 要告诉 AI 这段能不能用（usable）
+_ok_pk, _msg_pk, _d_pk = VC.run("voice.refs.pick", {"role": "千早爱音"})
+chk((_d_pk or {}).get("usable") is True, "pick 报告 usable=True")
+chk("prompt_text" in (_d_pk or {}), "pick 带 prompt_text")
 
 ok9, msg9, _ = VC.run("voice.refs.pick", {"role": "根本没有这个角色"})
 chk(not ok9, "不存在的角色 -> False 并说明原因")
