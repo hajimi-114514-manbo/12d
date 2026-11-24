@@ -250,6 +250,129 @@ def find_act(proj, aid):
     return None
 
 
+# ---- 语音轨（需求「时间轴语音轨」）-------------------------------------
+# 设计：语音 clip **不存进 tracks**，而是由 dialogue[i].voice 实时投影出来。
+#
+# 为什么不存进 tracks：
+#   · 存了就有两份真相（dialogue 里的 t 和 clip 的 start），必然不一致
+#   · 默认要「跟台词走」，存下来就得每次改台词都同步更新 clip，容易漏
+#   · 删除台词时还要记得删 clip，多一处能出错的地方
+#
+# 代价：语音轨是**只读投影**，用户的编辑动作要翻译成对 dialogue 的修改
+#（移动 -> 改 dialogue[i].t 或 voice["t"]）。这是有意的：
+# 语音的真相永远在 dialogue 里，只有一处。
+
+VOICE_TRACK_ID = "vc1"
+
+
+def voice_clips(proj, aid=None):
+    """把 dialogue 里的 voice 投影成时间轴 clip 列表（按起点排序）。
+
+    返回 [{"id","t","dur","path","role","text","detach","src_index"}]：
+      id        稳定的 clip 标识（"vc:<台词索引>"），拖动/选中都靠它
+      t         起始时刻（detach=False 时 = 台词 t；True 时 = voice["t"]）
+      src_index 对应 dialogue 里的下标（回写用）
+    """
+    out = []
+    try:
+        view = act_view(proj, aid)
+    except Exception:
+        view = proj if isinstance(proj, dict) else {}
+    dl = view.get("dialogue")
+    if not isinstance(dl, list):
+        return out
+    for i, it in enumerate(dl):
+        if not isinstance(it, dict):
+            continue
+        v = it.get("voice")
+        if not isinstance(v, dict) or not v.get("path"):
+            continue
+        dur = _num(v.get("dur"), 0.0)
+        if dur <= 0:
+            # 没有时长就画不出长度；退一步用 1 秒占位（比不显示好）
+            dur = 1.0
+        detach = v.get("detach") is True
+        if detach:
+            t = _num(v.get("t"), _num(it.get("t"), 0.0))
+        else:
+            t = _num(it.get("t"), 0.0)
+        out.append({
+            "id": "vc:%d" % i,
+            "t": round(max(0.0, t), 3),
+            "dur": round(dur, 3),
+            "path": v.get("path", ""),
+            "role": str(it.get("who") or ""),
+            "text": str(v.get("text") or it.get("text") or ""),
+            "detach": detach,
+            "src_index": i,
+        })
+    out.sort(key=lambda c: (c["t"], c["src_index"]))
+    return out
+
+
+def voice_track(proj, aid=None):
+    """语音轨的轨道描述（时间轴渲染用）。没有语音时返回 None。"""
+    clips = voice_clips(proj, aid)
+    if not clips:
+        return None
+    n_det = sum(1 for c in clips if c["detach"])
+    name = "语音轨"
+    if n_det:
+        name += "（%d 段已脱离台词）" % n_det
+    return {"id": VOICE_TRACK_ID, "kind": "voice", "name": name,
+            "clips": clips, "voice_projection": True}
+
+
+def voice_set_detach(proj, index, detach, t=None, aid=None):
+    """把第 index 条台词的语音「脱离/绑回」台词。
+
+    detach=True  时 t 必须给（否则用台词当前 t 当起点）
+    detach=False 时清掉 t（回到跟台词走）
+    """
+    view = act_view(proj, aid)
+    dl = view.get("dialogue")
+    if not isinstance(dl, list) or not (0 <= index < len(dl)):
+        return False, "台词下标越界", None
+    it = dl[index]
+    v = it.get("voice")
+    if not isinstance(v, dict) or not v.get("path"):
+        return False, "该台词没有语音", None
+    if detach:
+        start = _num(t, _num(it.get("t"), 0.0))
+        v["detach"] = True
+        v["t"] = round(max(0.0, start), 3)
+        return True, "已脱离台词（起点 %.2fs）" % v["t"], {
+            "index": index, "detach": True, "t": v["t"]}
+    v.pop("detach", None)
+    v.pop("t", None)
+    return True, "已绑回台词（跟随台词 %.2fs）" % _num(it.get("t"), 0.0), {
+        "index": index, "detach": False, "t": _num(it.get("t"), 0.0)}
+
+
+def voice_move(proj, index, new_t, aid=None):
+    """移动一段语音到 new_t。
+
+    detach=False -> 改成挪台词本身（改 dialogue[index].t），保持对齐
+    detach=True  -> 只改语音的 t（台词不动）
+    """
+    view = act_view(proj, aid)
+    dl = view.get("dialogue")
+    if not isinstance(dl, list) or not (0 <= index < len(dl)):
+        return False, "台词下标越界", None
+    it = dl[index]
+    v = it.get("voice")
+    if not isinstance(v, dict) or not v.get("path"):
+        return False, "该台词没有语音", None
+    nt = round(max(0.0, _num(new_t, 0.0)), 3)
+    if v.get("detach") is True:
+        v["t"] = nt
+        return True, "语音移到 %.2fs（台词未动）" % nt, {
+            "index": index, "detach": True, "t": nt}
+    it["t"] = nt
+    return True, "台词移到 %.2fs（语音跟随）" % nt, {
+        "index": index, "detach": False, "t": nt}
+
+
 def act_ids(proj):
     """已声明的幕 id 列表（v1 单幕 -> ['a1'] 虚拟幕，便于 UI 统一展示）。"""
     if not isinstance(proj, dict): return []
@@ -869,7 +992,15 @@ def _sanitize_voice(raw):
         voice = {"path": "vocal/xxx.wav",      # 相对工程目录
                  "dur": 1.94,                  # 实测音频时长（秒）
                  "voice": "MyGO_千早爱音_v2pp", # 用的音色（可空）
-                 "text": "你好"}                # 合成时的文本（可空）
+                 "text": "你好",                # 合成时的文本（可空）
+                 "detach": False,              # 是否脱离台词独立定位
+                 "t": None}                    # detach 时的绝对起始时刻
+
+    **detach 语义**（时间轴语音轨「默认跟台词，可解锁」）：
+      detach=False（默认）—— 语音 clip 的起点 = 台词行的 t，实时算。
+        拖语音 clip 等于拖台词（改 dialogue[i].t），永远对齐。
+      detach=True        —— 语音有自己的 t，可偏离台词。用于「旁白提前」
+        「台词前奏」这类精细演出。此时改台词 t 不再影响语音。
 
     只强制 path 与非负 dur —— 其余是**元信息**，缺失不该让整条台词被拒。
     脏值只丢字段不丢台词（与 motion/expression 同款）。
@@ -887,6 +1018,15 @@ def _sanitize_voice(raw):
         v = raw.get(k)
         if isinstance(v, str) and v.strip():
             out[k] = v
+    # detach：只有显式 True 才脱离。脏值一律当 False（保守：保持跟台词）
+    if raw.get("detach") is True:
+        out["detach"] = True
+        t = _num(raw.get("t"), -1.0)
+        if t >= 0:
+            out["t"] = round(t, 3)
+        else:
+            # 声明了 detach 却没给 t —— 不认这个 detach（否则语音无处安放）
+            out.pop("detach", None)
     return out
 
 

@@ -987,6 +987,8 @@ class VideoWorkbench(QWidget):
         super().__init__(parent)
         self.proj = proj or V.new_project()
         self.proj_dir = proj_dir
+        with contextlib.suppress(Exception):
+            self.timeline.set_proj_dir(self.proj_dir or "")
         self.assets = []            # source dict 列表
         self._sel_clip = None       # 选中 clip id
         self._sources = VE.SourceManager()
@@ -1471,6 +1473,9 @@ class VideoWorkbench(QWidget):
         # "删了十几个片段撤销不回来"，所以这里补上 push。
         self.timeline.edit_committed.connect(self._on_timeline_edit)
         self.timeline.setMinimumHeight(SPLIT_V_MIN_TIMELINE)
+        # 语音轨读 wav 波形要绝对路径 -> 把工程目录同步给时间轴
+        with contextlib.suppress(Exception):
+            self.timeline.set_proj_dir(getattr(self, "proj_dir", "") or "")
 
         # ---------- 垂直 splitter：上方区域 | 时间轴 ----------
         vsplit = QSplitter(Qt.Vertical, self)
@@ -1668,6 +1673,8 @@ class VideoWorkbench(QWidget):
             if not d:
                 return False
             self.proj_dir = d
+            with contextlib.suppress(Exception):
+                self.timeline.set_proj_dir(self.proj_dir or "")
         try:
             os.makedirs(self.proj_dir, exist_ok=True)
             with open(os.path.join(self.proj_dir, META_NAME), "w",
@@ -1746,6 +1753,8 @@ class VideoWorkbench(QWidget):
         self._sources.close_all()
         self.proj = p
         self.proj_dir = d
+        with contextlib.suppress(Exception):
+            self.timeline.set_proj_dir(self.proj_dir or "")
         self._sel_clip = None
         self._loading = True
         self._apply_project(None)
@@ -3406,6 +3415,8 @@ class VideoWorkbench(QWidget):
         ]
         self.proj = proj
         self.proj_dir = None
+        with contextlib.suppress(Exception):
+            self.timeline.set_proj_dir(self.proj_dir or "")
         self._loading = True
         self._apply_project(None)
         self._loading = False
@@ -3468,6 +3479,8 @@ class VideoWorkbench(QWidget):
                         break
         self.proj = proj
         self.proj_dir = d
+        with contextlib.suppress(Exception):
+            self.timeline.set_proj_dir(self.proj_dir or "")
         self._loading = True
         self._apply_project(None)
         self._loading = False

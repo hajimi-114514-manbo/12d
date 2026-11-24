@@ -87,6 +87,8 @@ CLIP_COLORS = {
     "image": QColor("#c97b3d"),
     "puppet": QColor("#8a5fc0"),
     "audio": QColor("#3fa06b"),
+    # 语音：与音频轨（绿）区分开 —— 用青蓝，一眼看出这是「角色在说话」
+    "voice": QColor("#2f8f9d"),
 }
 
 
@@ -174,6 +176,113 @@ def _wave_of(clip):
     return w if isinstance(w, (list, tuple)) and len(w) >= 2 else None
 
 
+# ---- 语音轨：把 dialogue 的 voice 投影成可渲染的 clip --------------------
+# video_model.voice_clips() 给的是**语义**数据（t/dur/path/detach），
+# 渲染器要的是 source.kind + source.wave。这里做适配，并缓存波形
+# （每次重绘都读 wav 会卡）。
+
+_VOICE_WAVE_CACHE = {}          # (abs_path, mtime) -> [0..1 的波形]
+_VOICE_WAVE_MAX = 512           # 波形点数上限
+
+
+def _voice_wave(path, proj_dir=""):
+    """读 wav 的包络（归一化到 0..1），带缓存。读不出返回 None。"""
+    p = str(path or "")
+    if not p:
+        return None
+    import os as _os
+    if not _os.path.isabs(p) and proj_dir:
+        p = _os.path.join(proj_dir, p)
+    try:
+        mt = _os.path.getmtime(p)
+    except OSError:
+        return None
+    key = (p, mt)
+    if key in _VOICE_WAVE_CACHE:
+        return _VOICE_WAVE_CACHE[key]
+    try:
+        import struct
+        with open(p, "rb") as f:
+            raw = f.read()
+        if len(raw) < 44 or raw[:4] != b"RIFF":
+            return None
+        # 找 data 块
+        i, sr, ch, bits = 12, 32000, 1, 16
+        body = b""
+        while i + 8 <= len(raw):
+            cid = raw[i:i + 4]
+            csz = int.from_bytes(raw[i + 4:i + 8], "little")
+            if cid == b"fmt " and csz >= 16:
+                fmt = raw[i + 8:i + 8 + csz]
+                ch = int.from_bytes(fmt[2:4], "little")
+                sr = int.from_bytes(fmt[4:8], "little")
+                bits = int.from_bytes(fmt[14:16], "little")
+            elif cid == b"data":
+                body = raw[i + 8:i + 8 + csz]
+                break
+            i += 8 + csz + (csz & 1)
+        if not body or bits != 16:
+            return None
+        n = len(body) // 2
+        samples = struct.unpack("<%dh" % n, body[:n * 2])
+        if ch == 2:
+            samples = samples[0::2]
+        if not samples:
+            return None
+        # 分桶取峰值包络
+        buckets = min(_VOICE_WAVE_MAX, max(2, len(samples) // 64))
+        out = []
+        step = max(1, len(samples) // buckets)
+        peak = 1
+        for b in range(buckets):
+            seg = samples[b * step:(b + 1) * step]
+            if not seg:
+                out.append(0.0)
+                continue
+            m = max(abs(x) for x in seg)
+            peak = max(peak, m)
+            out.append(float(m))
+        if peak <= 1:
+            return None
+        out = [min(1.0, v / float(peak)) for v in out]
+        _VOICE_WAVE_CACHE[key] = out
+        # 缓存别无限涨
+        if len(_VOICE_WAVE_CACHE) > 64:
+            for k in list(_VOICE_WAVE_CACHE)[:32]:
+                _VOICE_WAVE_CACHE.pop(k, None)
+        return out
+    except Exception:
+        return None
+
+
+def voice_clips_for_render(proj, aid=None, proj_dir=""):
+    """把 voice_clips() 的语义数据转成渲染器认识的 clip 列表。"""
+    import video_model as V
+    out = []
+    for c in V.voice_clips(proj, aid):
+        wave = _voice_wave(c.get("path"), proj_dir)
+        src = {"kind": "voice", "path": c.get("path") or ""}
+        if wave is not None:
+            src["wave"] = wave
+        # 标题用「角色：台词前 N 字」，比文件名好认
+        role = c.get("role") or ""
+        text = (c.get("text") or "").strip()
+        if text and len(text) > 10:
+            text = text[:10] + "…"
+        label = ("%s：%s" % (role, text)) if role else text
+        out.append({
+            "id": c["id"],
+            "start": c["t"],
+            "dur": c["dur"],
+            "source": src,
+            "voice_projection": True,
+            "detach": c.get("detach", False),
+            "src_index": c.get("src_index", -1),
+            "_label": label,
+        })
+    return out
+
+
 def _in(v, lo, hi):
     return lo if v < lo else (hi if v > hi else v)
 
@@ -196,6 +305,11 @@ class ClipTimelinePanel(QWidget):
         # 存引用不拷贝：外层改数据后 refresh() 即可
         self.proj = proj if isinstance(proj, dict) else VM.new_project()
         self.pps = float(PPS_DEFAULT)          # pixels_per_second
+        # 工程目录（语音轨读 wav 波形要用绝对路径）。工作台在打开/新建工程时
+        # 同步过来；留空则语音 clip 只画色块不画波形。
+        self.proj_dir = ""
+        # 语音轨开关：用户可能不想让它常驻占一行
+        self._voice_track_on = True
         self.ui_scale = 1.0
         self.view_t0 = 0.0                     # 内部视图起点（秒）
         self.follow_playhead = False
@@ -311,6 +425,49 @@ class ClipTimelinePanel(QWidget):
         self._sync_buttons()
         self.refresh()
 
+    def set_proj_dir(self, d):
+        """工程目录（语音轨读 wav 波形用）。工作台在打开/新建工程时同步。"""
+        self.proj_dir = str(d or "")
+        self.refresh()
+
+    def set_voice_track_visible(self, on):
+        """显示/隐藏语音轨（用户可能不想让它常驻占一行）。"""
+        self._voice_track_on = bool(on)
+        self.refresh()
+
+    def voice_track_visible(self):
+        return bool(getattr(self, "_voice_track_on", True))
+
+    def has_voice(self):
+        """当前幕有没有语音（决定菜单项是否可用）。"""
+        try:
+            return bool(VM.voice_clips(self.proj, getattr(self, "_aid", None)))
+        except Exception:
+            return False
+
+    def selected_voice_index(self):
+        """当前选中的是不是语音 clip；是就返回台词下标，否则 -1。"""
+        s = str(self._sel or "")
+        if not s.startswith("vc:"):
+            return -1
+        try:
+            return int(s[3:])
+        except Exception:
+            return -1
+
+    def voice_detach_selected(self, detach=True):
+        """把选中的语音 clip 脱离/绑回台词。返回 (ok, msg)。"""
+        idx = self.selected_voice_index()
+        if idx < 0:
+            return False, "先选中一段语音"
+        ok, msg, _d = VM.voice_set_detach(
+            self.proj, idx, detach,
+            aid=getattr(self, "_aid", None))
+        if ok:
+            self.edit_committed.emit()
+            self.refresh()
+        return ok, msg
+
     def set_act(self, aid):
         """F2-L5（v3.5）：切当前幕（多幕工程的幕游标）。
 
@@ -329,10 +486,36 @@ class ClipTimelinePanel(QWidget):
         act_view 对 v1 返回顶层**原引用**（旧行为全等），对 v2 返回
         该幕的真实 list（写入即生效）。"""
         try:
-            return VM.act_view(self.proj, getattr(self, "_aid", None))["tracks"]
+            base = VM.act_view(self.proj, getattr(self, "_aid", None))["tracks"]
         except Exception:
-            t = self.proj.get("tracks")
-            return t if isinstance(t, list) else []
+            base = self.proj.get("tracks")
+        if not isinstance(base, list):
+            base = []
+        # ---- 语音轨：投影到轨道列表末尾（不写进 proj["tracks"]）----
+        # 只读投影，不存数据。数据真相在 dialogue[i]["voice"]，
+        # 这样「跟台词」永远对齐，不会出现两份真相。
+        if self._show_voice_track():
+            try:
+                clips = voice_clips_for_render(
+                    self.proj, getattr(self, "_aid", None),
+                    getattr(self, "proj_dir", "") or "")
+                if clips:
+                    base = base + [{
+                        "id": VM.VOICE_TRACK_ID,
+                        "kind": "voice",
+                        "name": "语音轨",
+                        "clips": clips,
+                        "voice_projection": True,
+                        # 隐藏/静音沿用轨道通用字段
+                        "hidden": bool(getattr(self, "_voice_hidden", False)),
+                    }]
+            except Exception:
+                pass
+        return base
+
+    def _show_voice_track(self):
+        """语音轨是否显示（用户可关掉，避免常驻占一行）。"""
+        return bool(getattr(self, "_voice_track_on", True))
 
     def refresh(self):
         self._update_height()
@@ -755,6 +938,30 @@ class _ClipArea(QWidget):
         h = self._hit_clip(x, y)
         return h[1] if h else None
 
+    def _voice_index_of(self, clip_id):
+        """vc:<台词下标> -> 下标；不是语音 clip 返回 -1。"""
+        s = str(clip_id or "")
+        if not s.startswith("vc:"):
+            return -1
+        try:
+            return int(s[3:])
+        except Exception:
+            return -1
+
+    def _move_one(self, proj, clip_id, new_t, aid=None):
+        """移动一个 clip：语音轨走 voice_move，其余走 move_clip。
+
+        语音 clip 不在 proj["tracks"] 里（是 dialogue 的投影），所以
+        move_clip 找不到它。这里分流到 voice_move —— 它也负责「未脱离时
+        改台词本身」的语义，外面不用管。
+        """
+        idx = self._voice_index_of(clip_id)
+        if idx >= 0:
+            return VM.voice_move(
+                proj, idx, new_t,
+                aid if aid is not None else getattr(self, "_aid", None))
+        return VM.move_clip(proj, clip_id, new_t)
+
     def _preview_geom(self, c):
         """拖拽中：返回该 clip 的预览 (start, dur)；否则返回实际数据。"""
         d = self._drag
@@ -1012,8 +1219,20 @@ class _ClipArea(QWidget):
             # 成组移动：任一成员撞组外 -> 整组回弹（move_clips 原子）
             delta = d.get("delta")
             if delta is not None and abs(delta) > 1e-9:
-                ok, _msg = VM.move_clips(p.proj, list(d["group"]), delta)
-                if ok: p.edit_committed.emit()
+                # 组里若有语音 clip，先摘出来单独处理（它不在 tracks 里）
+                ids = list(d["group"])
+                vids = [i for i in ids if self._voice_index_of(i) >= 0]
+                rest = [i for i in ids if self._voice_index_of(i) < 0]
+                changed = False
+                if rest:
+                    ok, _msg = VM.move_clips(p.proj, rest, delta)
+                    changed = changed or ok
+                for vid in vids:
+                    s0, _dur0 = d["group"][vid]
+                    ok2, _m2 = self._move_one(p.proj, vid, s0 + delta)
+                    changed = changed or ok2
+                if changed:
+                    p.edit_committed.emit()
             p.refresh()
             return
         if not d.get("moved") or d.get("pv") is None:
@@ -1021,7 +1240,7 @@ class _ClipArea(QWidget):
             return
         if d["kind"] == self.EDGE_MOVE:
             if abs(d["pv"] - d["start0"]) > 1e-9:
-                ok, _msg = VM.move_clip(p.proj, d["id"], d["pv"])
+                ok, _msg = self._move_one(p.proj, d["id"], d["pv"])
                 if ok: p.edit_committed.emit()
         else:
             side = "start" if d["kind"] == self.EDGE_START else "end"
