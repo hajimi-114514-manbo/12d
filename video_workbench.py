@@ -4061,9 +4061,13 @@ class VideoWorkbench(QWidget):
             pass
         try:
             view = V.act_view(self.proj, aid)
-            self._webview.apply_state(view, t)
+            # v3.6.3：播放中不节流（每帧都推，画面才跟手）；
+            # 拖动时间轴走 80ms 节流。
+            self._webview.apply_state(view, t, playing=bool(self._playing))
         except TypeError:
-            with contextlib.suppress(Exception): self._webview.apply_state(self.proj, t)
+            with contextlib.suppress(Exception):
+                self._webview.apply_state(self.proj, t,
+                                          playing=bool(self._playing))
         except Exception:
             pass
 

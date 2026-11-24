@@ -7,6 +7,88 @@
 
 ---
 
+## 未发布（2026-11-24）修「实时预览要按空格才刷新」
+
+### 现象
+
+用户报：实时预览的画面必须按下空格（播放/暂停）才刷新。
+
+### 根因：防抖被播放帧率**饿死**
+
+`WebPreviewView.apply_state` 原来是**纯防抖**：
+
+```python
+if force: self._do_apply(proj, t)
+else:
+    self._pending_apply = (proj, t)
+    self._deb.start()          # 每次调用都重置 80ms 单次定时器
+```
+
+而播放时 `_advance` 每帧调一次（`1000/fps` ≈ **33ms**），
+`DEBOUNCE_MS = 80` **大于** 33ms，于是：
+
+- 每 33ms 就 `start()` 一次，单次定时器被无限重启
+- 80ms 永远差 47ms 到不了 -> `_flush_apply` **一次都不执行**
+- 画面完全冻住
+- 一停播放，调用停止，80ms 后定时器终于到期 -> 推一帧
+
+**所以「按空格才刷新」正是它的准确表现。**
+
+> 这不是性能问题，是**节流策略选错**：防抖（debounce）适合
+> 「用户停手后再执行」（如输入框搜索），不适合「持续高频事件」——
+> 后者必须用前沿 + 尾沿节流（throttle）。
+
+### 修法
+
+`apply_state` 改为**前沿 + 尾沿节流**，并区分播放/拖动：
+
+| 场景 | 行为 |
+|---|---|
+| `playing=True` | **不节流**，每帧都推（画面要跟手） |
+| 拖动时间轴（非播放） | 距上次落地 ≥80ms -> 立刻推（前沿）；否则挂尾沿，**已在计时就不重置** |
+| `force=True` | 跳过节流（工程切换/离场急清/页面就绪首推） |
+
+尾沿保证「最多 80ms 一定落地一帧**最新**状态」——推的是
+`_pending_apply` 里的那份，所以**不丢帧**。
+
+配套：`video_workbench._sync_real_preview` 把 `playing` 传下去
+（原来是 `apply_state(view, t)`，现在 `apply_state(view, t, playing=bool(self._playing))`）。
+
+### 验证
+
+新增 `tests/test_preview_refresh.py`（6 组）：
+
+| 项 | 结果 |
+|---|---|
+| 播放中 30 帧 | 全部落地 **30 次**（旧实现 = **0 次**） |
+| 拖动 20 次（每 10ms） | 只落地 3 次，定时器只为「每次真落地之后」重挂（start 3 次，旧实现 20 次） |
+| 尾沿补帧（真 QTimer + 事件循环） | 40ms 后补上，且补的是最新那份 t |
+| `force=True` | 连续 3 次全部立刻落地 |
+| 降级后 | 零流量 |
+| 播放/暂停来回切 | 播放帧一帧不丢 |
+
+**测试有区分力**：把旧实现套进同一场景跑，播放 30 帧落地
+**0 次**（脚本：`_scratch/prove_old_bug.py`）。只断言新行为、
+不验证旧行为会失败的测试是不可信的，这一步不能省。
+
+### 顺带修两个一直跑不起来的测试
+
+| 文件 | 问题 | 修法 |
+|---|---|---|
+| `tests/test_voice_commands.py` | 第 63 行后凭空多缩进 4 格 -> `IndentationError`，**整个文件从没跑通过** | 去掉多缩进；断言数 11->13（新增了 `voice.refs.sel/unsel`），并把这两个加进注册检查 |
+| `tests/test_voice_probe.py` | `detail` 里存的是 `ProbeDetail` dataclass，测试用 `["status"]` 下标 -> `TypeError` | 改属性访问 `.status` |
+
+### 现状
+
+测试 **23 / 24**。唯一失败 `test_render_thumb.py` 是**既有的**
+退出崩溃（所有断言全 PASS，进程退出时 `0xC0000005`，stderr
+`Release of profile requested but WebEnginePage still not deleted`），
+已用 `git stash` 在干净 HEAD 上复现，**与本改动无关**。
+根因是 `QWebEngineProfile` / `QWebEnginePage` 的销毁顺序，
+待单独修。
+
+---
+
 ## 未发布（2026-11-24）收进千早爱音 748 段日文素材（Anon 干声）
 
 ### 来源

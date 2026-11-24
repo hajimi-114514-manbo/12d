@@ -34,6 +34,7 @@ import json
 import os
 import posixpath
 import re
+import time
 
 from PySide6.QtCore import Qt, QUrl, QByteArray, QBuffer, QIODevice, QObject, \
     Signal, Slot, QTimer
@@ -298,6 +299,7 @@ if HAS_WEBENGINE:
             self._events = []                 # 页面事件记录
             self._figstate = {}               # clip_id -> 已下发状态（diff 基）
             self._pending_apply = None
+            self._last_apply_ms = 0.0         # 上次真正落地的时刻（节流基准）
             self._ids = 0
             # v3.5.2：背景/字幕/滤镜三层的 diff 基（不重复发同样的内容）
             self._bg_url = None
@@ -439,19 +441,51 @@ if HAS_WEBENGINE:
             return "model/%s/%s" % (key, rel)
 
         # ---------- 状态同步（diff 驱动，D5） ----------
-        def apply_state(self, proj, t, force=False):
-            """入口：按 figure_clips_at 口径算在场立绘，diff 后只发差量。
-            force=True 跳过防抖（工程切换/离场急清）。"""
+        def apply_state(self, proj, t, force=False, playing=False):
+            """入口：按 figure_clips_at 口径算在场立绘，节流后只发差量。
+
+            **节流 = 前沿 + 尾沿，不是纯防抖**（v3.6.3 修）。
+
+            纯防抖（每次调用都 `start()` 重置单次定时器）在播放时会被
+            彻底饿死：`_advance` 每帧（1000/fps ≈ 33ms）调一次本函数，
+            而 DEBOUNCE_MS=80 > 33ms，于是定时器被无限重启、永远不到期
+            -> 播放期间实时预览**一帧都不动**，只有停播放（按空格）之后
+            80ms 才补推一次。—— 用户报「实时预览要按空格才刷新」即此。
+
+            现在的规则：
+              · playing=True（正在播放）-> 不节流，每帧都推（画面要跟手）
+              · 距上次落地 ≥ 节流间隔 -> **立刻**推（前沿）
+              · 否则挂尾沿定时器；**已在计时就不再重置**，保证最多
+                一个间隔一定落地一帧最新状态（不丢帧：推的是
+                _pending_apply 里最新的那份）。
+            force=True 跳过节流（工程切换/离场急清/页面就绪首推）。
+            """
             if self._degraded: return
-            if force: self._do_apply(proj, t)
-            else:
+            if force:
+                self._deb.stop()
                 self._pending_apply = (proj, t)
-                self._deb.start()
+                self._flush_apply()
+                return
+            self._pending_apply = (proj, t)
+            if playing:
+                # 播放中每帧都要跟手；scrub 才需要 80ms 节流
+                self._deb.stop()
+                self._flush_apply()
+                return
+            since = (time.perf_counter() - self._last_apply_ms) * 1000.0
+            if since >= self.DEBOUNCE_MS:
+                self._deb.stop()
+                self._flush_apply()
+            elif not self._deb.isActive():
+                self._deb.start(max(1, int(self.DEBOUNCE_MS - since)))
 
         def _flush_apply(self):
+            """把「最新」的待推状态落地一次（定时器尾沿与前沿共用）。"""
+            self._deb.stop()
             if self._pending_apply:
                 proj, t = self._pending_apply
                 self._pending_apply = None
+                self._last_apply_ms = time.perf_counter()
                 self._do_apply(proj, t)
 
         def _do_apply(self, proj, t):
