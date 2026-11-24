@@ -60,7 +60,10 @@ def chk(cond, msg):
 
 
 print("== 命令表注册")
-chk(len(VC.HANDLERS) == 7, "7 个语音命令：%s" % sorted(VC.HANDLERS))
+chk(len(VC.HANDLERS) == 11, "11 个语音命令：%s" % sorted(VC.HANDLERS))
+    for _c in ("voice.refs", "voice.refs.add", "voice.refs.rm",
+               "voice.refs.pick"):
+        chk(_c in VC.HANDLERS, "参考音频命令已注册：%s" % _c)
 for name in VC.HANDLERS:
     chk(name in RC._HANDLERS, "%s 已注册到 remote_control" % name)
     chk(name.startswith("voice."), "%s 命名空间正确" % name)

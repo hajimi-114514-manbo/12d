@@ -1779,6 +1779,10 @@ _HANDLERS = {
     "voice.validate": lambda wb, args: _voice_dispatch("voice.validate", args),
     "voice.import": lambda wb, args: _voice_dispatch("voice.import", args),
     "voice.remove": lambda wb, args: _voice_dispatch("voice.remove", args),
+    "voice.refs": lambda wb, args: _voice_dispatch("voice.refs", args),
+    "voice.refs.add": lambda wb, args: _voice_dispatch("voice.refs.add", args),
+    "voice.refs.rm": lambda wb, args: _voice_dispatch("voice.refs.rm", args),
+    "voice.refs.pick": lambda wb, args: _voice_dispatch("voice.refs.pick", args),
 }
 
 

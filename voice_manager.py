@@ -94,6 +94,12 @@ class VoiceManagerDialog(QDialog):
         title.setFont(f)
         head.addWidget(title)
         head.addStretch(1)
+        self.btn_refs = PushButton("参考音频…", self)
+        self.btn_refs.setToolTip(
+            "GPT-SoVITS 是克隆式 TTS：音色权重决定「像谁」，"
+            "参考音频决定「用哪段话克隆」。")
+        self.btn_refs.clicked.connect(self._open_refs)
+        head.addWidget(self.btn_refs)
         self.summary = CaptionLabel("", self)
         self.summary.setStyleSheet("color:%s;" % TH.t("text_dim"))
         head.addWidget(self.summary)
@@ -248,6 +254,15 @@ class VoiceManagerDialog(QDialog):
         self.reload()
 
     # ---------------------------------------------------------------- 数据
+    def _open_refs(self):
+        """打开参考音频管理。"""
+        try:
+            import voice_refs_ui
+            dlg = voice_refs_ui.VoiceRefsDialog(self)
+            dlg.exec()
+        except Exception as e:
+            TOAST.toast(self, "打不开参考音频管理：%s" % e)
+
     def reload(self):
         while self.list_layout.count():
             it = self.list_layout.takeAt(0)

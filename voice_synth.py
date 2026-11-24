@@ -99,7 +99,8 @@ def voice_file(proj_dir, act, index, who):
 
 
 def synth_line(proj_dir, act, index, who, text, host=None, port=None,
-               timeout=300.0, text_lang=None, prompt_lang=None):
+               timeout=300.0, text_lang=None, prompt_lang=None,
+               ref_role=None, ref_name=""):
     """合成一句话，落盘到工程 vocal/。返回 (ok, msg, info)。
 
     info = {"path": 相对工程目录的路径, "dur": 实测时长, "file": 绝对路径}
@@ -116,11 +117,12 @@ def synth_line(proj_dir, act, index, who, text, host=None, port=None,
     if not os.path.isdir(str(proj_dir or "")):
         return False, "工程目录不存在", None
 
-    # 参考音频：引擎自带的 ref.wav（音色自带参考时的最佳选择）
-    ref = _find_ref_audio()
+    # 参考音频：按**角色**从参考音频库里挑一段（voice_refs）。
+    # 为什么不能一律用引擎的 ref.wav —— 那是别的角色的声音，拿它克隆会串音色。
+    ref, ref_note = _pick_ref_for(role=ref_role, name=ref_name)
     if not ref:
-        return False, ("找不到参考音频（ref.wav）—— 合成必须有参考音频，"
-                       "请检查语音引擎安装是否完整"), None
+        return False, ("找不到参考音频 —— 合成必须有参考音频。"
+                       + (ref_note or "请检查语音引擎安装是否完整")), None
 
     lang = text_lang or _ext_for(who)
     body = {
@@ -178,19 +180,63 @@ def _wav_duration(raw):
         return 0.0
 
 
+def _pick_ref_for(role=None, name=""):
+    """给某个角色挑一段参考音频。返回 (路径, 提示语)。
+
+    顺序：
+      1. 参考音频库里该角色的指定段 / 第一段（voice_refs）
+      2. 引擎自带的 ref.wav（退路 —— 但那是别的角色的声音，会串音色，
+         所以提示语要说清楚）
+      3. 都没有 -> ("", 提示)
+    """
+    role = str(role or "").strip()
+    try:
+        import voice_refs as VR
+        if role:
+            p = VR.pick_ref(role, name)
+            if p:
+                return p, ""
+            fb = VR.fallback_ref()
+            if fb:
+                return fb, ("角色「%s」没有参考音频，已退回引擎自带 ref.wav"
+                            "（音色会串，建议先导入该角色的参考音频）" % role)
+            return "", ("角色「%s」没有参考音频，也没有引擎自带的 ref.wav"
+                        "（请在音色库里导入该角色的参考音频）" % role)
+        # 没指定角色：老行为（引擎 ref.wav）
+        p = _find_ref_audio()
+        if p:
+            return p, ""
+        return "", "找不到参考音频（ref.wav）—— 合成必须有参考音频"
+    except Exception as e:
+        p = _find_ref_audio()
+        if p:
+            return p, ""
+        return "", "查找参考音频失败：%s" % e
+
+
 def _find_ref_audio():
     """找参考音频：引擎自带的 ref.wav（角色音色目录里的 *.wav 也可）。
 
     找不到返回 ""。合成必须有参考音频 —— GPT-SoVITS 是「克隆音色」，
     没有参考就出不了声。
     """
+    # ref.wav 在**引擎目录**里；引擎没装时先看素材目录（refs/）。
+    roots = []
     try:
         import voice_paths as VP
-        root = VP.ensure_voice(scan=False) or ""
+        eng = VP.ensure_voice(scan=False) or ""
+        if eng:
+            roots.append(eng)
     except Exception:
-        root = ""
-    if not root:
+        pass
+    try:
+        import voice_refs as VR
+        roots.append(VR._voice_base())
+    except Exception:
+        pass
+    if not roots:
         return ""
+    root = roots[0]
     cands = [os.path.join(root, "ref.wav")]
     vd = VP.voices_dir(root)
     if vd and os.path.isdir(vd):
