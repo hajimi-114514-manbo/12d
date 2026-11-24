@@ -127,7 +127,7 @@ try:
     chk(r["ok"] is True, "识别为可用")
     chk(r["tcp"] and r["is_api"], "tcp/is_api 都为 True")
     chk("可用" in r["msg"], "提示可用：%s" % r["msg"])
-    chk(r["detail"]["set_gpt_weights"]["status"] == 400, "记录了 400")
+    chk(r["detail"]["set_gpt_weights"].status == 400, "记录了 400")
 finally:
     srv.shutdown()
     srv.server_close()
