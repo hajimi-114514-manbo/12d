@@ -165,14 +165,63 @@ chk(len(VR.refs_for("千早爱音")) == 1,
     "引擎没装时素材照样能读到（不消失）")
 
 print()
+print("== 选定（跨会话记住，合成会用它）")
+lst2 = VR.refs_for("千早爱音")
+chk(len(lst2) >= 1, "有可选的段")
+if lst2:
+    target = lst2[0]["name"]
+    chk(VR.selection_of("千早爱音") == "", "初始没有已选")
+    ok_s, msg_s, info_s = VR.select_ref("千早爱音", target)
+    chk(ok_s, "选定成功：%s" % msg_s)
+    chk(VR.selection_of("千早爱音") == target,
+        "selection_of 记住了：%s" % VR.selection_of("千早爱音"))
+    chk(VR.pick_ref("千早爱音").endswith(target),
+        "pick_ref 优先用已选")
+    chk("千早爱音" in VR.selections(), "selections() 里有这个角色")
+
+    ok_e, msg_e, _ = VR.select_ref("千早爱音", "根本不存在的.wav")
+    chk(not ok_e, "选不存在的段被拒：%s" % msg_e)
+
+    ok_c, msg_c, data_c = VR.clear_selection("千早爱音")
+    chk(ok_c, "清除成功：%s" % msg_c)
+    chk(VR.selection_of("千早爱音") == "", "清除后 selection_of 为空")
+    chk(VR.pick_ref("千早爱音").endswith(lst2[0]["name"]),
+        "清除后回到第一段")
+
+    # 指定 name 的优先级高于「已选」
+    if len(lst2) >= 2:
+        VR.select_ref("千早爱音", lst2[0]["name"])
+        chk(VR.pick_ref("千早爱音", lst2[1]["name"]).endswith(lst2[1]["name"]),
+            "显式指定 name 的优先级高于已选")
+        VR.clear_selection("千早爱音")
+
+print()
 print("== DSH 命令接线")
 import voice_commands as VC
-for c in ("voice.refs", "voice.refs.add", "voice.refs.rm", "voice.refs.pick"):
+for c in ("voice.refs", "voice.refs.add", "voice.refs.rm",
+          "voice.refs.pick", "voice.refs.sel", "voice.refs.unsel"):
     chk(c in VC.HANDLERS, "命令已注册：%s" % c)
 ok7, msg7, data7 = VC.run("voice.refs", {})
 chk(ok7, "voice.refs 可用：%s" % msg7)
+chk("selected" in (data7 or {}), "voice.refs 返回 selected 表")
+_roles7 = (data7 or {}).get("roles") or []
+if _roles7:
+    chk("selected" in _roles7[0], "每个角色条目带 selected 字段")
 ok8, msg8, data8 = VC.run("voice.refs.pick", {"role": "千早爱音"})
 chk(ok8, "voice.refs.pick 可用：%s" % msg8)
+# sel / unsel 行为
+ok_s2, msg_s2, data_s2 = VC.run("voice.refs.sel",
+                                {"role": "千早爱音", "name": lst2[0]["name"]})
+chk(ok_s2, "voice.refs.sel 可用：%s" % msg_s2)
+chk(VR.selection_of("千早爱音") == lst2[0]["name"], "sel 写入了记忆")
+_pk = VC.run("voice.refs.pick", {"role": "千早爱音"})
+chk((_pk[2] or {}).get("is_selected") is True, "pick 报告 is_selected")
+ok_u, msg_u, _ = VC.run("voice.refs.unsel", {"role": "千早爱音"})
+chk(ok_u, "voice.refs.unsel 可用：%s" % msg_u)
+chk(VR.selection_of("千早爱音") == "", "unsel 清掉了记忆")
+ok_m, msg_m, _ = VC.run("voice.refs.sel", {"role": "千早爱音"})
+chk(not ok_m, "sel 缺 name 被拒")
+
 ok9, msg9, _ = VC.run("voice.refs.pick", {"role": "根本没有这个角色"})
 chk(not ok9, "不存在的角色 -> False 并说明原因")
 chk("ref.wav" in (msg9 or "") or "没有参考音频" in (msg9 or ""),
@@ -180,6 +229,8 @@ chk("ref.wav" in (msg9 or "") or "没有参考音频" in (msg9 or ""),
 
 import remote_control as RC
 chk("voice.refs" in RC._HANDLERS, "remote_control 已转发 voice.refs")
+chk("voice.refs.sel" in RC._HANDLERS, "remote_control 转发 voice.refs.sel")
+chk("voice.refs.unsel" in RC._HANDLERS, "remote_control 转发 voice.refs.unsel")
 
 print()
 print("== 语音合成按角色选参考音频")

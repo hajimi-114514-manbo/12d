@@ -1783,6 +1783,8 @@ _HANDLERS = {
     "voice.refs.add": lambda wb, args: _voice_dispatch("voice.refs.add", args),
     "voice.refs.rm": lambda wb, args: _voice_dispatch("voice.refs.rm", args),
     "voice.refs.pick": lambda wb, args: _voice_dispatch("voice.refs.pick", args),
+    "voice.refs.sel": lambda wb, args: _voice_dispatch("voice.refs.sel", args),
+    "voice.refs.unsel": lambda wb, args: _voice_dispatch("voice.refs.unsel", args),
 }
 
 

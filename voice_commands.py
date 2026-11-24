@@ -18,7 +18,9 @@ remote_control.py 已经 1997 行，再往里塞语音逻辑会让它更难读�
     voice.refs      参考音频库（按角色列出）
     voice.refs.add  导入一段参考音频
     voice.refs.rm   删除一段参考音频
-    voice.refs.pick 给某角色挑一段参考音频（合成用）
+    voice.refs.pick 给某角色挑一段参考音频（**只查询**，不改状态）
+    voice.refs.sel  **选定**某角色用哪段参考音频（写入记忆，合成会用它）
+    voice.refs.unsel 清掉某个角色的已选（留空 = 清掉全部）
 
 **不暴露 voice.map / voice.synth / voice.batch** —— 那是 V2/V3 的事，
 还没实现。列出来 AI 会照着调然后报「未知命令」，比不列更糟。
@@ -169,12 +171,16 @@ def _voice_refs(_wb, args):
     """
     VR = _refs_module()
     role = str(args.get("role") or "").strip()
+    sel = VR.selections()
     if role:
-        items = [{"role": role, "refs": VR.refs_for(role)}]
+        items = [{"role": role, "refs": VR.refs_for(role),
+                  "selected": sel.get(role, "")}]
     else:
-        items = [{"role": r, "refs": VR.refs_for(r)} for r in VR.roles()]
+        items = [{"role": r, "refs": VR.refs_for(r),
+                  "selected": sel.get(r, "")} for r in VR.roles()]
     return True, "共 %d 个角色" % len(items), {
         "roles": items,
+        "selected": sel,
         "stats": VR.stats(),
     }
 
@@ -226,6 +232,7 @@ def _voice_refs_pick(_wb, args):
     role = str(args.get("role") or "").strip()
     name = str(args.get("name") or "")
     p = VR.pick_ref(role, name)
+    sel = VR.selection_of(role)
     if not p:
         fb = VR.fallback_ref()
         return False, ("角色「%s」没有参考音频" % role), {
@@ -234,9 +241,48 @@ def _voice_refs_pick(_wb, args):
             "hint": ("会退回引擎自带 ref.wav（凑友希娜的声音，音色会串）"
                      if fb else "引擎也没有 ref.wav"),
         }
-    return True, "已选中 %s" % os.path.basename(p), {
+    return True, "当前会用到 %s" % os.path.basename(p), {
         "role": role, "path": p, "name": os.path.basename(p),
+        # 是「选定的」还是「兜底取第一段」—— 让 AI 能分清
+        "selected": sel or "",
+        "is_selected": bool(sel) and os.path.basename(p) == sel,
     }
+
+
+def _voice_refs_sel(_wb, args):
+    """**选定**某角色用哪段参考音频（写入记忆，合成会用它）。
+
+    和 voice.refs.pick 的区别：pick 只是「问一下现在会用哪段」，
+    sel 是「就这么定下来」——写进 refs/_selected.json，跨会话保持。
+
+    args:
+      role: 角色名（必填）
+      name: 参考音频文件名（必填，须是该角色已有的段；
+            先 voice.refs 看有哪些）
+    """
+    VR = _refs_module()
+    role = str(args.get("role") or "").strip()
+    name = str(args.get("name") or "").strip()
+    if not role:
+        return False, "缺少 role（角色名）", None
+    if not name:
+        return False, "缺少 name（参考音频文件名）", None
+    ok, msg, info = VR.select_ref(role, name)
+    if ok and info:
+        info["pick"] = VR.pick_ref(role)
+    return ok, msg, info
+
+
+def _voice_refs_unsel(_wb, args):
+    """清掉某个角色的已选（回到「取第一段」的兜底行为）。
+
+    args:
+      role: 角色名（留空 = 清掉全部）
+    """
+    VR = _refs_module()
+    role = str(args.get("role") or "").strip()
+    ok, msg, data = VR.clear_selection(role)
+    return ok, msg, data
 
 
 # ---------------- 注册表 ----------------
@@ -253,6 +299,8 @@ HANDLERS = {
     "voice.refs.add": _voice_refs_add,
     "voice.refs.rm": _voice_refs_rm,
     "voice.refs.pick": _voice_refs_pick,
+    "voice.refs.sel": _voice_refs_sel,
+    "voice.refs.unsel": _voice_refs_unsel,
 }
 
 # 走 HTTP 线程直跑的命令（纯 I/O，不进主线程队列）。

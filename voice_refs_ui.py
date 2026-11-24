@@ -48,7 +48,8 @@ def _player():
 class _RefRow(CardWidget):
     """一段参考音频：文件名 + 时长 + 试听 + 删除。"""
 
-    def __init__(self, role, ref, on_play=None, on_remove=None, parent=None):
+    def __init__(self, role, ref, on_play=None, on_remove=None,
+                 on_select=None, parent=None):
         super().__init__(parent)
         self.role = role
         self.ref = ref
@@ -57,14 +58,32 @@ class _RefRow(CardWidget):
         lay.setSpacing(8)
 
         name = str(ref.get("name") or "")
-        t = BodyLabel(name, self)
+        selected = bool(ref.get("_selected"))
+        t = BodyLabel(("✓ " if selected else "") + name, self)
         t.setToolTip(ref.get("path") or "")
-        t.setStyleSheet("color:%s;" % TH.t("text"))
+        t.setStyleSheet("color:%s;%s"
+                        % (TH.t("text"),
+                           "font-weight:600;" if selected else ""))
         lay.addWidget(t, 1)
 
-        info = CaptionLabel("%.2f 秒" % float(ref.get("dur") or 0), self)
-        info.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        info = CaptionLabel(
+            ("当前使用　" if selected else "")
+            + "%.2f 秒" % float(ref.get("dur") or 0), self)
+        info.setStyleSheet("color:%s;"
+                           % (TH.t("text") if selected else TH.t("text_dim")))
         lay.addWidget(info)
+
+        if selected:
+            tag = CaptionLabel("已选定", self)
+            tag.setStyleSheet("color:%s;" % TH.t("text"))
+            lay.addWidget(tag)
+        elif on_select:
+            b = PushButton("用这段", self)
+            b.setFixedHeight(26)
+            b.setToolTip("把这个角色的参考音频定成这一段（合成会用它）")
+            b.clicked.connect(
+                lambda _=False: on_select(role, ref.get("name")))
+            lay.addWidget(b)
 
         if on_play:
             b = PushButton("试听", self)
@@ -223,6 +242,10 @@ class VoiceRefsDialog(QDialog):
         self.btn_import.clicked.connect(self._do_import)
         bar.addWidget(self.btn_import)
         bar.addStretch(1)
+        self.btn_unsel = PushButton("取消选定", self)
+        self.btn_unsel.setToolTip("清掉各角色的已选，回到「取第一段」")
+        self.btn_unsel.clicked.connect(self._clear_selection)
+        bar.addWidget(self.btn_unsel)
         self.btn_stop = PushButton("停止播放", self)
         self.btn_stop.clicked.connect(self._stop)
         bar.addWidget(self.btn_stop)
@@ -253,9 +276,11 @@ class VoiceRefsDialog(QDialog):
                 w.deleteLater()
         roles = VR.roles()
         st = VR.stats()
+        nsel = len(VR.selections())
         self.summary.setText(
-            "%d 个角色 / %d 段 / 共 %.1f 秒" % (st["roles"], st["count"],
-                                            st["dur"]))
+            "%d 个角色 / %d 段 / 共 %.1f 秒%s"
+            % (st["roles"], st["count"], st["dur"],
+               ("　已选定 %d 个" % nsel) if nsel else ""))
         if not roles:
             lbl = BodyLabel("还没有参考音频。点「导入参考音频」把 wav 导进来。",
                             self)
@@ -273,8 +298,12 @@ class VoiceRefsDialog(QDialog):
             f.setBold(True)
             head.setFont(f)
             cl.addWidget(head)
+            sel = VR.selection_of(role)
             for ref in VR.refs_for(role):
-                cl.addWidget(_RefRow(role, ref, self._play, self._remove, card))
+                ref = dict(ref)
+                ref["_selected"] = bool(sel) and ref["name"] == sel
+                cl.addWidget(_RefRow(role, ref, self._play, self._remove,
+                                     self._select, card))
             self.list_lay.insertWidget(self.list_lay.count() - 1, card)
 
     # ---------- 动作 ----------
@@ -287,12 +316,33 @@ class VoiceRefsDialog(QDialog):
         except Exception as e:
             TOAST.toast(self, "播放失败：%s" % e)
 
+    def _clear_selection(self):
+        VR = _refs()
+        ok, msg, data = VR.clear_selection("")
+        if ok:
+            n = len((data or {}).get("cleared") or [])
+            TOAST.toast(self, ("已清空 %d 个角色的选定" % n) if n
+                        else "本来就没有选定")
+            self.reload()
+        else:
+            TOAST.toast(self, "清除失败：%s" % msg)
+
     def _stop(self):
         try:
             VS = _player()
             VS.stop_play()
         except Exception:
             pass
+
+    def _select(self, role, name):
+        """把该角色的参考音频定成这一段。"""
+        VR = _refs()
+        ok, msg, info = VR.select_ref(role, name)
+        if ok:
+            TOAST.toast(self, "已选定：%s" % name)
+            self.reload()
+        else:
+            TOAST.toast(self, "选定失败：%s" % msg)
 
     def _remove(self, role, name):
         VR = _refs()

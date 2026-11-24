@@ -39,7 +39,11 @@ GPT-SoVITS 是**克隆式** TTS：音色权重（ckpt+pth）决定「像谁」�
     find_ref(role, name)         -> dict|None
     import_ref(src, role, name) -> (ok, msg)
     remove_ref(role, name)       -> (ok, msg)
-    pick_ref(role)               -> str  给某个角色挑一段参考（合成用）
+    pick_ref(role, name="")      -> str  给某个角色挑一段参考（合成用）
+    select_ref(role, name)       -> (ok,msg,info)  **选定**该角色用哪一段
+    clear_selection(role="")     -> (ok,msg,data)  清掉已选（留空=全部）
+    selection_of(role)           -> str  该角色已选的文件名
+    selections()                 -> dict 全部已选
     stats()                      -> 统计
 """
 import contextlib
@@ -370,18 +374,129 @@ def remove_ref(role, name, root=None):
     return True, "已删除 %s" % r["name"]
 
 
+# ---- 已选的参考音频（跨会话记住）---------------------------------------
+# <voice>/refs/_selected.json  ->  {"角色": "文件名.wav"}
+# 为什么要记：用户对同一个角色会反复用同一段（哪段清楚、哪段带杂音，
+# 试一次就知道了），每次都从列表里挑太烦。DSH 联动和 UI 共用这份口径。
+
+_SEL_NAME = "_selected.json"
+
+
+def _sel_path(root=None):
+    d = refs_root(root)
+    return os.path.join(d, _SEL_NAME) if d else ""
+
+
+def _load_selection(root=None):
+    """读已选表；文件坏了就当空的（不抛）。"""
+    p = _sel_path(root)
+    if not p or not os.path.isfile(p):
+        return {}
+    try:
+        import json
+        d = json.load(io.open(p, encoding="utf-8"))
+        return dict(d) if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_selection(d, root=None):
+    """写已选表。"""
+    p = _sel_path(root)
+    if not p:
+        return False, "找不到参考音频目录"
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        import json
+        io.open(p, "w", encoding="utf-8").write(
+            json.dumps(d, ensure_ascii=False, indent=1, sort_keys=True))
+        return True, "已保存"
+    except Exception as e:
+        return False, "保存失败：%s" % e
+
+
+def select_ref(role, name, root=None):
+    """把某个角色的参考音频「选定」为 name。
+
+    name 必须是该角色**已有**的一段（防止选到不存在的）。
+    """
+    role = _clean(role)
+    if not role:
+        return False, "角色名不能为空", None
+    name = str(name or "").strip()
+    if not name:
+        return False, "缺少参考音频文件名", None
+    r = find_ref(role, name, root)
+    if not r:
+        return False, "角色「%s」没有这段参考音频：%s" % (role, name), None
+    d = _load_selection(root)
+    d[role] = r["name"]
+    ok, msg = _save_selection(d, root)
+    if not ok:
+        return False, msg, None
+    return True, "已选定 %s / %s（%.2f 秒）" % (role, r["name"], r["dur"]), {
+        "role": role, "name": r["name"], "path": r["path"],
+        "dur": r["dur"],
+    }
+
+
+def clear_selection(role, root=None):
+    """清掉某个角色的已选（回到「取第一段」的兜底行为）。
+
+    role 留空 -> 清掉全部。
+    """
+    role = _clean(role)
+    d = _load_selection(root)
+    if not role:
+        if not d:
+            return True, "本来就没有已选项", {"cleared": []}
+        cleared = sorted(d.keys())
+        ok, msg = _save_selection({}, root)
+        return ok, ("已清空 %d 个角色的选择" % len(cleared)) if ok else msg,             {"cleared": cleared}
+    if role not in d:
+        return True, "角色「%s」本来就没有已选项" % role, {"cleared": []}
+    d.pop(role, None)
+    ok, msg = _save_selection(d, root)
+    return ok, ("已清掉 %s 的选择" % role) if ok else msg, {"cleared": [role]}
+
+
+def selection_of(role, root=None):
+    """某角色已选的参考音频文件名（没选返回 ""）。"""
+    return str(_load_selection(root).get(_clean(role)) or "")
+
+
+def selections(root=None):
+    """全部已选表 {"角色": "文件名"}。"""
+    return dict(_load_selection(root))
+
+
 def pick_ref(role, name="", root=None):
     """给某个角色挑一段参考音频（合成时用）。
 
-    优先用指定的 name；没指定就取该角色的第一段。
-    找不到就回退到引擎自带的 ref.wav（返回 "" 表示连回退都没有）。
+    顺序：
+      1. 显式传入的 name（调用方明确指定，最高优先）
+      2. **该角色已选的**（select_ref 记下来的，跨会话保持）
+      3. 该角色的第一段（按名字排序）
+      4. "" —— 调用方自己决定报错还是回退
+
+    「已选」为什么要有：用户会反复用同一个角色，每次都从 3 段里挑太烦；
+    而且选哪段对克隆效果影响很大（有的段清楚、有的段带背景音）。
+    记下来之后，DSH 联动和 UI 都能用同一个口径。
 
     **回退是有代价的**：引擎的 ref.wav 是别的角色的声音，用它克隆会串音色。
     所以调用方拿到 "" 时应该明确报错，而不是静默用别人的声音。
     """
     if name:
         r = find_ref(role, name, root)
-        return r["path"] if r else ""
+        if r:
+            return r["path"]
+        # 指定了但找不到 —— 不静默换别的，让调用方知道
+        return ""
+    sel = selection_of(role, root)
+    if sel:
+        r = find_ref(role, sel, root)
+        if r:
+            return r["path"]
     lst = refs_for(role, root)
     if lst:
         return lst[0]["path"]
