@@ -196,6 +196,38 @@ if lst2:
         VR.clear_selection("千早爱音")
 
 print()
+print("== prompt_text 推导（参考音频里说的那句话）")
+# 传空 prompt_text 会让引擎降级 naive_infer，参考音频的文本韵律不参与对齐，
+# 合成容易吞字。我们的参考音频就是用说话内容命名的，所以从文件名推导。
+chk(VR.prompt_of(r"C:\x\refs\千早爱音\怎么了怎么了，性感的我让你害羞了吗.wav")
+    == "怎么了怎么了，性感的我让你害羞了吗", "正常命名能推出内容")
+chk(VR.prompt_of(r"C:\x\refs\千早爱音\你好，我是千早爱音.wav")
+    == "你好，我是千早爱音", "中文标点保留")
+chk(VR.prompt_of(r"C:\x\ref.wav") == "",
+    "引擎自带的 ref.wav 推不出（预期降级）")
+chk(VR.prompt_of(r"C:\x\refs\a\050_182.42s_4.2s.wav") == "",
+    "编号+时间戳命名推不出（预期降级）")
+chk(VR.prompt_of(r"C:\x\refs\a\001_006.75s_8.8s.wav") == "",
+    "纯编号命名推不出")
+chk(VR.prompt_of("") == "", "空路径返回空")
+
+# prompt_for_role 两者配套返回
+VP2, VPT2 = VR.prompt_for_role("千早爱音")
+chk(VP2 and VPT2, "prompt_for_role 同时给路径和文本")
+chk(VPT2 == os.path.splitext(os.path.basename(VP2))[0],
+    "文本就是文件名（去掉扩展名）")
+
+print()
+print("== synth_line 把 prompt_text 传下去")
+import voice_synth as VS
+_src = io.open(os.path.join(ROOT, "voice_synth.py"), encoding="utf-8").read()
+chk("prompt_text=None" in _src, "synth_line 有 prompt_text 参数")
+chk("VR.prompt_of(ref)" in _src, "默认从参考音频推导")
+chk('"prompt_text": pt,' in _src, "请求体用 pt 而不是空串")
+chk("prompt_text_ok" in _src, "info 里带 prompt_text_ok")
+chk("降级" in _src or "naive" in _src, "降级时有提示文案")
+
+print()
 print("== DSH 命令接线")
 import voice_commands as VC
 for c in ("voice.refs", "voice.refs.add", "voice.refs.rm",

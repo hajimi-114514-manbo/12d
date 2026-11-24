@@ -672,3 +672,67 @@ def role_index(refs=None):
         if n and n not in out:
             out[n] = r
     return out
+
+
+# ---- prompt_text（参考音频里说的那句话）--------------------------------
+# 为什么必须填
+# ------------
+# GPT-SoVITS 的 /tts 有个 prompt_text 参数，它是**参考音频里说的那句话**。
+# 传空会让引擎降级到 naive_infer（日志里那句
+# "Warning: Prompt free is not supported batch_infer! switch to naive_infer"），
+# 参考音频的文本韵律不参与对齐，合成容易吞字、口齿不清。
+#
+# 为什么能从文件名推出来
+# ----------------------
+# 我们的参考音频**就是用说话内容命名的**（voice_refs 的设计约定），
+# 所以文件名去掉扩展名就是那段话本身，不用再单独存一份 prompt_text。
+#
+# 为什么不用另存 json
+# -------------------
+# 单独存「文件名 -> 文本」的映射会有一致性问题（改名了就不同步）。
+# 文件名即文本，只有一份真相。
+#
+# 什么情况推不出来
+# ----------------
+#   · 引擎自带的 ref.wav（名字是 ref，不代表任何话）-> 返回 ""
+#   · 用户用纯编号命名的段（001_xxx.wav）-> 返回 ""（调用方要知道这是降级）
+
+# 文件名里不该进 prompt_text 的东西：编号前缀、时间戳后缀
+_BAD_NAME = re.compile(
+    r"^(\d{2,3}[_-])|"                      # 开头编号 001_
+    r"([_-]\d+\.?\d*s.*$)|"                # 结尾 _182.42s_4.2s
+    r"(\.wav$)",                             # 扩展名
+    re.I)
+
+
+def prompt_of(path):
+    """从参考音频路径推出 prompt_text（那段话本身）。
+
+    推不出来返回 ""（调用方要按「降级到 naive_infer」处理并告诉用户）。
+    """
+    p = str(path or "")
+    if not p:
+        return ""
+    name = os.path.splitext(os.path.basename(p))[0].strip()
+    if not name:
+        return ""
+    # 引擎自带的通用参考音频：名字不代表内容
+    if name.lower() in ("ref", "reference", "ref_audio"):
+        return ""
+    # 纯编号 / 时间戳命名 -> 不可用
+    if _BAD_NAME.search(os.path.basename(p)):
+        cleaned = _BAD_NAME.sub("", os.path.basename(p))
+        cleaned = os.path.splitext(cleaned)[0].strip("_- ")
+        if not cleaned or cleaned.isdigit():
+            return ""
+        return cleaned
+    return name
+
+
+def prompt_for_role(role, name="", root=None):
+    """给某角色挑参考音频，并返回 (路径, prompt_text)。
+
+    两者配套返回，避免调用方只拿路径却忘了 prompt_text。
+    """
+    p = pick_ref(role, name, root)
+    return p, prompt_of(p) if p else ""

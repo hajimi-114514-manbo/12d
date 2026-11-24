@@ -100,7 +100,7 @@ def voice_file(proj_dir, act, index, who):
 
 def synth_line(proj_dir, act, index, who, text, host=None, port=None,
                timeout=300.0, text_lang=None, prompt_lang=None,
-               ref_role=None, ref_name=""):
+               ref_role=None, ref_name="", prompt_text=None):
     """合成一句话，落盘到工程 vocal/。返回 (ok, msg, info)。
 
     info = {"path": 相对工程目录的路径, "dur": 实测时长, "file": 绝对路径}
@@ -108,6 +108,20 @@ def synth_line(proj_dir, act, index, who, text, host=None, port=None,
     **必须先切音色** —— 服务默认加载的是 weight.json 里那对，用户选的音色
     要通过 /set_gpt_weights + /set_sovits_weights 换过去。这里不做换音色
     （那是上层的事，voice_commands / UI 负责），只负责合成当前服务已加载的音色。
+
+    prompt_text 怎么来的
+    -------------------
+    它是**参考音频里说的那句话**。传空会让引擎降级到 naive_infer
+    （日志里 "Warning: Prompt free is not supported batch_infer"），
+    参考音频的文本韵律不参与对齐，合成容易吞字、口齿不清。
+
+    我们的参考音频就是用说话内容命名的，所以默认**从文件名推导**
+    （voice_refs.prompt_of）。prompt_text 参数留给调用方显式覆盖
+    （比如文件名不是内容、或要纠正转写错字）。
+
+    推导不出来时（引擎 ref.wav、纯编号命名）留空并在 info 里标明
+    prompt_text_ok=False —— 调用方要把「降级了」这件事告诉用户，
+    不能静默变差。
     """
     host = str(host or DEFAULT_HOST)
     port = int(port or DEFAULT_PORT)
@@ -125,12 +139,26 @@ def synth_line(proj_dir, act, index, who, text, host=None, port=None,
                        + (ref_note or "请检查语音引擎安装是否完整")), None
 
     lang = text_lang or _ext_for(who)
+
+    # prompt_text = 参考音频里说的那句话。
+    # 显式传了就用传的；否则从参考音频文件名推导（我们的命名约定就是内容）。
+    if prompt_text is None:
+        try:
+            import voice_refs as VR
+            pt = VR.prompt_of(ref)
+        except Exception:
+            pt = ""
+    else:
+        pt = str(prompt_text or "").strip()
+    pt_ok = bool(pt)
+
     body = {
         "text": text,
         "text_lang": lang,
         "ref_audio_path": ref,
         "prompt_lang": prompt_lang or lang,
-        "prompt_text": "",
+        # 空 = 引擎降级 naive_infer（吞字风险）。能填就一定要填。
+        "prompt_text": pt,
         "top_k": 15, "top_p": 1, "temperature": 1,
         "text_split_method": "cut5", "batch_size": 1,
         "speed_factor": 1.0, "seed": 42,
@@ -164,8 +192,13 @@ def synth_line(proj_dir, act, index, who, text, host=None, port=None,
 
     dur = _wav_duration(raw)
     rel = os.path.relpath(path, str(proj_dir)).replace("\\", "/")
-    return True, "已合成 %.2fs" % dur, {"path": rel, "dur": round(dur, 3),
-                                       "file": path}
+    info = {"path": rel, "dur": round(dur, 3), "file": path,
+            "prompt_text": pt, "prompt_text_ok": pt_ok}
+    msg = "已合成 %.2fs" % dur
+    if not pt_ok:
+        # 降级要明说 —— 用户听出「口齿不清」时得知道是这个原因
+        msg += "（注意：参考音频没有可用文本，已降级为 naive 推理，吐字可能发虚）"
+    return True, msg, info
 
 
 def _wav_duration(raw):
