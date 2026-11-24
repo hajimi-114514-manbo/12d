@@ -154,125 +154,35 @@ def dsize(p):
 
 
 def patch_engine(gsv):
-    """打 4 处分档发行补丁。幂等（已打过就跳过）。"""
-    print("== 打引擎补丁")
-    # ① onnxruntime 懒加载
-    p = os.path.join(gsv, "text", "g2pw", "onnx_api.py")
-    s = io.open(p, encoding="utf-8").read()
-    if "_get_onnxruntime" not in s:
-        s = s.replace("import numpy as np\nimport onnxruntime\nimport requests",
-                      "import numpy as np\nimport requests")
-        s = s.replace("onnxruntime.set_default_logger_severity(3)",
-                      "_LAZY_ONNX = None")
-        s = s.replace("""onnxruntime.set_default_logger_severity(3)
-try:
-    onnxruntime.preload_dlls()
-except Exception:
-    pass
-""", """# onnxruntime 改懒加载（分档发行补丁）：模块级 import 会让
-# 「不带 onnxruntime 的档」一 import 就挂；改成用时才 import。
-_ONNX = None
+    """应用仓库里的引擎补丁（tools/voice_engine_patches/）。
 
-
-def _get_onnxruntime():
-    global _ONNX
-    if _ONNX is None:
-        try:
-            import onnxruntime as _ort
-        except ImportError as e:
-            raise ImportError(
-                "G2PW 需要 onnxruntime，当前档位未包含它。"
-                "中文发音可用（多音字判读退化）。") from e
-        try:
-            _ort.set_default_logger_severity(3)
-            _ort.preload_dlls()
-        except Exception:
-            pass
-        _ONNX = _ort
-    return _ONNX
-""")
-        s = s.replace("onnxruntime.InferenceSession",
-                      "_get_onnxruntime().InferenceSession")
-        io.open(p, "w", encoding="utf-8", newline="\n").write(s)
-        print("   ① onnxruntime 懒加载")
-    else:
-        print("   ① 已打过")
-
-    # ② cleaner 语言模块按可用性挑选
-    p = os.path.join(gsv, "text", "cleaner.py")
-    s = io.open(p, encoding="utf-8").read()
-    if "_available_language_modules" not in s:
-        helper = '''
-def _available_language_modules(mapping):
-    """挑出当前档位真的装了的前端语言模块（分档发行补丁）。
-
-    原来 language_module_map 写死并用 __import__ 动态载入，缺某个语言的
-    前端依赖就直接崩，把整条合成链路带崩。改成 import 失败就跳过该语言。
-    完整安装时结果与原来完全一样。
+    补丁以**文件**形式存在仓库里（不是内联在本脚本中）：
+      · 一眼能看出改了哪几行
+      · 引擎升级后能看出补丁是否还能 apply
+      · 引擎源码本身在仓库外（且被 .gitignore 排除），只能靠补丁复现
+    本函数是幂等的（已打过就跳过）。
     """
-    import warnings as _warnings
-    only = os.environ.get("MUPPET_VOICE_LANGS", "").strip()
-    want = set(x.strip() for x in only.split(",") if x.strip()) if only else None
-    out = {}
-    for lang, mod in list(mapping.items()):
-        if want is not None and lang not in want:
-            continue
-        try:
-            __import__("text." + mod, fromlist=[mod])
-        except Exception as e:
-            _warnings.warn("语言 %s 前端不可用（%s），已跳过"
-                          % (lang, type(e).__name__))
-            continue
-        out[lang] = mod
-    return out
-
-'''
-        i = s.find("\ndef ")
-        s = s[:i] + "\n" + helper + s[i:]
-        s = s.replace('''    if language not in language_module_map:
-        language = "en"
-        text = " "''',
-                      '''    language_module_map = _available_language_modules(language_module_map)
-    if language not in language_module_map:
-        language = "en" if "en" in language_module_map else (
-            next(iter(language_module_map), "en"))
-        text = " "''')
-        io.open(p, "w", encoding="utf-8", newline="\n").write(s)
-        print("   ② cleaner 语言模块过滤")
-    else:
-        print("   ② 已打过")
-
-    # ③ is_g2pw 环境变量
-    p = os.path.join(gsv, "text", "chinese2.py")
-    s = io.open(p, encoding="utf-8").read()
-    if "is_g2pw = True" in s:
-        s = s.replace(
-            "is_g2pw = True  # True if is_g2pw_str.lower() == 'true' else False",
-            "is_g2pw = os.environ.get('is_g2pw', 'False').lower() == 'true'")
-        io.open(p, "w", encoding="utf-8", newline="\n").write(s)
-        print("   ③ is_g2pw 环境变量")
-    else:
-        print("   ③ 已打过")
-
-    # ④ BigVGAN 懒加载
-    p = os.path.join(gsv, "TTS_infer_pack", "TTS.py")
-    s = io.open(p, encoding="utf-8").read()
-    if "\nfrom BigVGAN.bigvgan import BigVGAN" in s:
-        s = s.replace("from BigVGAN.bigvgan import BigVGAN", """def _import_bigvgan():
-    \"\"\"BigVGAN 只在 v3/v4 的 vocoder 路径用（v2ProPlus 不用）。
-    改懒加载：模块级 import 会让「不带 BigVGAN 的档」一 import 就挂。\"\"\"
+    print("== 应用引擎补丁")
+    here = os.path.dirname(os.path.abspath(__file__))
+    apply_script = os.path.join(here, "apply_voice_patches.py")
+    if not os.path.isfile(apply_script):
+        print("   !! 找不到 apply_voice_patches.py，跳过（引擎可能没补丁）")
+        return
+    import subprocess
+    engine = os.path.abspath(os.path.join(gsv, os.pardir))
     try:
-        from BigVGAN.bigvgan import BigVGAN
-        return BigVGAN
-    except ImportError as e:
-        raise ImportError(
-            "该功能需要 BigVGAN（v3/v4 声码器），当前档位未包含它。") from e""")
-        s = s.replace("self.vocoder = BigVGAN.from_pretrained(",
-                      "self.vocoder = _import_bigvgan().from_pretrained(")
-        io.open(p, "w", encoding="utf-8", newline="\n").write(s)
-        print("   ④ BigVGAN 懒加载")
-    else:
-        print("   ④ 已打过")
+        # 显式指定编码：Windows 默认 GBK，而补丁脚本输出含中文注释 ->
+        # 不指定会 UnicodeDecodeError（实测）。
+        r = subprocess.run([sys.executable, apply_script, "--engine", engine],
+                           capture_output=True, text=True, timeout=300,
+                           encoding="utf-8", errors="replace")
+        for line in (r.stdout or "").splitlines():
+            print("   " + line.strip())
+        if r.returncode != 0:
+            print("   !! 补丁应用返回 %s：%s"
+                  % (r.returncode, (r.stderr or "")[-300:]))
+    except Exception as e:
+        print("   !! 调用补丁脚本失败：%s" % e)
 
 
 def rewrite_users_pth(sp):

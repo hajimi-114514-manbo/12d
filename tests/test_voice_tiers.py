@@ -89,9 +89,25 @@ if os.path.isfile(B):
     chk('"torch"' in s and "nvidia" in s, "脚本排除 torch 系")
     chk("voices" in s and "gpt_weights" in s, "脚本排除音色")
     chk("users.pth" in s, "脚本重写 users.pth（关键）")
-    for kw in ("onnxruntime", "BigVGAN", "_available_language_modules",
-               "is_g2pw"):
-        chk(kw in s, "脚本含引擎补丁：%s" % kw)
+    # 引擎补丁以**文件**形式存在仓库里（引擎源码在仓库外，被 .gitignore
+    # 排除，只能靠补丁复现）。脚本只负责 apply，不负责「知道要改什么」。
+    pdir = os.path.join(ROOT, "tools", "voice_engine_patches")
+    chk(os.path.isdir(pdir), "补丁目录存在")
+    for tag in ("onnxruntime-lazy", "language-filter", "is-g2pw-env",
+                "bigvgan-lazy"):
+        f = os.path.join(pdir, tag + ".py")
+        chk(os.path.isfile(f), "补丁文件存在：%s.py" % tag)
+        if os.path.isfile(f):
+            chk(os.path.getsize(f) > 500, "%s.py 非空（%d 字节）"
+                % (tag, os.path.getsize(f)))
+    ap = os.path.join(ROOT, "tools", "apply_voice_patches.py")
+    chk(os.path.isfile(ap), "补丁应用脚本存在")
+    if os.path.isfile(ap):
+        a = io.open(ap, encoding="utf-8").read()
+        for kw in ("_get_onnxruntime", "_available_language_modules",
+                   "_import_bigvgan", "MUPPET_VOICE_PATCH"):
+            chk(kw in a, "apply 脚本登记了补丁：%s" % kw)
+    chk("apply_voice_patches.py" in s, "构建脚本调用补丁应用脚本")
     for tier in TIERS:
         chk('"%s"' % tier in s, "脚本支持档位：%s" % tier)
 
