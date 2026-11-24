@@ -7,6 +7,111 @@
 
 ---
 
+## 未发布（2026-11-24）参考音频加语种分类 + 收进要乐奈 174 段日文素材
+
+### 为什么必须加语种
+
+之前所有参考音频都是中文台词，`voice_refs` 里**没有语种概念**。
+现在加入日文素材（要乐奈的游戏干声），必须分开 —— 因为 GPT-SoVITS 的
+`/tts` 里 **`prompt_lang` 必须和参考音频的语种一致**（引擎 `assert
+prompt_lang in configs.languages`，语种错了韵律对不齐）。
+
+存法：`refs/<角色>/<语种>/<说话内容>.wav`
+老结构 `refs/<角色>/<内容>.wav` 视为 `zh`（向后兼容，不用改名）。
+
+为什么用子目录而不是文件名前缀：
+
+- 文件名要保持「说话内容」（`prompt_text` 从它推导），再加前缀会污染
+- 子目录能整批移动/删除，操作直观
+- 老文件不用改名，不破坏已有数据
+
+### `voice_refs` 改动
+
+- `LANGS` / `LANG_DEFAULT` / `LANG_NAMES` / `_norm_lang`（认
+  `ja`/`jp`/`日文`/`japanese`…）
+- `_role_dir(role, root, lang)` + `_lang_dirs(role)`
+- `refs_for(role, root, lang)` —— 每条带 `lang` 字段，可按语种过滤
+- `roles()` 改成**递归下语种子目录**（只看一层会把 `refs/<角色>/ja/` 漏掉，
+  踩过：导入要乐奈后她压根不出现在列表里）
+- `lang_of_path(path)` —— 从路径反查语种（合成时调用方只有路径）
+- `refs_by_lang()` —— 按语种分组统计
+- `stats()` 走 `refs_for`（含语种），加 `langs` 分布
+
+### `voice_synth` 改动（关键）
+
+`prompt_lang` 之前的取值是 `prompt_lang or lang`（`lang` = **台词语种**）。
+但参考音频的语种和台词语种是两回事 —— 中文台词配日文参考时，
+`prompt_lang` 必须是 `ja`。改成：
+
+```python
+prompt_lang or ref_lang or lang
+```
+
+优先级：显式传 > 参考音频语种 > 台词语种（兜底）。
+`info` 里同时报 `text_lang` / `prompt_lang` / `ref_lang`，便于排查。
+
+### DSH 层
+
+- `voice.refs` 支持 `args.lang`（`zh`/`ja`）过滤，返回里带 `by_lang` 分组
+- `voice.refs.sel` / `voice.refs.pick` 的返回带 `lang`
+
+### 收进要乐奈的日文素材
+
+来源 `D:\BaiduNetdiskDownload\MyGO!!!!!游戏干声素材\Rana干声素材.zip`
+（89.7MB，里面是 `rana.WAV` 16.7 分钟 + `TEENAGE RIOT人声.WAV` 2.3 分钟）
+
+处理链：
+
+1. **文件名是 GBK 编码** —— zip 里第二条显示成 `TEENAGE RIOT╚╦╔∙.WAV`，
+   用 `cp437 -> gbk` 还原成 `TEENAGE RIOT人声.WAV`（这也是那个「格式问题」
+   提示的来源）
+2. 切片：用引擎的 `slicer2.Slicer`，但**它的 `main()` 有 bug** ——
+   `librosa.load(mono=False)` 返回 2D，切出的 chunk 是 list 而非 ndarray，
+   直接 `chunk.shape` 会 AttributeError。不改引擎（第三方代码，改了升级会丢），
+   自己调 `Slicer` 类 + 处理 numpy 转换。
+   218 片 -> 过滤 3~10 秒 -> **174 片**
+3. **声纹一致性验证**（ERes2NetV2）：174 片与中心的相似度
+   最低 **0.705** / 中位 **0.929** / 最高 **0.966**，**低于 0.55 的 0 片**
+   -> 确认全是同一个人，可以整批归要乐奈
+4. **语种确认**：抽样 20 片转写，**100% 判为 ja**（置信度 0.84~0.99），
+   内容与要乐奈人设吻合（`猫は気まぐれ` / `ライブやる` / `ともり`）
+5. 全量转写 174 片（指定日文），**0 片转写为空** -> 都能按内容命名
+6. 导入 `refs/要乐奈/ja/`，文件名 = 日文内容
+
+要乐奈现在 **174 段日文参考，全部 `prompt_ok=True`**。
+
+### 验证
+
+22 套测试全过（`test_voice_refs` 新增语种各分支 + `roles` 递归 +
+`lang_of_path` + `refs_by_lang` + `stats.langs`）；模块导入 57/57；
+启动烟测通过。
+
+**端到端真机**：
+
+| 场景 | text_lang | prompt_lang | 结果 |
+|---|---|---|---|
+| 日文台词 + 日文参考 | ja | **ja** | 合成 1.94s，无降级警告 |
+| **中文台词 + 日文参考** | zh | **ja** | 合成 1.46s，**跨语种可用** |
+
+显式传 `prompt_lang` 能覆盖。
+
+### 踩坑备忘
+
+- `slicer2.py` 的 `main()` 有 numpy 转换 bug，用它的 `Slicer` 类绕开
+- `Slicer.slice()` 返回的是 **[ndarray, start, end] 三元组**，不是 ndarray
+  （直接 `np.asarray` 得到 `dtype=object`，`sf.write` 报错）
+- zip 里的中文文件名是 GBK，要 `cp437 -> gbk` 还原
+- `roles()` 必须递归语种子目录，否则 `refs/<角色>/ja/` 结构整个人消失
+
+### 未做
+
+- 同目录还有 Anon/Soyo/Taki/Tomori 四个角色的素材包，但都是
+  `.qkdownloading` 未下载完（180/190/176/174 MB）
+- `TEENAGE RIOT人声.WAV` 是歌曲，不适合当参考音频，未纳入
+- 参考音频的语种还没显示在 UI（`voice_refs_ui` 仍按角色平铺）
+
+---
+
 ## 未发布（2026-11-24）时间轴语音轨：默认跟台词，可解锁为独立
 
 ### 之前只有「台词表的语音列」
