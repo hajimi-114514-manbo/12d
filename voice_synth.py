@@ -134,6 +134,14 @@ def synth_line(proj_dir, act, index, who, text, host=None, port=None,
     # 参考音频：按**角色**从参考音频库里挑一段（voice_refs）。
     # 为什么不能一律用引擎的 ref.wav —— 那是别的角色的声音，拿它克隆会串音色。
     ref, ref_note = _pick_ref_for(role=ref_role, name=ref_name)
+    # 参考音频的语种（决定 prompt_lang，与 text_lang 是两回事）
+    ref_lang = ""
+    if ref:
+        try:
+            import voice_refs as VR2
+            ref_lang = VR2.lang_of_path(ref)
+        except Exception:
+            ref_lang = ""
     if not ref:
         return False, ("找不到参考音频 —— 合成必须有参考音频。"
                        + (ref_note or "请检查语音引擎安装是否完整")), None
@@ -156,7 +164,10 @@ def synth_line(proj_dir, act, index, who, text, host=None, port=None,
         "text": text,
         "text_lang": lang,
         "ref_audio_path": ref,
-        "prompt_lang": prompt_lang or lang,
+        # prompt_lang 必须和**参考音频**的语种一致（引擎 assert 它属于
+        # 支持的语种；语种错了韵律对不齐）。所以优先级是：
+        #   显式传入 > 参考音频的语种 > 台词语种（兜底）
+        "prompt_lang": prompt_lang or ref_lang or lang,
         # 空 = 引擎降级 naive_infer（吞字风险）。能填就一定要填。
         "prompt_text": pt,
         "top_k": 15, "top_p": 1, "temperature": 1,
@@ -193,7 +204,9 @@ def synth_line(proj_dir, act, index, who, text, host=None, port=None,
     dur = _wav_duration(raw)
     rel = os.path.relpath(path, str(proj_dir)).replace("\\", "/")
     info = {"path": rel, "dur": round(dur, 3), "file": path,
-            "prompt_text": pt, "prompt_text_ok": pt_ok}
+            "prompt_text": pt, "prompt_text_ok": pt_ok,
+            "text_lang": lang, "prompt_lang": prompt_lang or ref_lang or lang,
+            "ref_lang": ref_lang}
     msg = "已合成 %.2fs" % dur
     if not pt_ok:
         # 降级要明说 —— 用户听出「口齿不清」时得知道是这个原因

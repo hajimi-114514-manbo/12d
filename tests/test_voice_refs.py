@@ -218,6 +218,14 @@ chk(VPT2 == os.path.splitext(os.path.basename(VP2))[0],
     "文本就是文件名（去掉扩展名）")
 
 print()
+print("== synth_line 的 prompt_lang 跟参考音频语种")
+_src2 = io.open(os.path.join(ROOT, "voice_synth.py"), encoding="utf-8").read()
+chk("ref_lang" in _src2, "synth_line 取参考音频的语种")
+chk("prompt_lang or ref_lang or lang" in _src2 or
+    "prompt_lang or ref_lang" in _src2,
+    "**prompt_lang 优先用 ref_lang**（不是台词语种）")
+
+print()
 print("== synth_line 把 prompt_text 传下去")
 import voice_synth as VS
 _src = io.open(os.path.join(ROOT, "voice_synth.py"), encoding="utf-8").read()
@@ -226,6 +234,50 @@ chk("VR.prompt_of(ref)" in _src, "默认从参考音频推导")
 chk('"prompt_text": pt,' in _src, "请求体用 pt 而不是空串")
 chk("prompt_text_ok" in _src, "info 里带 prompt_text_ok")
 chk("降级" in _src or "naive" in _src, "降级时有提示文案")
+
+print()
+print("== 语种（refs/<角色>/<语种>/ 结构）")
+chk(VR._norm_lang("ja") == "ja", "ja 原样")
+chk(VR._norm_lang("日文") == "ja", "日文 -> ja")
+chk(VR._norm_lang("japanese") == "ja", "japanese -> ja")
+chk(VR._norm_lang("jp") == "ja", "jp -> ja")
+chk(VR._norm_lang("中文") == "zh", "中文 -> zh")
+chk(VR._norm_lang("") == "zh", "空 -> 默认 zh")
+chk(VR._norm_lang("乱码") == "zh", "认不出 -> 默认 zh")
+
+# 造一个带语种子目录的角色
+_lr = os.path.join(TMP, "refs", "双语角色")
+os.makedirs(os.path.join(_lr, "zh"), exist_ok=True)
+os.makedirs(os.path.join(_lr, "ja"), exist_ok=True)
+make_wav(os.path.join(_lr, "zh", "你好.wav"), dur=3.5)
+make_wav(os.path.join(_lr, "ja", "こんにちは.wav"), dur=3.5)
+
+_all = VR.refs_for("双语角色")
+chk(len(_all) == 2, "两个语种都扫到：%d" % len(_all))
+chk({x["lang"] for x in _all} == {"zh", "ja"}, "每条带 lang 字段")
+chk(len(VR.refs_for("双语角色", lang="ja")) == 1, "lang=ja 只返回日文")
+chk(len(VR.refs_for("双语角色", lang="zh")) == 1, "lang=zh 只返回中文")
+chk("双语角色" in VR.roles(),
+    "**roles() 会往下钻语种子目录**（踩过：只看一层会漏掉）")
+
+# lang_of_path
+chk(VR.lang_of_path(r"C:\x\refs\a\ja\b.wav") == "ja", "路径含 ja -> ja")
+chk(VR.lang_of_path(r"C:\x\refs\a\b.wav") == "zh", "老结构 -> zh")
+chk(VR.lang_of_path(r"C:\x\ref.wav") == "zh", "引擎 ref.wav -> zh")
+
+# refs_by_lang 分组
+_by = VR.refs_by_lang()
+chk(isinstance(_by, dict), "refs_by_lang 返回 dict")
+if "ja" in _by:
+    chk(_by["ja"].get("双语角色", 0) >= 1, "ja 分组里有双语角色")
+
+# stats 带语种分布
+_st = VR.stats()
+chk("langs" in _st, "stats 返回 langs 分布")
+# 此时 TMP 里：千早爱音 1 段(zh) + 双语角色 2 段(zh+ja) = 3
+chk(_st["count"] >= 3, "stats 计数包含语种目录里的（%d）" % _st["count"])
+chk(_st["langs"].get("ja", 0) >= 1,
+    "**stats 的 langs 统计到 ja**（%s）" % _st["langs"])
 
 print()
 print("== require_prompt：DSH 联动必须有 prompt_text，不能静默降级")

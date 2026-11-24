@@ -169,20 +169,27 @@ def _voice_refs(_wb, args):
 
     args:
       role: 只看某个角色（留空列全部）
+      lang: 只看某语种（zh / ja；留空列全部）
     """
     VR = _refs_module()
     role = str(args.get("role") or "").strip()
+    lang = str(args.get("lang") or "").strip()
     sel = VR.selections()
     if role:
-        items = [{"role": role, "refs": VR.refs_for(role),
+        items = [{"role": role, "refs": VR.refs_for(role, lang=lang or None),
                   "selected": sel.get(role, "")}]
     else:
-        items = [{"role": r, "refs": VR.refs_for(r),
+        items = [{"role": r, "refs": VR.refs_for(r, lang=lang or None),
                   "selected": sel.get(r, "")} for r in VR.roles()]
-    return True, "共 %d 个角色" % len(items), {
+        # 过滤后没素材的角色不列（避免一堆空条目）
+        items = [it for it in items if it["refs"]]
+    return True, "共 %d 个角色%s" % (
+        len(items), ("（只列 %s）" % lang) if lang else ""), {
         "roles": items,
         "selected": sel,
         "stats": VR.stats(),
+        # 语种分组 —— AI 挑素材前先看有哪些语种
+        "by_lang": VR.refs_by_lang(),
     }
 
 
@@ -259,6 +266,8 @@ def _voice_refs_pick(_wb, args):
         "prompt_text": pt,
         "prompt_ok": bool(pt),
         "usable": bool(pt),
+        # 语种 —— 合成时 prompt_lang 用它（不是台词语种）
+        "lang": VR.lang_of_path(p),
     }
 
 
@@ -290,6 +299,8 @@ def _voice_refs_sel(_wb, args):
         info["pick"] = VR.pick_ref(role)
         info["prompt_text"] = pt
         info["prompt_ok"] = True
+        # 选定后把语种也报出来 —— 合成时 prompt_lang 会用它
+        info["lang"] = VR.lang_of_path(info.get("path", ""))
     return ok, msg, info
 
 

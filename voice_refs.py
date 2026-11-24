@@ -165,11 +165,61 @@ def refs_roots(root=None):
     return out
 
 
-def _role_dir(role, root=None):
+# ---- 语种 --------------------------------------------------------------
+# 参考音频的语种决定 prompt_lang（引擎要求两者一致，否则韵律对不齐）。
+# 存法：refs/<角色>/<语种>/<说话内容>.wav
+# 老结构 refs/<角色>/<说话内容>.wav 视为 zh（向后兼容，不用改名）。
+LANGS = ("zh", "ja")
+LANG_DEFAULT = "zh"
+LANG_NAMES = {"zh": "中文", "ja": "日文", "en": "英文"}
+
+
+def _norm_lang(lang):
+    """规范化语种标记。认不出的一律当默认（中文）。"""
+    s = str(lang or "").strip().lower()
+    if not s:
+        return LANG_DEFAULT
+    alias = {"chinese": "zh", "cn": "zh", "中文": "zh", "zh-cn": "zh",
+             "japanese": "ja", "jp": "ja", "日文": "ja", "日语": "ja",
+             "ja-jp": "ja", "english": "en", "en-us": "en", "英文": "en"}
+    s = alias.get(s, s)
+    return s if s in LANGS or s == "en" else LANG_DEFAULT
+
+
+def _role_dir(role, root=None, lang=""):
+    """角色目录。传 lang 时返回 refs/<角色>/<语种>/。"""
     d = refs_root(root)
     if not d:
         return ""
-    return os.path.join(d, _clean(role))
+    base = os.path.join(d, _clean(role))
+    if lang:
+        return os.path.join(base, _norm_lang(lang))
+    return base
+
+
+def _lang_dirs(role, root=None):
+    """该角色下所有「语种目录」-> [(lang, abs_dir)]。
+
+    老结构（wav 直接躺在角色目录下）算 zh。
+    """
+    d = _role_dir(role, root)
+    out = []
+    if not d or not os.path.isdir(d):
+        return out
+    try:
+        names = os.listdir(d)
+    except Exception:
+        return []
+    # 老结构：角色目录下直接有 .wav
+    if any(n.lower().endswith(".wav") for n in names):
+        out.append((LANG_DEFAULT, d))
+    for n in sorted(names):
+        p = os.path.join(d, n)
+        if not os.path.isdir(p):
+            continue
+        if n.lower() in LANGS or n.lower() == "en":
+            out.append((n.lower(), p))
+    return out
 
 
 def _wav_info(path):
@@ -230,64 +280,102 @@ def _wav_info(path):
 
 
 def roles(root=None):
-    """有参考音频的角色名列表（所有根目录合并）。"""
+    """有参考音频的角色名列表（所有根目录合并）。
+
+    **要递归下语种子目录**：refs/<角色>/ja/*.wav 这种结构下，
+    角色目录本身没有 wav —— 只看一层会把它们漏掉（踩过：
+    导入要乐奈的日文素材后，她压根不出现在列表里）。
+    """
     out = []
     for d in refs_roots(root):
         try:
             for n in sorted(os.listdir(d)):
                 p = os.path.join(d, n)
-                if os.path.isdir(p) and n not in out:
-                    wavs = [f for f in os.listdir(p)
-                            if f.lower().endswith(".wav")]
-                    if wavs:
-                        out.append(n)
+                if not os.path.isdir(p) or n in out:
+                    continue
+                if _has_any_wav(p, depth=2):
+                    out.append(n)
         except Exception:
             pass
     return out
 
 
-def refs_for(role, root=None):
-    """某角色的参考音频列表（所有根目录合并）。
+def _has_any_wav(d, depth=1):
+    """目录（含下 depth 层子目录）里有没有 wav。"""
+    try:
+        for n in os.listdir(d):
+            p = os.path.join(d, n)
+            if os.path.isfile(p) and n.lower().endswith(".wav"):
+                return True
+            if depth > 1 and os.path.isdir(p) and _has_any_wav(p, depth - 1):
+                return True
+    except Exception:
+        pass
+    return False
 
-    返回 [{"name","path","dur","size","sr","ch"}]，按名字排序。
+
+def refs_for(role, root=None, lang=None):
+    """某角色的参考音频列表（所有根目录 + 所有语种合并）。
+
+    lang 给定时只返回该语种（"ja" 等）；不给返回全部，每条带 lang 字段。
+
+    返回 [{"name","path","dur","size","sr","ch","lang","prompt_text",
+           "prompt_ok"}]，按语种 + 名字排序。
     """
     out = []
     seen = set()
+    want = _norm_lang(lang) if lang else ""
     for base in _all_bases(root):
-        d = os.path.join(base, "refs", _clean(role))
-        if not os.path.isdir(d):
+        role_dir = os.path.join(base, "refs", _clean(role))
+        if not os.path.isdir(role_dir):
             continue
+        # 该根下的语种目录（老结构算 zh）
+        pairs = []
         try:
-            names = sorted(os.listdir(d))
+            names = os.listdir(role_dir)
         except Exception:
             continue
-        for n in names:
-            if not n.lower().endswith(".wav"):
+        if any(n.lower().endswith(".wav") for n in names):
+            pairs.append((LANG_DEFAULT, role_dir))
+        for n in sorted(names):
+            p = os.path.join(role_dir, n)
+            if os.path.isdir(p) and n.lower() in LANGS:
+                pairs.append((n.lower(), p))
+        for lg, d in pairs:
+            if want and lg != want:
                 continue
-            p = os.path.join(d, n)
-            if p in seen:
-                continue
-            seen.add(p)
-            # 按**内容**去重，不按路径 —— 同一段素材可能同时存在于
-            # 引擎目录和用户数据目录（迁移期、或用户手动拷了一份）。
-            # 按路径去重会把它算两遍（统计翻倍、列表出现两条一样的）。
             try:
-                fp = fingerprint(p)
+                files = sorted(os.listdir(d))
             except Exception:
-                fp = p
-            key = (n, fp) if fp else p
-            if key in seen:
                 continue
-            seen.add(key)
-            info = _wav_info(p) or {"dur": 0.0, "sr": 0, "ch": 0, "bits": 0}
-            e = {"name": n, "path": p, "dur": round(info["dur"], 3),
-                 "size": os.path.getsize(p), "sr": info["sr"],
-                 "ch": info["ch"], "bits": info["bits"]}
-            # prompt_text 一起给出来 —— DSH 联动要求「必须有」，
-            # AI 得能从列表里看出哪段配不出文本（不能选那些）
-            e["prompt_text"] = prompt_of(p)
-            e["prompt_ok"] = bool(e["prompt_text"])
-            out.append(e)
+            for n in files:
+                if not n.lower().endswith(".wav"):
+                    continue
+                p = os.path.join(d, n)
+                if p in seen:
+                    continue
+                seen.add(p)
+                # 按**内容**去重，不按路径 —— 同一段素材可能同时存在于
+                # 引擎目录和用户数据目录（迁移期、或用户手动拷了一份）。
+                try:
+                    fp = fingerprint(p)
+                except Exception:
+                    fp = p
+                key = (n, fp) if fp else p
+                if key in seen:
+                    continue
+                seen.add(key)
+                info = _wav_info(p) or {"dur": 0.0, "sr": 0, "ch": 0,
+                                        "bits": 0}
+                e = {"name": n, "path": p, "dur": round(info["dur"], 3),
+                     "size": os.path.getsize(p), "sr": info["sr"],
+                     "ch": info["ch"], "bits": info["bits"], "lang": lg}
+                # prompt_text 一起给出来 —— DSH 联动要求「必须有」，
+                # AI 得能从列表里看出哪段配不出文本（不能选那些）
+                e["prompt_text"] = prompt_of(p)
+                e["prompt_ok"] = bool(e["prompt_text"])
+                out.append(e)
+    out.sort(key=lambda x: (x.get("lang", ""), x.get("name", "")))
     return out
 
 
@@ -539,16 +627,18 @@ def fallback_ref(root=None):
 
 
 def stats(root=None):
-    """统计。"""
+    """统计（含语种分布）。"""
     d = refs_root(root)
     out = {"root": d or "", "roots": refs_roots(root),
-           "roles": 0, "count": 0, "dur": 0.0, "size": 0}
+           "roles": 0, "count": 0, "dur": 0.0, "size": 0, "langs": {}}
     for role in roles(root):
         out["roles"] += 1
         for r in refs_for(role, root):
             out["count"] += 1
             out["dur"] += r["dur"]
             out["size"] += r["size"]
+            lg = r.get("lang") or LANG_DEFAULT
+            out["langs"][lg] = out["langs"].get(lg, 0) + 1
     out["dur"] = round(out["dur"], 2)
     return out
 
@@ -768,3 +858,38 @@ def require_prompt(role, name="", root=None, override=""):
             "或在 args.prompt_text 里显式给出「参考音频里说的那句话」。"
             % os.path.basename(p))
     return True, p, pt, "ok"
+
+
+def lang_of_path(path):
+    """从参考音频路径反查语种。
+
+    判据：路径里有没有 refs/<角色>/<语种>/ 这一层。
+    老结构（wav 直接躺在角色目录下）算 zh。
+
+    为什么要这个：合成时 prompt_lang 必须和**参考音频**的语种一致
+    （不是台词的语种）。调用方通常只拿到路径，得能反查出来。
+    """
+    p = str(path or "").replace("\\", "/")
+    parts = [x for x in p.split("/") if x]
+    # 从后往前找语种目录名（refs/<角色>/<语种>/<文件>）
+    for i in range(len(parts) - 2, -1, -1):
+        low = parts[i].lower()
+        if low in LANGS or low == "en":
+            # 该语种目录下必须还有文件（即它不是文件名本身）
+            if i < len(parts) - 1:
+                return low
+    return LANG_DEFAULT
+
+
+def refs_by_lang(root=None):
+    """按语种分组统计 {"zh": [...], "ja": [...]}（每项是角色->段数）。
+
+    给 UI / DSH 看「库里到底有哪些语种的素材」。
+    """
+    out = {}
+    for role in roles(root):
+        for r in refs_for(role, root):
+            lg = r.get("lang") or LANG_DEFAULT
+            out.setdefault(lg, {})
+            out[lg][role] = out[lg].get(role, 0) + 1
+    return out
