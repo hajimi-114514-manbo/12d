@@ -7,6 +7,98 @@
 
 ---
 
+## 未发布（2026-11-24）时间轴语音轨：默认跟台词，可解锁为独立
+
+### 之前只有「台词表的语音列」
+
+它能回答「这句配音了吗」，但不能回答「这段语音在时间轴的哪个位置、
+怎么和画面对齐、能不能拖动」。本轮补上真正的时间轴语音轨（用户选 C 方案）。
+
+### 设计核心：语音轨是 `dialogue` 的**投影**，不写进 `proj["tracks"]`
+
+为什么不存进 tracks：
+
+- 存了就有两份真相（`dialogue` 的 `t` 和 clip 的 `start`），必然不一致
+- 默认要「跟台词走」，存下来就得每次改台词都同步更新 clip，容易漏
+- 删除台词时还要记得删 clip，多一处能出错的地方
+
+代价：语音轨是**只读投影**，编辑动作翻译成对 `dialogue` 的修改
+（移动 → 改 `dialogue[i].t` 或 `voice["t"]`）。这是有意的：
+语音的真相永远在 `dialogue` 里，只有一处。
+
+### 两种状态
+
+| 状态 | 语义 |
+|---|---|
+| `detach=False`（默认） | 起点 = 台词行的 `t`，实时算。拖语音 clip 等于拖台词，永远对齐 |
+| `detach=True` | 语音有自己的 `t`，可偏离台词。用于「旁白提前」「台词前奏」。此时改台词 `t` 不再影响语音 |
+
+### 新增 API（`video_model`）
+
+```
+voice_clips(proj, aid)              -> [clip...]  投影（按起点排序）
+voice_track(proj, aid)              -> 轨道描述 | None
+voice_set_detach(proj, i, detach, t) -> (ok, msg, data)
+voice_move(proj, i, new_t, aid)     -> (ok, msg, data)  按 detach 分流
+VOICE_TRACK_ID = "vc1"
+```
+
+clip id 用 `vc:<台词下标>`（稳定，拖动/选中都靠它）。
+
+### `sanitize` 的退化规则
+
+```
+detach=True 但没给 t   -> 丢弃 detach（否则语音无处安放）
+detach 是脏值         -> 当 False（保守：保持跟台词）
+detach=True + 负 t    -> 丢弃 detach
+```
+
+即：**只有显式 `t >= 0` 才认脱离**，其余一律退回默认行为。
+
+### 时间轴接入（`clip_timeline`）
+
+- `CLIP_COLORS` 加 `"voice"` 青蓝（与音频轨的绿区分）
+- `_tracks()` 末尾追加语音轨投影（不写进 `proj["tracks"]`）
+- `voice_clips_for_render()` 把语义数据转成渲染器认识的 `source.kind` + `wave`
+- `_voice_wave()` 读 wav 包络（归一化 0..1），带 `(path, mtime)` 缓存
+- 拖动分流：`_move_one()` 认 `vc:` 前缀 → `VM.voice_move`；其余走 `move_clip`
+- 成组移动时把语音 clip 摘出来单独处理（它不在 `tracks` 里，`move_clips` 找不到）
+- 面板 API：`set_proj_dir` / `set_voice_track_visible` / `has_voice` /
+  `selected_voice_index` / `voice_detach_selected`
+- 工作台在构造和每次 `self.proj_dir` 赋值时同步给时间轴（共 6 处）
+
+### 验证
+
+新增 `tests/test_voice_track.py`，共 **22 套测试全过**；模块导入 57/57；
+启动烟测通过。覆盖：
+
+- 投影不进 tracks（tracks 里没有 `kind=voice`）
+- 默认跟台词：改台词 `t` → 语音跟着走
+- 脱离后：改台词 `t` 不再影响语音
+- 绑回：清掉 `detach`/`t` 字段，重新跟随
+- 拖动分流：未脱离拖=改台词；脱离后=只改语音
+- `sanitize` 四种边界
+- 时间轴：语音轨出现/在最下/可隐藏/无语音时不出现空轨
+- 选中判定（`vc:0` → 0；`v1:1` → -1）+ 面板脱离接口
+- 渲染适配 + 波形读取 + 缓存命中
+
+**波形渲染已实际验证**：造 3 段真 wav（带起伏）→ offscreen 渲染成
+1100×260 PNG → 统计到 **1616 个语音色（`#2f8f9d`）像素**，3 段 clip 各读出
+512 点波形。
+
+### 测试踩的坑
+
+`voice_clips` 按起点**排序**，改了某条的 `t` 之后下标会变 —— 断言要按
+`src_index` 找，不能按下标找。一开始两条断言挂在这上面。
+
+### 未做（留给后续）
+
+- 语音 clip 的左右边缘裁剪（trim）—— 现在是拖动移动，不改时长
+- 双击语音 clip 跳到台词行（工作台的 `clip_activated` 还没接语音）
+- 语音轨的隐藏/静音在导出时的语义
+
+---
+
 ## 未发布（2026-11-24）DSH 联动强制要求 prompt_text + 千早爱音补样本
 
 ### 一、DSH 联动必须有 prompt_text（不能静默降级）
