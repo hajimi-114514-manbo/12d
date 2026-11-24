@@ -1466,6 +1466,71 @@ def paste_layer(canvas, img, lay):
     return canvas
 
 
+def _lip_seq_for(proj, clip, aid=None):
+    """figure clip 的口型开口度序列 -> (list[float] | None, gain)。
+
+    v3.6.4。返回的序列**按 clip 内相对时间**排列（第 k 个 = clip 第 k 帧），
+    正好对上 PuppetSource.frame() 传的 `t - clip.start + src_in` 网格。
+
+    缓存策略：按 (clip id, 语音 id, clip 起点, 时长, 增益, fps) 记一份，
+    同一 clip 逐帧调用只算一次 —— 包络计算要读整段 wav，逐帧重算是灾难。
+
+    没绑口型 / 语音缺失 / 素材读不了 -> (None, 1.0)，调用方保持「不控嘴」。
+    """
+    try:
+        import video_model as VM
+        import lip_sync as LS
+    except Exception:
+        return None, 1.0
+    lp = VM._sanitize_lip((clip or {}).get("lip"))
+    if not lp:
+        return None, 1.0
+    gain = float(lp.get("gain") or 1.0)
+    try:
+        fps = float((proj or {}).get("fps") or 30.0)
+    except (TypeError, ValueError):
+        fps = 30.0
+    if fps <= 0:
+        fps = 30.0
+    cid = str((clip or {}).get("id") or "")
+    # 片段内相对时间 -> 音频内时刻的偏移：
+    # clip 第 0 帧对应工程时间 clip.start，而语音在工程时间 vc.t 开始，
+    # 所以第 0 帧对应音频的 (clip.start - vc.t) 处；再扣掉 clip 自己的
+    # src_in（源内裁剪起点）。
+    start = float((clip or {}).get("start") or 0.0)
+    dur = float((clip or {}).get("dur") or 0.0)
+    if dur <= 0:
+        return None, 1.0
+    vc = VM.voice_clip_by_id(proj, lp.get("voice"), aid)
+    if vc is None:
+        return None, 1.0
+    v_t = float(vc.get("t") or 0.0)
+    src_in = float((clip or {}).get("src_in") or 0.0)
+    # offset = 「片段第 0 帧对应音频里的哪一刻」：
+    #   立绘 0.5s 入场、语音 1.0s 才开始 -> 第 0 帧对应音频 -0.5s（前 0.5s 静音）
+    #   立绘 0s 入场、语音已经在 0s 前说过一半（src_in>0）-> 从音频 src_in 处取
+    offset = (start - v_t) + src_in
+
+    key = (cid, lp.get("voice"), round(start, 3), round(dur, 3),
+           round(gain, 3), round(fps, 3), round(src_in, 3),
+           str(vc.get("path") or ""))
+    cache = _LIP_SEQ_CACHE
+    hit = cache.get(key)
+    if hit is not None:
+        return hit[0], hit[1]
+    env = LS.envelope(vc.get("path"), "")
+    if env is None:
+        return None, 1.0
+    vals = env.bake(fps, dur, offset=offset)
+    if len(cache) > 64:                 # 简单防膨胀（导出整片也就几十条）
+        cache.clear()
+    cache[key] = (vals, gain)
+    return vals, gain
+
+
+_LIP_SEQ_CACHE = {}
+
+
 def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                   fx=True):
     """t 时刻一帧 RGB uint8（v3.4.0 起：**自底向上逐可见视频轨 RGBA 叠加**，
@@ -1541,6 +1606,14 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                 setp = getattr(src, "set_preset", None)
                 if callable(setp):
                     setp(clip.get("motion", ""), clip.get("expression", ""))
+                # v3.6.4 口型：把「本 clip 的开口度序列」挂到源上。
+                # 序列在 _lip_seq_for() 里按工程算一次并缓存（同一 clip
+                # 逐帧调用只算一遍）；没有绑定时返回 None，源会保持
+                # 「不控嘴」，模型自己按动作/物理走。
+                if hasattr(src, "_lip_vals"):
+                    _lip, _gain = _lip_seq_for(proj, clip, aid)
+                    src._lip_vals = _lip
+                    src._lip_gain = _gain
                 # 同旧路径：src_in 可能缺失，不能直接下标（否则 KeyError
                 # 被外层吞掉 -> 该轨静默跳过 -> 合成全黑）
                 img = src.frame(max(0.0, t - clip["start"]

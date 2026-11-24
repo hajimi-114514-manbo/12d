@@ -539,7 +539,60 @@ if HAS_WEBENGINE:
             self._apply_bg(proj, t)
             self._apply_subtitle(proj, t)
             self._apply_filter(proj, t)
+            self._apply_lip(proj, t)
             self._apply_camera(proj, t)      # v3.6.2：镜头动画
+
+        # ---------- v3.6.4：口型匹配 ----------
+        def _apply_lip(self, proj, t):
+            """把每个立绘的口型绑定算成开口度表下发（diff，不重复发）。
+
+            **vals 是「片段内相对时间」的序列**，因为页面的 seek(k, dt)
+            也是从片段起点算 k —— 两边必须同一基准，否则嘴会整体错位。
+            片段起点 = 立绘 clip 的 start（模型就是那一刻加载的）。
+            """
+            with contextlib.suppress(Exception):
+                import video_model as VM
+                import lip_sync as LS
+                aid = getattr(self, "_aid", None)
+                binds = VM.lip_bindings(proj, aid)
+                if not hasattr(self, "_lip_sig"):
+                    self._lip_sig = {}
+                sig_now = {}
+                fps = float((proj or {}).get("fps") or 30.0)
+                figs = {str(c.get("id")): c
+                        for c in VM.figure_clips_at(proj, t)}
+                # 只处理**当前在场**的立绘：不在场的模型页面上也没有，
+                # 发了也白发（还占 diff 表）
+                for cid, lp in binds.items():
+                    fig = figs.get(cid)
+                    if fig is None:
+                        continue
+                    vc = VM.voice_clip_by_id(proj, lp.get("voice"), aid)
+                    if vc is None:
+                        continue
+                    fig_start = float(fig.get("start") or 0.0)
+                    # 语音在片段内的偏移：语音起点 - 立绘起点（可为负，
+                    # 表示这句话在人物入场之前就说了）
+                    off = float(vc.get("t") or 0.0) - fig_start
+                    dur = float(fig.get("dur") or 0.0)
+                    env = LS.envelope(vc.get("path"), "")
+                    if env is None:
+                        continue
+                    vals = env.bake(fps, dur, offset=-off)
+                    sig = (lp.get("voice"), round(off, 3), round(dur, 3),
+                           round(float(lp.get("gain") or 1.0), 3),
+                           len(vals))
+                    sig_now[cid] = sig
+                    if self._lip_sig.get(cid) == sig:
+                        continue                      # 没变，不重发
+                    self._send("setLip", {
+                        "modelId": cid, "vals": vals, "fps": fps,
+                        "gain": float(lp.get("gain") or 1.0)})
+                # 解除：上一轮有、这轮没有的
+                for cid in list(self._lip_sig):
+                    if cid not in sig_now:
+                        self._send("setLip", {"modelId": cid, "vals": []})
+                self._lip_sig = sig_now
 
         # ---------- v3.5.2：三层推送（各自 diff，不重复发）----------
         def _apply_bg(self, proj, t):

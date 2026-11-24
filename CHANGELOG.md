@@ -7,6 +7,133 @@
 
 ---
 
+## 未发布（2026-11-24）口型匹配（lip sync）
+
+### 是什么
+
+语音驱动 Live2D 的嘴：按音频包络逐帧写 `ParamMouthOpenY`，说话时嘴动、
+静音时闭嘴。数据层是 `lip_sync.py`（纯算法，不依赖 Qt/WebEngine），
+渲染在页面侧，导出在 `l2d_pump` / `video_source` 一路打通。
+
+### 为什么自己做，不用运行时那套
+
+WebGAL 运行时**本身有口型**（`setModelMouthY` / `tA`），但两处不能直接用
+（已查证 `templates/webgal_runtime/assets/index-Dcp3ZA1M.js`）：
+
+1. 靠 `AnalyserNode` 实时抓 `<audio>` 频谱（`fftSize=256` +
+   `getByteFrequencyData`），**依赖真的在播音**。导出是离线逐帧合成、
+   根本没有播放，拿不到频谱。
+2. 阈值是「本次播放峰值」的相对量（`OPEN_THRESHOLD = maxAudioLevel*.75`），
+   要先播一遍才知道峰在哪 —— 结果不确定，同一份音频跑两次可能不一样。
+
+导出要的是**确定性**：同一个 t 必须永远画出同一张嘴。所以在 Python 侧
+离线算包络，把 0~1 的开口度直接下发，两边都不碰音频。
+
+### 算法（`lip_sync.py`）
+
+```
+wav -> rms(10ms/跳) -> 50ms 滑动平均 -> (rms/ref)**0.6 -> 0..1
+```
+
+三个决定：
+
+- **不用线性幅度**：`abs` 均值当开口度会让嘴碎抖、看着不像说话。指数
+  0.6 把包络抬起来（1.0 太僵、0.4 长期半张，都试过）。
+- **音节级平滑后再采样**：原始 10ms 包络会让嘴碎抖，50ms 窗平均后按帧率
+  重采样。只平滑不削峰 —— 削峰会把「啊」和「一」抹平，嘴就成了匀速开合。
+- **中日不同基准**：中文元音更开、rms 更高。`REF` zh=0.30 / ja=0.27。
+
+**参数是实测校准的，不是拍脑袋**：拿语料库 40 段真实语音（8457 个 10ms
+窗口）算 rms 分布 -> p50=0.143 / p85=0.205 / p95=0.236 / p99=0.263。
+以 ref=0.30 代入，开口度落在 p50≈0.67 / p85≈0.81 / p99≈0.93，
+**顶格 0%** —— 既不长期大张，也不纹丝不动。
+
+### 数据模型
+
+figure clip 上挂一个字段：
+
+```json
+"lip": {"voice": "vc:0", "gain": 1.0}
+```
+
+- `voice` 指向 `voice_clips()` 的投影 id（`vc:<台词下标>`），不是音频路径。
+  **理由**：语音的真相在 dialogue 里，用户改台词时间/换音色，lip 自动
+  跟着走；记路径的话换音色后立绘还指着旧文件。
+- `gain` 是这句话的开口度倍率（0.3~2.5 钳位），喊叫可以调大。
+- sanitize：只收 `^vc:\d+$`，脏值丢键不丢 clip（防路径注入）。
+
+API：`VM.lip_bindings(proj)` / `VM.voice_clip_by_id(proj, vid)`。
+
+### 渲染侧（`stage_preview.html`）
+
+`_writeMouth()` 两套 API 都试，**这是实打实的坑**（探针实测）：
+
+| | Cubism 2 | Cubism 3+ |
+|---|---|---|
+| 写入方法 | `setParamFloat` | `setParameterValueById` |
+| 参数名 | `PARAM_MOUTH_OPEN_Y` | `ParamMouthOpenY` |
+
+只写 `setParameterValueById("ParamMouthOpenY")` 在 Cubism2 模型上方法
+不存在 -> 抛异常 -> 被 try 吞掉 -> **静默无效**（实测 maxdiff=0）。
+现在先用 `getParamIndex` 确认参数存在再写，写没写上有据可查。
+
+驱动路径两条：
+
+- 导出（手动时钟）：`seek()` 里 `update` 之后、`render` 之前写
+- 实时预览（自动时钟）：低优先级 ticker 回调，每帧末补写
+
+### 修掉的一个既有 bug：`render()` 不确定
+
+`render()` 原来不开手动时钟，模型吃墙上时间 —— **连续抓 6 次同一参数，
+画面尺寸一路 333→332→331→330 地漂**，逐次 maxdiff=255。意味着呼吸/眨眼/
+发丝物理在两次抓图之间推进了，任何像素级验证都无法归因。
+
+现在改为：开手动时钟 -> seek 到固定相位 -> 抓图。同一 state 逐位相同
+（实测 8 次全同）。
+
+### 顺带记录的几个坑（都花过时间）
+
+1. **`slots is not defined`**：宿主页是 `<script type="module">`，
+   `slots`/`vclock`/`app` 都是模块私有。外部 `runJavaScript` 在全局作用域，
+   手写 JS 碰它们一律报错，而 **runJavaScript 会把异常吞成空字符串** ——
+   好几轮诊断因此拿到空结果、白跑。凡是要看内部状态的一律写进页面源码。
+2. **`seek` 同 k 不走步**：循环条件是 `s.k < target`，同一 k 重复请求时
+   `steps=0`，循环体里的 `_applyLip` 从不执行 -> 换了 lip 表画面纹丝不动，
+   但参数读出来又是对的。已在 seek 里加补写支路。
+3. **`update` 会推 `elapsedTime`**：vclock 只接管 `Date.getTime`，管不到
+   `model.elapsedTime`。补写支路必须存下/还原它，否则同一 k 反复请求会
+   一帧帧往前走（实测连续 5 次同参数、画面每次差 255）。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| `tests/test_lip_sync.py`（新增 40 项） | 全过 |
+| 真机渲染：嘴闭 vs 嘴开 | maxdiff=148，差异集中在 8x8 网格的 6 格内（最密格占 47%），**中位 y=27% x=50%（脸部正中）** |
+| 8 个模型全测 | **8/8 有反应**（4 个 maxdiff=255，4 个裁剪框变化） |
+| 导出路径 `render_animated` | maxdiff=148，同 k 逐位一致，逐帧推进画面在变 |
+| 全量回归 | **24/24**（跳过 `test_render_thumb`，既有：会动用户素材库） |
+
+单测覆盖：包络/静音门限/缓存/中日基准/offset 语义/异常输入/lip 字段
+sanitize/路径注入/gain 钳位/round-trip/空工程。
+
+### 已知限制
+
+- 只对 **Live2D 模型**有效。定格图（`l2d_prefetch`）是一张静态缓存图，
+  PNG 立绘没有嘴部参数，这两类调不动。
+- **依赖语音轨**。目前 WebGAL 导出**不会**写出 `vocal:` 指令（见下），
+  所以口型只在工作台预览和本地视频导出里有效。
+
+### 未做（口型的直接依赖）
+
+**语音轨还不会导进 WebGAL**。`webgal_export.py` 里 `vocal` 只出现在建
+目录的 `GAME_SUBDIRS` 和注释里，没有一行生成 `vocal:xxx.wav` 指令，
+也没拷 wav 进包。`voice_synth.py` 文件头写的「导出时把 vocal/ 拷进
+WebGAL 包」是当初的计划（需求池【语音V4】），至今未实现。
+**只对口型没有语音是空中楼阁** —— 这是下一件该做的事。
+
+---
+
 ## 未发布（2026-11-24）修「实时预览要按空格才刷新」
 
 ### 现象

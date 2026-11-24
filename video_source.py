@@ -278,6 +278,10 @@ class PuppetSource(FrameSource):
     _l2d_prefetch = None
     _l2d_animate = False
     _l2d_miss_logged = False
+    # v3.6.4 口型：按帧的开口度序列（None = 不管嘴，交给模型自己的动作）。
+    # 类级兜底，任何构造分支都安全，理由同上。
+    _lip_vals = None
+    _lip_gain = 1.0
 
     def __init__(self, project_dir):
         self.path = str(project_dir)
@@ -594,7 +598,9 @@ class PuppetSource(FrameSource):
             try:
                 import l2d_pump as LPM
                 img = LPM.pump().request(self.path, self._motion_id,
-                                         self._expression_id, t)
+                                         self._expression_id, t,
+                                         lip=self._lip_vals,
+                                         lip_gain=self._lip_gain)
             except Exception:
                 img = None
             if img is not None and getattr(img, "size", 0):

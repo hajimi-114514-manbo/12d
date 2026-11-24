@@ -135,9 +135,96 @@ let figLayer = null;
 let figFilters = { bevel: null, bloom: null, bloomPass: null };
 const slots = new Map();          // modelId -> {queue, model, ref, fit}
 const last = { motion: {}, expression: {}, transform: {} };
+// v3.6.4：口型匹配。每个 modelId 一份「开口度采样表」，
+// 由 Python 侧（lip_sync.py）算好下发，页面只负责按下标取 + 写参数。
+//   lipTable: modelId -> { fps, vals: number[], start: 秒, gain: 倍数 }
+// 为什么下发表格而不是让页面自己算：
+//   运行时的口型靠 AnalyserNode 实时抓 <audio>，导出时是离线逐帧合成、
+//   根本没有播放，拿不到频谱；而且它的阈值是「本次播到的峰值」相对量，
+//   跑两次可能不一样。导出要求确定性，所以包络在 Python 侧离线算完。
+const lipTable = new Map();
+// 当前写进去的开口度（只为幂等/观测，不影响画面）
+const lipNow = new Map();
+// 排障：最后一次「写嘴」的结果（写到哪个参数、走的哪套 API、成没成）
+let lipLastWrite = null;
 // v3.5.2：背景 / 字幕 / 滤镜三层状态（供幂等判断与 __muppetState 观测）
 let bgSprite = null;
 const state = { bgUrl: "", sub: "", filter: "", userPaused: false };
+
+// 口型参数写入。**两套 API 差别是实打实的坑**（探针实测）：
+//   · Cubism 2（coreModel 类是压缩名 "aa"）：只有 `setParamFloat(name, v)`，
+//     **没有** `setParameterValueById`；参数名是全大写 `PARAM_MOUTH_OPEN_Y`。
+//   · Cubism 3+：有 `setParameterValueById`，参数名 `ParamMouthOpenY`。
+// 原来只写 `setParameterValueById("ParamMouthOpenY")`，在 Cubism2 模型上
+// 方法不存在 -> 抛异常 -> 被 try 吞掉 -> 静默无效（实测 maxdiff=0）。
+// 现在两套都试，并且用 getParamIndex 先确认参数真的存在，写不写得上
+// 有据可查（`__muppetProbeModel().mouthWritten`）。
+function _writeMouth(model, open) {
+  const im = model && model.internalModel;
+  const cm = im && im.coreModel;
+  if (!cm) return { ok: false, why: "no_coreModel" };
+  const v = Math.max(0, Math.min(1, Number(open) || 0));
+  const tried = [];
+
+  // ---- Cubism 2：getParamIndex + setParamFloat ----
+  try {
+    if (typeof cm.getParamIndex === "function" &&
+        typeof cm.setParamFloat === "function") {
+      for (const nm of ["PARAM_MOUTH_OPEN_Y", "ParamMouthOpenY"]) {
+        let idx = -1;
+        try { idx = cm.getParamIndex(nm); } catch (e) {}
+        // SDK 用 -1 或 undefined 表示"没这个参数"，别把 -1 当索引
+        if (typeof idx === "number" && idx >= 0) {
+          cm.setParamFloat(nm, v);
+          tried.push(nm + "@" + idx);
+          return { ok: true, via: "setParamFloat", name: nm, idx, tried };
+        }
+        tried.push(nm + ":无");
+      }
+    }
+  } catch (e) { tried.push("c2err:" + ((e && e.message) || e)); }
+
+  // ---- Cubism 3+：setParameterValueById ----
+  try {
+    if (typeof cm.setParameterValueById === "function") {
+      for (const nm of ["ParamMouthOpenY", "PARAM_MOUTH_OPEN_Y"]) {
+        cm.setParameterValueById(nm, v);
+        tried.push(nm + "@byId");
+        return { ok: true, via: "setParameterValueById", name: nm, tried };
+      }
+    }
+  } catch (e) { tried.push("c3err:" + ((e && e.message) || e)); }
+
+  return { ok: false, why: "no_api", tried };
+}
+
+// 按「片段内时刻 t（秒）」取该模型的开口度。表按 delta 秒存，直接算下标。
+// 注意 t 是**片段内相对时间**（seek 的 k 从 0 起、每步 dt），不是工程
+// 绝对时间 —— Python 侧下发的 vals 已经按片段起点对齐过了。
+function _lipAt(modelId, t) {
+  const tb = lipTable.get(modelId);
+  if (!tb || !tb.vals || !tb.vals.length) return null;
+  const fps = Number(tb.fps) || 30;
+  const rel = Number(t) || 0;
+  if (rel < 0) return 0;
+  let i = Math.round(rel * fps);
+  if (i < 0) i = 0;
+  if (i >= tb.vals.length) i = tb.vals.length - 1;
+  const g = Number(tb.gain) || 1;
+  return Math.max(0, Math.min(1, (Number(tb.vals[i]) || 0) * g));
+}
+
+// 把口型应用到某个模型。**必须在 update() 之后调用**：
+// Live2D 的 update 会用动作曲线/物理重算全部参数，先写会被覆盖掉。
+function _applyLip(modelId, t) {
+  const s = slots.get(modelId);
+  if (!s || !s.model) return;
+  const v = _lipAt(modelId, t);
+  if (v === null) return;                 // 没绑口型：完全不动嘴
+  const r = _writeMouth(s.model, v);
+  lipLastWrite = r;                       // 排障：最后一次写到哪个参数上
+  if (r && r.ok) lipNow.set(modelId, v);
+}
 
 // 立绘包围盒：从**模型几何**算，不从像素量。
 // 为什么：早期版本用「首帧 alpha 非零包围盒」定 ROI，结果导出不可复现——
@@ -213,6 +300,38 @@ window.__muppetGrab = function (roi) {
 // 时间只按调用方给的 dt 走；每个 slot 记住自己已走到第几步（head），
 // 第 k 步**永远**是从 0 起走 k 步得到 —— 与请求到达顺序无关，可重现。
 const clock = { manual: false, dt: 1000 / 30 };
+
+// v3.6.4：实时预览下的口型驱动。
+// 自动模式（clock.manual=false）里模型由 Ticker.shared 驱动，update 和
+// render 发生在同一 tick 内 —— 没有地方给我们「update 之后、render 之前」
+// 插一脚。所以用一个**低优先级 ticker 回调**在每帧末尾补写参数：
+// PIXI 的 ticker 回调按优先级从高到低执行，渲染（Application 自己注册的）
+// 在 LOW 之前跑完，此时写参数、再 render 一次即生效。
+// 代价是自动模式下每帧多一次 render；只在真的绑了口型时才挂。
+let lipTicker = null;
+function _lipTick() {
+  if (clock.manual || !lipTable.size) return;      // 手动时钟走 seek 里那条
+  const t = (performance.now() - (lipTickerStart || performance.now())) / 1000;
+  slots.forEach((s, id) => {
+    if (!s.model || !lipTable.has(id)) return;
+    _applyLip(id, t);
+  });
+  if (app) app.render();
+}
+let lipTickerStart = 0;
+function _syncLipTicker() {
+  if (!app || !app.ticker) return;
+  const want = lipTable.size > 0 && !clock.manual;
+  if (want && !lipTicker) {
+    lipTickerStart = performance.now();
+    lipTicker = () => _lipTick();
+    // LOW = 尽量晚，让模型的 update/render 先跑完
+    app.ticker.add(lipTicker, null, window.PIXI.UPDATE_PRIORITY.LOW);
+  } else if (!want && lipTicker) {
+    try { app.ticker.remove(lipTicker); } catch (e) {}
+    lipTicker = null;
+  }
+}
 
 function applyPaused() {
   if (app) app.ticker.paused = state.userPaused || clock.manual;
@@ -315,6 +434,7 @@ const clockAPI = {
       }
     }
     applyPaused();
+    _syncLipTicker();                  // v3.6.4：手动时钟不挂自动口型 ticker
     if (on && app) app.render();      // 手动模式不再有自动出帧，先给一帧
     return { manual: clock.manual, models: slots.size };
   },
@@ -354,7 +474,35 @@ const clockAPI = {
       // 交错推进时各道读到的绝对时刻互相踩（实测三道 k=0 像素 maxdiff 64）。
       // 直接把时钟摆成"本道第 s.k+1 步"应有的值 => 姿态只取决于 k。
       if (vclock.on) vclock.t = (s.k + 1) * dt;
-      m.update(dt); app.render(); steps++;
+      m.update(dt);
+      // v3.6.4：口型必须在 update 之后、render 之前写（否则被动作覆盖）
+      _applyLip(modelId, (s.k + 1) * dt / 1000);
+      app.render(); steps++;
+    }
+    // v3.6.4：**已经在该相位时，仍要把口型落一次**（实测挖出来的坑）。
+    // 循环条件是 s.k < target，同一 k 重复 seek 时一步都不走（steps=0），
+    // 而 _applyLip 在循环体里 -> 换了 lip 表也不会被应用 -> 画面纹丝不动，
+    // 但参数读出来又是对的（因为 _writeMouth 单独生效）。
+    //
+    // **确定性**：结算参数必须 update（SDK 的 _render 只在 deltaTime 非零
+    // 时重算参数），但 update 会把 deltaTime 累加进 **model.elapsedTime**
+    // —— 而动作相位用的是 elapsedTime，vclock 只接管 Date 取时口，管不到
+    // 它（实测：vclockT 稳住 33.33，elapsed 却每次 +1ms，画面因此每次都变）。
+    //
+    // 顺序极其关键（试错出来的）：
+    //   1) update(1)          结算参数（此时嘴会被动作曲线覆盖）
+    //   2) 还原 elapsedTime   相位回到原处，画面可复现
+    //   3) _applyLip          在**还原之后**写嘴，否则被 render 重算冲掉
+    //   4) render             出帧
+    // 把 3 放到 2 之前会得到「参数对、画面不变」（maxdiff=0），踩过。
+    if (!steps && lipTable.has(modelId) && s.k >= target) {
+      const keepE = m.elapsedTime;
+      const keepD = m.deltaTime;
+      try { m.update(1); } catch (e) {}
+      try { m.elapsedTime = keepE; m.deltaTime = keepD; } catch (e) {}
+      _applyLip(modelId, target * dt / 1000);   // 必须在还原相位之后
+      app.render();
+      s.k = target;                             // 幂等，防累积
     }
     if (!steps) {
       // **一步都没走就不能直接抓**：v2 SDK 的 draw 依赖"本模型刚 update
@@ -544,6 +692,27 @@ const puppetAPI = {
   async setPaused(paused) {
     state.userPaused = !!paused;
     applyPaused();
+  },
+
+  // v3.6.4：下发表情式口型表（Python 侧 lip_sync 算好的开口度序列）。
+  // vals = 每帧开口度 0..1（按片段内相对时间排列）；传空数组 = 解除绑定。
+  setLip(modelId, vals, fps, gain) {
+    if (!modelId) return;
+    if (!Array.isArray(vals) || !vals.length) {
+      lipTable.delete(modelId);
+      lipNow.delete(modelId);
+      // 解除时要**主动闭嘴**：否则最后一次的开口度会一直留在参数上
+      const s = slots.get(modelId);
+      if (s && s.model) _writeMouth(s.model, 0);
+      _syncLipTicker();
+      return;
+    }
+    lipTable.set(modelId, {
+      vals: vals.map(v => Math.max(0, Math.min(1, Number(v) || 0))),
+      fps: Number(fps) || 30,
+      gain: Number(gain) || 1,
+    });
+    _syncLipTicker();
   },
 
   // ================= v3.5.2：背景层 / 字幕层 / 滤镜层 =================
@@ -1158,6 +1327,8 @@ window.__muppetOnCmd = function (j) {
     case "setBackground": enqueue("__bg__", () => puppetAPI.setBackground(a.url || "")); break;
     case "setSubtitle": puppetAPI.setSubtitle(a.who || "", a.text || ""); break;
     case "setFilter": puppetAPI.setFilter(a); break;
+    // v3.6.4：口型匹配（开口度表由 Python 侧离线算好）
+    case "setLip": puppetAPI.setLip(a.modelId, a.vals, a.fps, a.gain); break;
     // v3.6.2：镜头动画（setTempAnimation）—— 用 CSS transform 模拟
     case "setCamera": puppetAPI.setCamera(a); break;
     // 手动时钟（导出动画泵）：这两条**同步**执行并回传结果，
@@ -1169,6 +1340,208 @@ window.__muppetOnCmd = function (j) {
 };
 
 // 测试/上层观测面（截图与断言都走这里，不依赖内部私有结构）
+// v3.6.4：口型排障探针。coreModel 的 API 在 Cubism 2 / 3 上完全不同
+// （Cubism2 用 setParamFloat + PARAM_MOUTH_OPEN_Y，Cubism3 用
+// setParameterValueById + ParamMouthOpenY），写死任何一个都会在另一种模型
+// 上静默失效 —— 实测踩过：探针返回空列表，被误判成「模型没有嘴部参数」。
+// 这个函数把真实的方法名和参数名都吐出来，排障时先看它。
+window.__muppetProbeModel = function (modelId) {
+  const out = { err: "", l2dType: "", methods: [], hasById: false,
+                hasFloat: false, count: -1, names: [], mouth: [],
+                mouthWritten: null };
+  let s = null;
+  if (modelId) s = slots.get(modelId);
+  if (!s) slots.forEach(v => { if (!s && v.model) s = v; });
+  if (!s || !s.model) { out.err = "no_model"; return out; }
+  const cm = s.model.internalModel && s.model.internalModel.coreModel;
+  if (!cm) { out.err = "no_coreModel"; return out; }
+  out.l2dType = (cm.constructor && cm.constructor.name) || "unknown";
+  out.hasById = typeof cm.setParameterValueById === "function";
+  out.hasFloat = typeof cm.setParamFloat === "function";
+  // 方法名（原型链 4 层内）
+  const seen = {};
+  let p = cm, depth = 0;
+  while (p && depth < 4) {
+    let ks = [];
+    try { ks = Object.getOwnPropertyNames(p); } catch (e) {}
+    for (const k of ks) {
+      if (seen[k]) continue;
+      seen[k] = 1;
+      try { if (typeof cm[k] === "function") out.methods.push(k); } catch (e) {}
+    }
+    p = Object.getPrototypeOf(p);
+    depth++;
+  }
+  out.methods.sort();
+  // 参数枚举（两套 API 都试）
+  const push = (id, val) => {
+    out.names.push(id);
+    if (String(id).toLowerCase().indexOf("mouth") >= 0) out.mouth.push([id, val]);
+  };
+  try {
+    if (typeof cm.getParameterCount === "function" &&
+        typeof cm.getParameterId === "function") {
+      const n = cm.getParameterCount();
+      out.count = n;
+      for (let i = 0; i < n; i++) {
+        let id = "";
+        try { id = String(cm.getParameterId(i) || ""); } catch (e) {}
+        if (!id) continue;
+        let val = null;
+        try { val = cm.getParameterValueById(id); } catch (e) {}
+        push(id, val);
+      }
+    } else if (cm._parameterIds) {
+      // Cubism 2 内部形态
+      out.count = cm._parameterIds.length;
+      for (let i = 0; i < cm._parameterIds.length; i++) {
+        const id = String(cm._parameterIds[i] || "");
+        if (!id) continue;
+        push(id, cm._parameterValues ? cm._parameterValues[i] : null);
+      }
+    }
+  } catch (e) { out.err = "enum:" + ((e && e.message) || e); }
+  out.names = out.names.slice(0, 80);
+  // 嘴部参数到底存不存在：Cubism2 走 getParamIndex 问，Cubism3 靠枚举
+  const has = [];
+  try {
+    if (typeof cm.getParamIndex === "function") {
+      for (const nm of ["PARAM_MOUTH_OPEN_Y", "ParamMouthOpenY",
+                        "PARAM_MOUTH_FORM", "ParamMouthForm"]) {
+        let idx = -1;
+        try { idx = cm.getParamIndex(nm); } catch (e) {}
+        if (typeof idx === "number" && idx >= 0) has.push([nm, idx]);
+      }
+    }
+  } catch (e) {}
+  out.paramIndex = has;
+  // 实际写一次 1.0，再读回来看有没有生效 —— 最硬的证据
+  const w = _writeMouth(s.model, 1.0);
+  out.mouthWritten = w;
+  try {
+    out.readBack = {};
+    for (const nm of ["PARAM_MOUTH_OPEN_Y", "ParamMouthOpenY"]) {
+      if (typeof cm.getParamFloat === "function") {
+        try { out.readBack[nm] = cm.getParamFloat(nm); } catch (e) {}
+      }
+      if (typeof cm.getParameterValueById === "function") {
+        try { out.readBack[nm] = cm.getParameterValueById(nm); } catch (e) {}
+      }
+    }
+  } catch (e) {}
+  return out;
+};
+
+// v3.6.4：手工设一个开口度并**推进一帧 + 重画**（验证/排障/导出兜底用）。
+// 为什么必须做成页面内函数：宿主页是 `<script type="module">`，
+// 里面的 slots / _writeMouth 都是**模块私有**，外部 runJavaScript
+// 跑在全局作用域，直接写 `slots` 会报 "slots is not defined"（实测踩过，
+// 于是探针全部返回空、被误判成"参数写不进去"）。凡是要碰内部状态的
+// 排障入口都必须像这样挂到 window 上。
+//
+// 为什么写完要 update：SDK 的 `_render` 只在 deltaTime 非零时才结算参数，
+// 光写 coreModel 再 app.render() 不会让 draw 采纳新值（实测 maxdiff=0）。
+// 这里只推 1ms 并立刻 render；相位会被推 1ms，但**导出主路径不走这里**
+// （走 seek，那里按 k 精确定相），本函数只用于排障和「静止帧改嘴」。
+window.__muppetSetMouth = function (v, modelId, advance) {
+  let s = null;
+  if (modelId) s = slots.get(modelId);
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const m = s.model;
+  const w = _writeMouth(m, v);
+  try {
+    if (advance !== false) {
+      // **顺序是试出来的，别改**：
+      //   1) update(1) -> deltaTime 置为非零，让稍后的 render 真正结算参数
+      //   2) render()   -> 消费 deltaTime 并 internalModel.update（嘴被动作
+      //                    覆盖回默认值，这是正常的，下一步补）
+      //   3) 还原相位   -> elapsedTime 回到原处，保证可复现
+      //   4) 再写一次嘴 -> 此时 deltaTime 已归 0，后续 render 不会再重算，
+      //                    写进去的值才能留到 draw 上
+      //   5) render()   -> 出帧
+      const keepE = m.elapsedTime;
+      const keepD = m.deltaTime;
+      m.update(1);
+      if (app) app.render();
+      try { m.elapsedTime = keepE; m.deltaTime = keepD; } catch (e) {}
+      _writeMouth(m, v);
+    }
+    if (app) app.render();
+  } catch (e) {}
+  return w;
+};
+
+// 读回嘴部参数的当前值（Cubism2/3 都试）
+window.__muppetReadMouth = function (modelId) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const cm = s.model.internalModel && s.model.internalModel.coreModel;
+  if (!cm) return { err: "no_core_model" };
+  const out = {};
+  for (const nm of ["PARAM_MOUTH_OPEN_Y", "ParamMouthOpenY"]) {
+    try {
+      if (typeof cm.getParamFloat === "function") out[nm] = cm.getParamFloat(nm);
+    } catch (e) {}
+  }
+  out.lastWrite = lipLastWrite;
+  return out;
+};
+
+// v3.6.4：完整生命周期探针 —— 写参数 -> update -> render，每步读回。
+// 用来回答「参数到底会不会被 update/render 覆盖」这个关键问题。
+// 必须放在页面内：slots / _writeMouth 都是模块私有，外部 JS 拿不到
+// （实测直接写 slots 一律 "slots is not defined"）。
+window.__muppetLipLifecycle = function (v, modelId) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const m = s.model;
+  const cm = m.internalModel && m.internalModel.coreModel;
+  if (!cm) return { err: "no_core_model" };
+  const rd = () => {
+    try {
+      if (typeof cm.getParamFloat === "function") {
+        return cm.getParamFloat("PARAM_MOUTH_OPEN_Y");
+      }
+    } catch (e) {}
+    return null;
+  };
+  const log = [];
+  log.push(["init", rd()]);
+  const w = _writeMouth(m, v);
+  log.push(["after_write", rd()]);
+  try { m.update(1000 / 30); } catch (e) { log.push(["update_err", String(e)]); }
+  log.push(["after_update", rd()]);
+  try { if (app) app.render(); } catch (e) {}
+  log.push(["after_render", rd()]);
+  return { steps: log, write: w, clockManual: clock.manual };
+};
+
+// v3.6.4：时钟/相位探针（排障专用）。必须定义在页面源码里 ——
+// vclock / clock / slots 都是模块私有，外部注入的同名函数在全局作用域
+// 访问它们会抛 ReferenceError，而 runJavaScript 会把异常吞成**空字符串**
+// （实测：好几轮诊断因此拿到空结果、白跑）。凡是要看内部状态的一律写进
+// 本文件，不要从 Python 侧注入。
+window.__muppetClock = function (modelId) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  return {
+    vclockOn: vclock.on,
+    vclockT: vclock.t,
+    manual: clock.manual,
+    k: s ? s.k : null,
+    dt: s ? s.dt : null,
+    elapsed: s && s.model ? s.model.elapsedTime : null,
+    delta: s && s.model ? s.model.deltaTime : null,
+    hasLip: modelId ? lipTable.has(modelId) : false,
+    lipNow: modelId ? (lipNow.get(modelId) === undefined
+                       ? null : lipNow.get(modelId)) : null,
+    lastWrite: lipLastWrite,
+  };
+};
+
 window.__muppetState = function () {
   const models = [];
   slots.forEach((s, id) => { if (s.model) models.push(id); });

@@ -1372,6 +1372,62 @@ def _sanitize_preset(raw, ids_fn):
     return raw if _motion_value_ok(raw, ids) else None
 
 
+# ---- 口型匹配（v3.6.4）------------------------------------------------
+# 立绘 clip 上挂一个 `lip` 字段，指向某句语音（voice clip 的 id，即
+# "vc:<台词下标>"）。渲染/导出时按语音的音频包络驱动嘴部参数。
+#
+# 为什么记 id 而不是直接记音频路径：
+#   · 语音的真相在 dialogue 里（voice_clips 是投影），用户改台词时间、
+#     换语音，lip 不用跟着改；id 会自动指到新的位置
+#   · 记路径的话，同一句话换音色后立绘还指着旧文件
+LIP_GAIN_MIN, LIP_GAIN_MAX = 0.3, 2.5
+
+
+def _sanitize_lip(raw):
+    """lip 字段校验：{"voice": "vc:3", "gain": 1.0}。脏值丢键不丢 clip。
+
+    gain 是这句话的开口度倍率（同一角色不同情绪，喊叫要更开）。
+    """
+    if not isinstance(raw, dict): return None
+    vid = raw.get("voice")
+    if not isinstance(vid, str) or not vid.strip(): return None
+    vid = vid.strip()
+    # 只收本模块自己产生的投影 id 形态（vc:<数字>），防止塞进任意串
+    if not re.match(r"^vc:\d+$", vid): return None
+    out = {"voice": vid}
+    g = raw.get("gain")
+    if g is not None:
+        n = _num(g, 1.0)
+        out["gain"] = round(min(LIP_GAIN_MAX, max(LIP_GAIN_MIN, n)), 3)
+    return out
+
+
+def lip_bindings(proj, aid=None):
+    """全量口型绑定：{figure_clip_id: {"voice","gain"}}（无绑定 = 空 dict）。
+
+    导出/预览都用这一份口径，避免两处各写一遍遍历。
+    """
+    out = {}
+    if not isinstance(proj, dict): return out
+    for tr in _tracks_of(proj, aid):
+        if not isinstance(tr, dict) or tr.get("kind") == "audio": continue
+        for c in tr.get("clips") or []:
+            if not isinstance(c, dict): continue
+            lp = _sanitize_lip(c.get("lip"))
+            if lp:
+                cid = str(c.get("id") or "")
+                if cid: out[cid] = lp
+    return out
+
+
+def voice_clip_by_id(proj, vid, aid=None):
+    """按 "vc:<下标>" 取语音 clip dict；找不到返回 None。"""
+    if not isinstance(vid, str): return None
+    for c in voice_clips(proj, aid):
+        if c.get("id") == vid: return c
+    return None
+
+
 # 滤镜（原「特效」页）：只收 setTransform 那套数值键，范围按引擎语义夹紧。
 # 未知键一律丢弃（导出器不认识，留着只会让工程文件漂移）。
 # v3.6.2：补齐 docx《webgal电影感滤镜1.21》用到的全部键（bevel 斜面浮雕
@@ -1463,6 +1519,10 @@ def _sanitize_clip(c, seen_clip_ids):
     ex = _sanitize_preset(c.get("expression"), _MT.expression_ids)
     if mv: out["motion"] = mv
     if ex: out["expression"] = ex
+    # 口型匹配（v3.6.4）：figure clip 挂在哪句语音上。
+    # 形状 {"voice": <voice_clip_id>, "gain": 0.5~2.0}
+    lp = _sanitize_lip(c.get("lip"))
+    if lp: out["lip"] = lp
     return out
 
 

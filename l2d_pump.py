@@ -78,7 +78,8 @@ class Lane(object):
     head = 页面里该 slot 当前已推进到第几步；ring = k -> 图（近若干帧）。
     """
 
-    def __init__(self, key, path, ref, motion, expression, mid):
+    def __init__(self, key, path, ref, motion, expression, mid,
+                 lip=None, lip_gain=1.0):
         self.key = key                    # (normpath(model).lower(), motion, expression)
         self.path = path                  # **原始**路径（注册要用大小写原样，别用键里的小写）
         self.ref = ref
@@ -90,6 +91,12 @@ class Lane(object):
         self.roi = None                   # 固定裁剪框 (x,y,w,h) 画布坐标；
                                           # 首帧算出后整段沿用（省 5ms/帧 +
                                           # 消除 bbox 逐帧抖动）
+        # v3.6.4 口型：**按帧变化的序列**，不能进 key（进了会让同一条 lane
+        # 每帧都算"换了状态"、每帧重载模型）。所以单独挂在这里，渲染时按
+        # k 取第 k 个值传下去。
+        self.lip = lip                    # list[float] | None
+        self.lip_gain = float(lip_gain or 1.0)
+        self.lip_sent = None              # 已下发过的 lip 表指纹（省重复下传）
         self.ring = {}                    # k -> ndarray
         self.order = []                   # ring 的插入序（做 FIFO 淘汰）
         self.last_err = ""
@@ -263,12 +270,18 @@ class L2DAnimPump(object):
         except (TypeError, ValueError):
             return 0
 
-    def request(self, model_path, motion, expression, t_local, timeout=None):
+    def request(self, model_path, motion, expression, t_local, timeout=None,
+                lip=None, lip_gain=1.0):
         """取该立绘在素材内时间 t_local 处的动画帧。
 
         返回 (H,W,4) RGBA uint8；不可用/关闭/超时 -> **None**（调用方回落
         定格图或占位卡）。这里绝不抛：导出线程里一个异常就整片失败，
-        而「这一帧没动画」只是画质降级。"""
+        而「这一帧没动画」只是画质降级。
+
+        v3.6.4：lip 是**按帧变化的开口度序列**（list[float]，帧序与
+        t_local 同一网格），不进 lane key —— 它逐帧变，进 key 会让同一条
+        lane 每帧都算换了状态、每帧重载模型。挂到 lane 上按 k 取即可。
+        """
         if not self.enabled or not self._active or self._starved or not self.available():
             # `_active` 这条守卫很关键：泵没被主线程 start() 时（headless
             # 脚本/测试直接 VideoExportWorker.run()，或 GUI 还没回到事件
@@ -291,6 +304,10 @@ class L2DAnimPump(object):
                     key, str(model_path or ""), None,
                     str(motion or ""), str(expression or ""),
                     "anim%d" % self._next_mid)
+            # 口型表随请求带进来（同一 lane 不同台词的 lip 不同，要更新）
+            if lip is not None:
+                ln.lip = lip
+                ln.lip_gain = float(lip_gain or 1.0)
             # ring 命中：同 k 同网格就是同一张（下游只读，可安全共享）
             if ln.grid == dt_ms:
                 img = ln.ring.get(k)
@@ -378,7 +395,9 @@ class L2DAnimPump(object):
             ln.grid = dt
             ln.head = 0                         # 网格变了：页面从头走
         img, new_roi = rd.render_animated({"ref": ref, "motion": ln.motion,
-                                           "expression": ln.expression},
+                                           "expression": ln.expression,
+                                           "lip": ln.lip,
+                                           "lip_gain": ln.lip_gain},
                                           model_id=ln.mid, k=k, dt_ms=dt,
                                           roi=ln.roi)
         if new_roi:

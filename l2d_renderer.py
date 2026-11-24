@@ -210,12 +210,20 @@ class L2DRenderer(object):
             self._last_err = "cmd json: %r %s" % (e, r[:120])
             return {"err": "bad_json"}
 
-    def _apply_state(self, ref, mo, ex, mid, timeout=25.0):
-        """把 (模型, 动作, 表情) 推到页面 slot `mid` 并等模型真正进场。
+    def _apply_state(self, ref, mo, ex, mid, timeout=25.0, lip=None,
+                     lip_fps=30.0, lip_gain=1.0):
+        """把 (模型, 动作, 表情[, 口型]) 推到页面 slot `mid` 并等模型真正进场。
 
         render() 与 render_animated() 共用（原先内联在 render 里）。
         居中 + scale=1：让模型以自身尺寸铺在透明舞台中间，输出即本体，
-        真正的 layout 交回导出侧的 _paste_rgba 应用。"""
+        真正的 layout 交回导出侧的 _paste_rgba 应用。
+
+        v3.6.4：lip 是**开口度序列**（list[float]，按片段内帧序）。
+        传了就先下发 setLip，之后 seek 每步都会按 k 取一帧写进嘴部参数；
+        不传则解除绑定（回到「不控嘴」，由模型自己的动作/物理决定）。
+        表要在这里下发而不是每帧发：序列可能几千个 float，逐帧发会拖死
+        IPC（每帧一次 JSON 往返）。
+        """
         cmds = [
             {"cmd": "loadModel", "args": {"modelId": mid, "modelRef": ref}},
             {"cmd": "setTransform", "args": {"modelId": mid, "x": 0.5,
@@ -228,6 +236,11 @@ class L2DRenderer(object):
         if ex:
             cmds.append({"cmd": "setExpression",
                          "args": {"modelId": mid, "name": ex, "fadeMs": 200}})
+        if lip:
+            cmds.append({"cmd": "setLip",
+                         "args": {"modelId": mid, "vals": list(lip),
+                                  "fps": float(lip_fps),
+                                  "gain": float(lip_gain)}})
         js = (
             "(function(){\n"
             " try{\n"
@@ -259,6 +272,16 @@ class L2DRenderer(object):
           再应用一次（与占位卡/图片源同一条路径，语义统一）。
         - 因此这里传的 layout 恒为「居中、scale=1、rot=0」，真正的位置
           变换交回导出侧。
+
+        v3.6.4 **确定性修复**（实测驱动的重构，别退回自动时钟）：
+        原来这里不开手动时钟，模型挂 Ticker.shared 吃墙上时间 ——
+        连续抓 6 次同一参数，画面尺寸会一路 333→332→331→330 地漂，
+        逐次 maxdiff=255。那意味着：
+          · 呼吸/眨眼/发丝物理在两次抓图之间推进了
+          · 任何像素级验证都无法归因（分不清是参数变了还是渲染在动）
+          · 导出重复跑同一帧会得到不同结果
+        现在改为：开手动时钟 → 每帧 seek 到**同一相位**（k 由 state.t
+        决定，默认 0）→ 抓图。同一 state 永远同一画面。
         """
         with self._lock:
             if not self._bootn(): return None
@@ -267,21 +290,85 @@ class L2DRenderer(object):
             mid = state.get("modelId") or ("m%d" % (abs(hash(ref)) % 997))
             mo = str(state.get("motion") or "")
             ex = str(state.get("expression") or "")
-            if not self._apply_state(ref, mo, ex, mid, timeout): return None
-            # v3.5.11 性能：原先是固定 _wait(0.25) 死等 250ms（占单帧耗时
-            # 的 94%，实测 render 265ms 里只有 ~24ms 是真实工作）。
-            # 现在按须等待：仅在**姿态/动作变化**时给 ticker 一两帧刷新，
-            # 同 state 复用时直接抓（pixi 已渲染好，画面就是当前帧）。
-            sigc = (ref, mo, ex)
-            if sigc != self._last_sig:
-                self._wait(lambda: False, 0.05)   # 换动作/表情才等一帧
+            lip = state.get("lip")
+            # 先接管时钟：之后画面只按 seek 的相位走，不吃墙上时间
+            if not self.set_manual(True):
+                return None
+            sigc = (ref, mo, ex, id(lip) if lip else None,
+                    self._lip_sig_of(lip))
+            fresh = self._sig_by_mid.get(mid) != (ref, mo, ex)
+            if fresh or sigc != self._last_sig:
+                if not self._apply_state(ref, mo, ex, mid, timeout, lip=lip,
+                                         lip_fps=state.get("lip_fps") or 30.0,
+                                         lip_gain=state.get("lip_gain") or 1.0):
+                    return None
+                if fresh:
+                    self._sig_by_mid[mid] = (ref, mo, ex)
                 self._last_sig = sigc
+                # 首帧宽限：纹理上传是异步的，立刻 render 会拿到空画布
+                self._wait(lambda: False, 0.05)
+            # 固定相位：k 由 state 给（静止渲染恒 0），dt 用帧时长
+            k = int(state.get("k") or 0)
+            dt_ms = float(state.get("dt") or (1000.0 / 30.0))
+            r = self.seek(mid, k, dt_ms, 64)
+            if r.get("err"):
+                self._last_err = "render seek: %s" % r["err"]
+                return None
+            # v3.6.4：seek 之后**显式落一次口型**。
+            # 为什么要单独落（实测挖出来的坑）：
+            #   · seek 的循环条件是 `s.k < target`，同一 k 重复请求时
+            #     一步都不走（steps=0），而 _applyLip 在循环体里 -> 换 lip
+            #     表也不会被应用 -> 画面纹丝不动、但参数读出来又是对的
+            #   · 走页面里的 __muppetSetMouth（已实测 maxdiff=255 有效），
+            #     它在写参数后自己 app.render()，不再依赖 seek 的相位
+            if lip:
+                try:
+                    idx = k if 0 <= k < len(lip) else len(lip) - 1
+                    v = float(lip[idx]) * float(state.get("lip_gain") or 1.0)
+                except (TypeError, ValueError, IndexError):
+                    v = 0.0
+                self._write_mouth(mid, max(0.0, min(1.0, v)), advance=True)
             t0 = time.time()
-            img = self._grab()
+            img = self._grab_ready(None)
             self._renders += 1
             self._last_ms = (time.time() - t0) * 1000.0
             if img is None: return None
             return self._autocrop(img)
+
+    @staticmethod
+    def _lip_sig_of(lip):
+        """口型表的轻量指纹（只取几个点，别每次哈希整个列表）。"""
+        if not lip:
+            return None
+        try:
+            n = len(lip)
+            if n == 0:
+                return None
+            return (n, round(float(lip[0]), 3),
+                    round(float(lip[n // 2]), 3),
+                    round(float(lip[-1]), 3))
+        except Exception:
+            return None
+
+    def _write_mouth(self, mid, v, advance=False):
+        """把开口度 v 写进页面 slot `mid` 的嘴部参数（并重画）。
+
+        必须走页面内函数：宿主页是 `<script type="module">`，里面的
+        slots / coreModel 都是模块私有，外部 runJavaScript 在全局作用域，
+        直接写会报 "slots is not defined"（实测踩了很多次）。
+
+        advance=False（默认）**不推进动作相位** —— 导出要求同一 k 永远
+        同一画面。开 advance 会让页面 update 一次、elapsedTime 累积，
+        实测连续 5 次同参数画面每次差 255。实测不 update 也能让画布吃
+        到新参数（maxdiff=255），所以导出走默认。
+        """
+        return self._js(
+            "(function(){try{"
+            " var r = window.__muppetSetMouth(%s, %s, %s);"
+            " return r ? JSON.stringify(r) : '';"
+            "}catch(e){return 'ERR:'+(e&&e.message||e);}})()"
+            % (float(v), json.dumps(mid),
+               "false" if not advance else "true"), timeout=8.0)
 
     # ---------------- 逐帧动画（手动时钟，导出泵用） ----------------
     def set_manual(self, on):
@@ -384,8 +471,13 @@ class L2DRenderer(object):
             ex = str(state.get("expression") or "")
             sig = (ref, mo, ex)
             fresh = self._sig_by_mid.get(mid) != sig
+            lip = state.get("lip")
+            lip_gain = float(state.get("lip_gain") or 1.0)
             if fresh:
-                if not self._apply_state(ref, mo, ex, mid, timeout): return None, None
+                if not self._apply_state(ref, mo, ex, mid, timeout,
+                                         lip=lip, lip_fps=1000.0 / max(1.0, float(dt_ms)),
+                                         lip_gain=lip_gain):
+                    return None, None
                 self._sig_by_mid[mid] = sig
                 roi = None                       # 换模型/动作：旧框作废
                 # 首帧宽限：loadModel 后纹理上传是异步的，立刻 render 会
@@ -428,7 +520,10 @@ class L2DRenderer(object):
                     # 完全一致）。代价 ~0.7s，只在 ring 盖不住时发生。
                     self._cmd({"cmd": "clearModel", "args": {"modelId": mid}})
                     self._sig_by_mid.pop(mid, None)
-                    if not self._apply_state(ref, mo, ex, mid, timeout):
+                    if not self._apply_state(ref, mo, ex, mid, timeout,
+                                             lip=lip,
+                                             lip_fps=1000.0 / max(1.0, float(dt_ms)),
+                                             lip_gain=lip_gain):
                         return None, None
                     self._sig_by_mid[mid] = sig
                     reloaded = True
@@ -440,6 +535,15 @@ class L2DRenderer(object):
             if not reached:
                 self._last_err = "seek timeout (k=%d head=%s)" % (k, r.get("head"))
                 return None, None
+            # v3.6.4：seek 之后显式落一次口型。同 render() 的理由：
+            # 同一 k 重复 seek 时 step 数为 0，循环体里的 _applyLip 不执行。
+            if lip:
+                try:
+                    idx = k if 0 <= k < len(lip) else len(lip) - 1
+                    lv = float(lip[idx]) * lip_gain
+                except (TypeError, ValueError, IndexError):
+                    lv = 0.0
+                self._write_mouth(mid, max(0.0, min(1.0, lv)), advance=True)
             self._renders += 1
             img = self._grab_ready(roi)
             self._last_ms = (time.time() - t0) * 1000.0
