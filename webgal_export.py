@@ -1784,6 +1784,18 @@ def _render_scene_lines(view, proj_dir, scene_name, aid_to_scene, act):
         txt = str(d.get("text") or "").replace(";", "；").replace("\n", " ")
         who = str(d.get("who") or "").replace(":", "").replace(";", "")
         if txt:
+            # v3.6.4：预览路径也要带语音行，否则「预览说没声、导出来有声」
+            # 或反过来 —— 两条路径必须同规格（本函数注释里那条既有约定）。
+            v = d.get("voice")
+            if isinstance(v, dict):
+                vp = str(v.get("path") or "").strip()
+                if vp:
+                    vabs = _abs_path(vp, proj_dir)
+                    if vabs and os.path.isfile(vabs):
+                        nm = os.path.basename(vp.replace("\\", "/"))
+                        lines.append("vocal:%s;" % nm)
+                    else:
+                        warns.append("语音缺失，已跳过: %s" % vp)
             # 空 who = 无名台词，输出 `:内容;`（引擎不画名牌）
             lines.append("%s:%s;" % (who, txt))
     if act:
@@ -1946,6 +1958,7 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     copy_map = {"background": os.path.join(game_root, "background"),
                 "figure": os.path.join(game_root, "figure"),
                 "bgm": os.path.join(game_root, "bgm"),
+                "vocal": os.path.join(game_root, "vocal"),
                 "video": os.path.join(game_root, "video")}
     # v3.4.9 性能修复：预扫 Cubism2 puppet clip 实际引用的动作/表情，
     # 导出时按引用瘦身 model.json + 按需拷池文件（引擎会全量预载定义，
@@ -2238,6 +2251,28 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
     # ---- 规则 10：台词表 dialogue -> 台词行（+ H2a 台词级动作切换行） ----
     _ref_keys_cache = {}
 
+    def _voice_of(d):
+        """台词条目 -> (源文件绝对路径, 文件名)。没有语音返回 ("", "")。
+
+        v3.6.4。语音的真相在 `dialogue[i]["voice"]`（时间轴上是只读投影，
+        见 video_model 的注释），所以这里直接取 dialogue，不去翻 tracks。
+
+        路径解析只走 `_abs_path`：工程里存的是 `vocal/xxx.wav` 这种**相对
+        工程目录**的写法，必须拼 proj_dir。顺手做两件防呆：
+          · 只有 basename 没有目录（`a.wav`）也能找到
+          · 文件不存在就返回空，让调用方走「跳过 + 记警告」
+        """
+        v = (d or {}).get("voice")
+        if not isinstance(v, dict):
+            return "", ""
+        raw = str(v.get("path") or "").strip()
+        if not raw:
+            return "", ""
+        p = _abs_path(raw, proj_dir)
+        if not p or not os.path.isfile(p):
+            return "", os.path.basename(raw.replace("\\", "/"))
+        return p, os.path.basename(raw.replace("\\", "/"))
+
     def _ref_keys(ref):
         """导出包里某个立绘引用的动作/表情键名表。
 
@@ -2342,6 +2377,37 @@ def export_game(proj, out_dir, proj_dir=None, game_name=None, dialect="webgal",
                     seq += 1
                     dialogue_prev_action[slot] = key        # v3.5：台词正文里的「空格+减号」要转义——引擎用 / -/ 切参数，
         # 不转义的话 "A - B" 会被误切，B 段整段消失（实测真 bug）。
+        # v3.6.4：语音（需求池【语音V4】）——台词前 emit `vocal:文件名;`。
+        # 引擎语义：vocal 是**不阻塞**的旁白音轨，播完自然结束，不影响
+        # 台词推进节奏。所以一条台词前跟一条 vocal 就够，不需要等它播完。
+        #
+        # 三条设计决定：
+        #  1) 用 dialogue[i].voice（语音的真相在那里），不用 tracks 里的投影
+        #  2) 文件名走 _NamePool + copy_in，与 bgm/video 同一套防重名/去重
+        #  3) 语音缺失/损坏**只记警告不阻断**——导出绝不能因为少一个 wav 失败
+        #
+        # **脱离台词（detach=True）的处理**：时间轴允许语音脱离台词单独拖动
+        # （video_model.voice_clips 的 detach 语义）。那种语音不跟着台词走，
+        # 贴在台词前就错了 —— 引擎里 vocal 不阻塞，硬贴会让音频和字对不上。
+        # 这种情况把语音按**自己的时刻 t** 发一条独立事件（prio 3.9 仍排在
+        # 同刻台词之前），而不是贴到它原来那句台词前。
+        _vpath, _vname = _voice_of(d)
+        _vdetach = isinstance(d.get("voice"), dict) and \
+            d.get("voice").get("detach") is True
+        if _vname:
+            _vout = pool.alloc("vocal", safe_name(_vname) or "v.wav")
+            if copy_in("vocal", _vpath, _vout):
+                _vt = t
+                if _vdetach:
+                    try:
+                        _vt = float(d["voice"].get("t"))
+                    except (TypeError, ValueError, AttributeError):
+                        _vt = t
+                # prio 3.9：排在台词（4）之前，确保「先说再显示字」
+                events.append((_vt, 3.9, seq, ["vocal:%s;" % _vout]))
+                seq += 1
+            else:
+                warn.append("语音缺失，已跳过: %s" % (_vname or _vpath))
         events.append((t, 4, seq,
                        ["%s:%s;" % (who, _escape_say_body(text))]))
         seq += 1
