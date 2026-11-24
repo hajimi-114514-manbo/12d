@@ -102,6 +102,41 @@ def voice_dir(scan=False):
     return cs[0] if cs else os.path.join(_APPDIR, "voice")
 
 
+# 已装引擎的档位目录名（资产管理装到 voice/<tier>/）
+TIERS = ("zh-basic", "zh-full", "ja", "zh-ja")
+
+
+def _installed_tier(root):
+    """在引擎根下找出已装的档位子目录（装了就返回档位名，没装返回 ""）。"""
+    if not root or not os.path.isdir(root):
+        return ""
+    for t in TIERS:
+        if _is_engine(os.path.join(root, t)):
+            return t
+    return ""
+
+
+def installed_tier():
+    """当前装了哪一档引擎（没装返回 ""）。
+
+    资产管理把四档装到 voice/<档位>/ 各自独立（用户可能先试「中文基础」，
+    不满意再装「中日双语」，覆盖就白下 3GB），所以要按档位找。
+    """
+    env = _env_dir()
+    if env is not None:
+        t = _installed_tier(env)
+        if t:
+            return t
+        return "" if _is_engine(env) else ""
+    for d in candidates():
+        t = _installed_tier(d)
+        if t:
+            return t
+        if _is_engine(d):
+            return ""
+    return ""
+
+
 def ensure_voice(scan=True):
     """取得可用的引擎目录；找不到返回 None。
 
@@ -110,8 +145,14 @@ def ensure_voice(scan=True):
     """
     env = _env_dir()
     if env is not None:
-        return env if _is_engine(env) else None
+        if _is_engine(env):
+            return env
+        t = _installed_tier(env)
+        return os.path.join(env, t) if t else None
     for d in candidates():
+        t = _installed_tier(d)
+        if t:
+            return os.path.join(d, t)
         if _is_engine(d):
             return d
     if scan:
@@ -249,4 +290,5 @@ def describe():
                      "has_python": bool(engine_python(d)),
                      "has_api": bool(api_entry(d))})
     return {"resolved": voice_dir(), "env_locked": bool(_env_dir()),
-            "available": available(), "candidates": rows}
+            "available": available(), "tier": installed_tier(),
+            "candidates": rows}

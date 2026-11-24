@@ -240,6 +240,9 @@ class AssetDownloadThread(QThread):
             if self.asset.get("mode") == "wheel":
                 self._run_wheel()
                 return
+            if self.asset.get("mode") == "voice_engine":
+                self._run_voice_engine()
+                return
             plan = AC.asset_urls(self.asset)
             if not plan:
                 self.failed.emit("该资产没有配置下载地址")
@@ -505,6 +508,117 @@ class AssetDownloadThread(QThread):
             self.failed.emit("校验失败：%s" % e)
             return
         self.finished_ok.emit(dest_dir)
+
+
+    # ---------- voice_engine 模式（语音引擎四档）----------
+    def _run_voice_engine(self):
+        """语音引擎：单 zip 下载 -> sha256 校验 -> 解压到语音引擎目录。
+
+        与 wheel 模式的差异：
+          · 落点是语音引擎目录（voice_paths.voice_dir()，用户数据目录），
+            不是 site-packages
+          · 解压后**不装 torch** —— torch 由用户自己 pip 装（用户的显卡
+            决定装 CPU 版 164MB 还是 CUDA 版 2.5GB；引擎包里带一份 CUDA
+            torch 会让包大 3.8GB，而 CPU 用户根本用不上）
+          · 装完给一次明确提示：还需 pip 装哪几个包、按什么顺序
+        """
+        import zipfile
+        import asset_catalog as AC
+        asset = self.asset
+        plan = AC.asset_urls(asset)
+        urls = (plan[0][1] or []) if plan else []
+        if not urls:
+            self.failed.emit("该引擎包还没有配置下载地址")
+            return
+        target = AC.parts_target_dir(asset, self.base_dir)
+        if not target:
+            self.failed.emit("找不到语音引擎目录")
+            return
+
+        # 磁盘预检
+        need = int(asset.get("size") or 3 * 2 ** 30)
+        with contextlib.suppress(Exception):
+            drive = os.path.splitdrive(os.path.abspath(target))[0] + os.sep
+            free = shutil.disk_usage(drive).free
+            if free < need * 1.2:
+                self.failed.emit("磁盘空间不足：约需 %s，%s 仅剩 %s"
+                                 % (human_mb(need * 1.2), drive, human_mb(free)))
+                return
+
+        work = os.path.join(os.environ.get("TEMP") or target,
+                            "muppet_voice_dl")
+        try:
+            os.makedirs(work, exist_ok=True)
+        except Exception as e:
+            self.failed.emit("无法创建下载目录：%s" % e)
+            return
+        fname = os.path.basename(urls[0].split("?")[0]) or "voice.zip"
+        zpath = os.path.join(work, fname)
+        size = None
+        for u in urls:
+            if self._cancel:
+                self.failed.emit("已取消")
+                return
+            self.status.emit("连接 %s" % u.split("/")[2])
+            try:
+                sz = self._download_file(u, zpath, 0, int(asset.get("size") or 0))
+            except Exception as e:
+                self.status.emit("镜像失败：%s" % str(e)[:60])
+                sz = None
+            if sz is not None:
+                size = sz
+                break
+        if size is None:
+            self.failed.emit("所有镜像都失败；已下载部分保留，可重试续传")
+            return
+
+        # sha256 校验（声明了才校验，fail-closed）
+        want = str(asset.get("zip_sha256") or "").strip().lower()
+        if want:
+            import hashlib
+            self.status.emit("校验整包 sha256…")
+            h = hashlib.sha256()
+            try:
+                with open(zpath, "rb") as f:
+                    while True:
+                        blk = f.read(1024 * 1024)
+                        if not blk: break
+                        h.update(blk)
+            except OSError as e:
+                self.failed.emit("校验读取失败：%s" % str(e)[:80])
+                return
+            if h.hexdigest().lower() != want:
+                with contextlib.suppress(OSError): os.remove(zpath)
+                self.failed.emit("sha256 校验不符，坏包已删除")
+                return
+
+        if not zipfile.is_zipfile(zpath):
+            self.failed.emit("下载的不是有效 zip")
+            return
+        self.status.emit("正在解压…")
+        try:
+            os.makedirs(target, exist_ok=True)
+        except Exception as e:
+            self.failed.emit("无法创建引擎目录：%s" % e)
+            return
+        if not self._extract_zip(zpath, target):
+            self.failed.emit("解压失败")
+            return
+        with contextlib.suppress(Exception): os.remove(zpath)
+
+        # 解压后校验：api_v2.py 必须在（语音服务入口）
+        try:
+            import asset_catalog as AC
+            if not AC.is_installed(asset, self.base_dir):
+                self.failed.emit("解压后校验未通过：%s 里没有 api_v2.py" % target)
+                return
+        except Exception as e:
+            self.failed.emit("校验失败：%s" % e)
+            return
+
+        # torch 由用户自己装 —— 明确告诉他装什么、按什么顺序
+        self.status.emit("引擎已装好，还需安装 torch（见提示）")
+        self.finished_ok.emit(target)
 
     # ---------- wheel 模式（python_pack，H3-c WebEngine）----------
     def _run_wheel(self):

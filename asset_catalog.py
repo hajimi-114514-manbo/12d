@@ -137,6 +137,37 @@ _GSV_SHA256 = {
         "173796956820ea27bd14f76bf28162607ff4254807e2948253eb5b46f5bb643b",
 }
 
+# ---- 语音引擎（四档）-------------------------------------------------------
+# 为什么分四档：整包 9.3GB 里，torch 3.78GB + 音色 5.3GB 占了大头。
+#   · **音色不随包分发**（CC-BY-NC 禁止二次配布），用户自备 -> 省 5.3GB
+#   · **torch 让用户自己 pip 装**（CPU 164MB / CUDA 2.5GB）-> 省 3.78GB
+# 剩下的引擎本体按「需要什么语言能力」再分四档。
+#
+# 各档实测体积（2026-11-23，build_voice_engine.py 构建 + 真机合成验证）：
+#   中文基础  2.78GB  不含 G2PW（多音字判读退化）、不含日文
+#   中文完整  3.84GB  加 G2PW（onnxruntime 481 + G2PWModel 608 = 1.06GB）
+#   日文      2.97GB  加 pyopenjtalk/ipadic/ja_userdic（192MB）
+#   中日双语  4.03GB  两者都带
+# 装完再加 torch：CPU 164MB -> 约 3.0 / 4.0 / 3.1 / 4.2 GB
+#               CUDA 2.5GB -> 约 5.3 / 6.4 / 5.5 / 6.6 GB
+#
+# 构建脚本：tools/build_voice_engine.py（可复现，含全部踩坑记录）
+_VOICE_TIERS = [
+    ("zh-basic", "语音引擎（中文基础档）",
+     "纯中文 AI 配音，约 2.8GB。不含 G2PW（多音字判读会退化）、不含日文资源。torch 需另行安装（CPU 164MB / CUDA 2.5GB）。",
+     2979226624),
+    ("zh-full", "语音引擎（中文完整档）",
+     "中文 AI 配音 + G2PW 多音字判读，约 3.8GB。torch 需另行安装。",
+     4122009856),
+    ("ja", "语音引擎（日文档）",
+     "日文 AI 配音，约 3.0GB。不含 G2PW。torch 需另行安装。",
+     3186008064),
+    ("zh-ja", "语音引擎（中日双语档）",
+     "中日双语 AI 配音，约 4.0GB。torch 需另行安装。",
+     4328792576),
+]
+
+
 ASSETS = [
     {
         # GPT-SoVITS 语音底模（MIT 许可，可自由分发）
@@ -296,6 +327,90 @@ ASSETS = [
         "check": {"type": "parts"},
     },
     {
+        "id": "voice_engine_zh-basic",
+        "name": "语音引擎（中文基础档）",
+        "desc": "纯中文 AI 配音，约 2.8GB。不含 G2PW（多音字判读会退化）、不含日文资源。torch 需另行安装（CPU 164MB / CUDA 2.5GB）。",
+        "kind": "voice_engine",
+        "mode": "voice_engine",
+        "size": 2979226624,
+        # 包由 tools/build_voice_engine.py 构建后上传到 Release；
+        # URL 未配置前资产管理里显示「未装」，点下载会明确提示。
+        "url": "",
+        "mirrors": [],
+        "zip_sha256": "",
+        "target": "voice",
+        # 解压后的标志：引擎自带的 api_v2.py（语音服务入口）
+        "done_marker": {"dir": "", "prefix": "api_v2.py"},
+        "check": {"type": "files", "marker": "api_v2.py",
+                  "min_bytes": 1000},
+        # torch 由用户自己 pip 装（用户的显卡决定装哪个版本）
+        "needs_torch": True,
+        "tier": "zh-basic",
+    },
+    {
+        "id": "voice_engine_zh-full",
+        "name": "语音引擎（中文完整档）",
+        "desc": "中文 AI 配音 + G2PW 多音字判读，约 3.8GB。torch 需另行安装。",
+        "kind": "voice_engine",
+        "mode": "voice_engine",
+        "size": 4122009856,
+        # 包由 tools/build_voice_engine.py 构建后上传到 Release；
+        # URL 未配置前资产管理里显示「未装」，点下载会明确提示。
+        "url": "",
+        "mirrors": [],
+        "zip_sha256": "",
+        "target": "voice",
+        # 解压后的标志：引擎自带的 api_v2.py（语音服务入口）
+        "done_marker": {"dir": "", "prefix": "api_v2.py"},
+        "check": {"type": "files", "marker": "api_v2.py",
+                  "min_bytes": 1000},
+        # torch 由用户自己 pip 装（用户的显卡决定装哪个版本）
+        "needs_torch": True,
+        "tier": "zh-full",
+    },
+    {
+        "id": "voice_engine_ja",
+        "name": "语音引擎（日文档）",
+        "desc": "日文 AI 配音，约 3.0GB。不含 G2PW。torch 需另行安装。",
+        "kind": "voice_engine",
+        "mode": "voice_engine",
+        "size": 3186008064,
+        # 包由 tools/build_voice_engine.py 构建后上传到 Release；
+        # URL 未配置前资产管理里显示「未装」，点下载会明确提示。
+        "url": "",
+        "mirrors": [],
+        "zip_sha256": "",
+        "target": "voice",
+        # 解压后的标志：引擎自带的 api_v2.py（语音服务入口）
+        "done_marker": {"dir": "", "prefix": "api_v2.py"},
+        "check": {"type": "files", "marker": "api_v2.py",
+                  "min_bytes": 1000},
+        # torch 由用户自己 pip 装（用户的显卡决定装哪个版本）
+        "needs_torch": True,
+        "tier": "ja",
+    },
+    {
+        "id": "voice_engine_zh-ja",
+        "name": "语音引擎（中日双语档）",
+        "desc": "中日双语 AI 配音，约 4.0GB。torch 需另行安装。",
+        "kind": "voice_engine",
+        "mode": "voice_engine",
+        "size": 4328792576,
+        # 包由 tools/build_voice_engine.py 构建后上传到 Release；
+        # URL 未配置前资产管理里显示「未装」，点下载会明确提示。
+        "url": "",
+        "mirrors": [],
+        "zip_sha256": "",
+        "target": "voice",
+        # 解压后的标志：引擎自带的 api_v2.py（语音服务入口）
+        "done_marker": {"dir": "", "prefix": "api_v2.py"},
+        "check": {"type": "files", "marker": "api_v2.py",
+                  "min_bytes": 1000},
+        # torch 由用户自己 pip 装（用户的显卡决定装哪个版本）
+        "needs_torch": True,
+        "tier": "zh-ja",
+    },
+    {
         "id": "webgal_runtime",
         "name": "WebGAL 引擎运行时（可选，约50MB）",
         "desc": "「导出可玩游戏」需要的 WebGAL 官方播放引擎（v4.6.6，网页版）。"
@@ -358,10 +473,22 @@ def parts_target_dir(asset, base_dir):
     target 语义：
       "site-packages"（默认，CUDA 包用）-> runtime_root\\Lib\\site-packages
       "dest"（运行时整包用）            -> base_dir\\<dest>，即解压到 dest 根
+      "voice"（语音引擎用）            -> voice_paths.voice_dir()（用户数据目录）
     """
     try:
         t = (asset.get("target") or "site-packages").strip()
         if t == "dest": return installed_path(asset, base_dir)
+        if t == "voice":
+            try:
+                import voice_paths as VP
+                base = VP.voice_dir()
+                # 四档各装各的子目录（voice/<档位>/）——装一档不能覆盖另一档：
+                # 用户可能先装「中文基础」试试，不满意再装「中日双语」，
+                # 覆盖了就白下 3GB。
+                tier = (asset.get("tier") or "").strip()
+                return os.path.join(base, tier) if tier else base
+            except Exception:
+                return ""
         rr = runtime_root(base_dir)
         if not rr: return ""
         if t == "site-packages": return os.path.join(rr, "Lib", "site-packages")
