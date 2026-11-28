@@ -39,7 +39,7 @@ set /p VER=<"%TMPDIR%\ver.txt"
 if "%VER%"=="" goto :err
 set "OUTEXE=MuppetStudio-Setup-v%VER%.exe"
 
-copy /y "%APP%\anon_sewing_icon.ico" "%TMPDIR%\" >nul
+copy /y "%APP%\assets\anon_sewing_icon.ico" "%TMPDIR%\" >nul
 copy /y "%HERE%installer_banner.png" "%TMPDIR%\" >nul
 rem - runtime.zip: portable Python runtime (python.exe + Lib + site-packages), embedded when present
 rem   so a fresh install can launch immediately without the user having Python installed.
