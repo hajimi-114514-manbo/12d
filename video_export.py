@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import wave
 
 import numpy as np
@@ -88,9 +89,23 @@ _SUB_LOCK = threading.RLock()
 _TYPEWRITER_MS = 60        # 打字机每字符毫秒
 _TYPEWRITER_FADE = 0.5     # 单字渐显秒数
 _TEXT_BASE_PX = 55         # 正文字号（1440 布局基准 px，从引擎截图实测）
+# 字幕描边宽度 = 字号 × 此比例（引擎原值 0.12em，#2e2312）。
+# v3.6.x 用户反馈「黑边太粗」，收到 0.075（55px 字 -> 7px 降到 4px）。
+# **预览 stage_view._SUB_OUTLINE 必须同步**，否则预览/导出两套观感。
+_SUB_STROKE_RATIO = 0.075
+_SUB_STROKE_MIN = 1        # 下限 1px（旧值 2 在小字号下也显粗）
+
+
+def _stroke_of(body_px):
+    """字幕描边宽度（px）。所有画字路径都走这里，避免各处比例漂移。"""
+    return max(_SUB_STROKE_MIN, int(round(_SUB_STROKE_RATIO * float(body_px))))
 
 _FONT_CANDIDATES = (
-    "ResourceHanRoundedCN-Regular",     # 引擎正文字体：资源圆体
+    # 江城圆体 500W = MyGO 主题的标准台词字体（用户 2026-11-26 指定）。
+    # 项目内 ttf 优先，预览（stage_view，QFontDatabase）与导出（PIL）
+    # 共用同一个文件，保证字形一致。
+    "JiangChengYuanTi.ttf",
+    "ResourceHanRoundedCN-Regular",     # 引擎默认正文字体：资源圆体
     "msyh.ttc", "msyhbd.ttc", "simhei.ttf",
 )
 
@@ -107,9 +122,13 @@ def _pil():
 
 
 def _font_files():
-    """runtime 字体优先（资源圆体 = 引擎同款），再退系统雅黑/黑体。"""
-    rt = os.path.join(_APP_DIR, "templates", "webgal_runtime", "assets")
+    """项目字体优先（江城圆体 = MyGO 台词同款），再退 runtime/系统。"""
     out = []
+    own = os.path.join(_APP_DIR, "templates", "webgal", "fonts",
+                       "JiangChengYuanTi.ttf")
+    if os.path.isfile(own):
+        out.append(own)          # 用户指定字体：排第一
+    rt = os.path.join(_APP_DIR, "templates", "webgal_runtime", "assets")
     with contextlib.suppress(OSError):
         if os.path.isdir(rt):
             out.extend(os.path.join(rt, f) for f in sorted(os.listdir(rt))
@@ -305,8 +324,8 @@ def _dialog_layout(W, H, text):
 
 
 def _draw_engine_text(d, x, y, ch, font, body_px, alpha=1.0):
-    """引擎文字三层：右下阴影 → #2e2312 描边（0.12em）→ 白色本体。"""
-    stroke = max(2, int(round(0.12 * body_px)))
+    """引擎文字三层：右下阴影 → #2e2312 描边 → 白色本体。"""
+    stroke = _stroke_of(body_px)
     soff = max(1, int(round(0.05 * body_px)))
     fill = (255, 255, 255, int(255 * alpha))
     sf = (0, 0, 0, int(150 * alpha))
@@ -373,7 +392,7 @@ def _full_text_band(W, H, text):
     chars = _dialog_layout(W, H, text)
     if not chars: return (0, None)
     body_px = _body_px(H)
-    stroke = max(2, int(round(0.12 * body_px)))
+    stroke = _stroke_of(body_px)
     soff = max(1, int(round(0.05 * body_px)))
     xs = [c[1] for c in chars]
     ys = [c[2] for c in chars]
@@ -402,7 +421,7 @@ def _tile_of_char(ch, body, body_px, alpha):
     mod = _pil()
     if mod is None or body is None or alpha <= 0.02: return None
     Image, ImageDraw, _ = mod
-    stroke = max(2, int(round(0.12 * body_px)))
+    stroke = _stroke_of(body_px)
     soff = max(1, int(round(0.05 * body_px)))
     bb = body.getbbox(ch) or (0, 0, int(body_px), int(body_px * 1.2))
     pad = stroke + soff + 2
@@ -459,7 +478,7 @@ def _typing_band(W, H, text, chars, n_stable):
     e = _tc.get(key)
     if e is None or n_stable < e["drawn"]:
         body_px = _body_px(H)
-        stroke = max(2, int(round(0.12 * body_px)))
+        stroke = _stroke_of(body_px)
         soff = max(1, int(round(0.05 * body_px)))
         xs = [c[1] for c in chars]
         ys = [c[2] for c in chars]
@@ -496,13 +515,28 @@ def _typing_band(W, H, text, chars, n_stable):
         e["aux"] = (pre,
                     np.repeat(np.subtract(255, a_u8, dtype=np.uint8), 3, axis=2),
                     int(a_u8.min()), int(a_u8.max()))
-        last_x = chars[n_stable - 1][1]
+        # v3.7.6 修「多行字幕打字时整行消失」：原来只按**最后一个稳定字**的
+        # x 算带宽，单行时没问题；一旦打字推进到第二行，末字回到行首
+        # （x 很小），used_x1 就塌成 70 这种值 —— 而带子是**整个文本块**
+        # 的 band，于是第一行整行被裁掉、画面上只剩第二行开头的两个字。
+        # 实测 idx55（两行，35 字）在 t=470.53 触发：used_x1 1509 -> 70，
+        # 第一行需要 1501 列。多行字幕每次换行都会闪一下。
+        #
+        # 现在取**所有已稳定字**的最大右边界：band 的宽度必须覆盖到当前
+        # 已经画进去的每一个字，不能只看最后一个。
+        stroke = _stroke_of(body_px)
+        soff = max(1, int(round(0.05 * body_px)))
+        pad_x = 2 * (stroke + soff + 2)
+        max_right = 0.0
+        for _ch, _x, _y in chars[:n_stable]:
+            try:
+                _w = body.getlength(_ch)
+            except Exception:
+                _w = body_px
+            max_right = max(max_right, _x + _w)
+        # 尾部余量 0.2em 是给斜体/描边溢出留的（与原式一致）
         e["used_x1"] = min(e["arr"].shape[1],
-                           int(last_x - e["x0"]
-                               + body.getlength(chars[n_stable - 1][0])
-                               + 0.2 * body_px
-                               + 2 * (int(round(0.12 * body_px))
-                                      + int(round(0.05 * body_px)) + 2)))
+                           int(max_right - e["x0"] + 0.2 * body_px + pad_x))
     if e["arr"] is None or e["drawn"] <= 0: return None
     return e
 
@@ -514,7 +548,7 @@ def _draw_char_now(canvas, x, y, ch, alpha):
     if mod is None or body is None or alpha <= 0.02: return
     Image, ImageDraw, _ = mod
     body_px = _body_px(canvas.shape[0])
-    stroke = max(2, int(round(0.12 * body_px)))
+    stroke = _stroke_of(body_px)
     soff = max(1, int(round(0.05 * body_px)))
     bb = body.getbbox(ch) or (0, 0, int(body_px), int(body_px * 1.2))
     pad = stroke + soff + 2
@@ -1113,6 +1147,84 @@ def ffmpeg_path():
     return next((p for p in FFMPEG_CANDIDATES if os.path.exists(p)), None)
 
 
+# ---------------- 视频编码器选型 ----------------
+# v3.7.5 导出提速（实测 1080p 真实工程帧 120 帧换算全片 7171 帧）：
+#   mp4v（MPEG-4 Part 2，现状） 43.2 s   1.72 MB   PSNR 37.43 dB
+#   avc1 / H264（OpenH264）     25.2 s   6.55 MB   PSNR 35.32 dB
+#   X264                         26.4 s   6.55 MB
+# 编码是「定格导出」的最大头（animate=0 workers=4 全片 70.7 s，其中
+# 合成 CPU 只占 ~20 s，编码 ~43 s -> 61%）。换 avc1 直接省 18 s（-42%）。
+#
+# **为什么不用本机 ffmpeg 走管道**：本机 ffmpeg 是 --disable-everything
+# 精简构建，**没编进任何视频编码器**（实测 -encoders 只有 aac/pcm_*），
+# mpeg4/libx264 一律 "Broken pipe"。cv2 自带的 FFmpeg 带 OpenH264，可用。
+#
+# **体积是硬伤**：avc1 产物 391MB vs mp4v 103MB（+280%）。两者 PSNR 只差
+# 2.1 dB —— mp4v 是用**更狠的码率**换体积，画质实际更差。所以换 avc1
+# 是「体积 +280% 换速度 -42%」，**不是**无代价的提速。
+#
+# **因此默认仍是 mp4v**：体积是用户能感知的硬指标（成片要塞进网盘/剪辑
+# 工程），不能因为快就偷偷换。提速改为**用户可选**：导出对话框加「编码」
+# 一项，默认「兼容（小体积）」= mp4v，选「快速（H.264）」= avc1。
+#
+# **兜底**：openh264 缺 DLL 时（实测某些环境报
+# "Failed to load OpenH264 library: openh264-2.5.0-win64.dll"）
+# cv2 会回落到 avc1 tag，仍失败则自动退回 mp4v —— 导出永不因此失败。
+_VIDEO_CODECS = ("avc1", "H264", "X264", "mp4v")
+_VIDEO_CODEC_CACHE = {}
+
+# 导出对话框的可选编码档：值 = (fourcc, 说明)
+VIDEO_ENCODERS = (
+    ("mp4v", "兼容（小体积）"),
+    ("avc1", "快速（H.264，体积较大）"),
+)
+
+
+def video_encoder_options():
+    """本机**真能写**的编码档（逐个探测）。
+
+    探测尺寸用 64x64：实测 16x16 时 OpenH264 直接开不起来（"tag avc1 is
+    not supported" + openh264 DLL 缺失告警），但 64x64 起四个 fourcc
+    全部可写 —— 用 16x16 会误判成「只有 mp4v 可用」。
+    """
+    import cv2
+    import tempfile
+    ok_list = []
+    for cc in _VIDEO_CODECS:
+        try:
+            p = os.path.join(tempfile.gettempdir(), "_vc_probe64_%s.mp4" % cc)
+            vw = cv2.VideoWriter(p, cv2.VideoWriter_fourcc(*cc), 5.0, (64, 64))
+            ok = vw.isOpened()
+            if ok:
+                vw.write(np.zeros((64, 64, 3), np.uint8))
+            vw.release()
+            if ok and os.path.isfile(p) and os.path.getsize(p) > 0:
+                ok_list.append(cc)
+            with contextlib.suppress(OSError):
+                os.remove(p)
+        except Exception:
+            continue
+    return ok_list or ["mp4v"]
+
+
+def _pick_video_codec(prefer=None):
+    """选一个本机真能用的视频 fourcc（探测一次，缓存结果）。
+
+    `prefer` = 用户选的档（"mp4v"/"avc1"）；不可用时自动退回 mp4v。
+    探测走 video_encoder_options()（64x64 试写）。
+    """
+    key = (os.path.abspath(os.curdir), _HERE)
+    hit = _VIDEO_CODEC_CACHE.get(key)
+    if hit is None:
+        hit = video_encoder_options()
+        _VIDEO_CODEC_CACHE[key] = hit
+    if prefer and prefer in hit:
+        return prefer
+    return "mp4v" if "mp4v" in hit else hit[0]
+
+
+
+
 # ---------------- 单帧合成 ----------------
 # v3.5.8 并行正确性：模块级缓存在多线程合成下共享（帧级并行 & bg∥fig
 # 双线程），结构操作（LRU 淘汰 / clear / 写入）必须持锁——只在读写字典
@@ -1301,6 +1413,79 @@ def source_key(src):
     return (src.get("kind"), os.path.normpath(str(src.get("path") or "")))
 
 
+# ---------------- v3.7.5 静态素材缩放缓存 ----------------
+# **为什么**：cProfile 实测（1920x1080 真工程，60 帧）合成耗时里
+# `cv2.resize` 占 0.335s / 1.008s = **33%**，147 次调用几乎全是
+# **同一张背景图**被反复缩放（768x1024 -> 1920x1440，每次 2.28ms）。
+# 背景是静态图片源（image），每帧的缩放结果**完全相同**——白算。
+#
+# **键怎么定**：resize 是**纯函数**（同样输入必得同样输出），所以键只用
+# 「输入内容指纹 + 目标尺寸 + 插值方式」即可，命中与重算**逐像素相同**。
+# 内容指纹用 (shape, 步长, 字节和) —— 纯 numpy 计算、无需复制内容，
+# 静态图片每帧内容不变 -> 指纹稳定；内容变了 -> 指纹变 -> 自然失效。
+# 不用 id(img)：id 在对象释放后会被复用，多线程下极易命中别人的结果。
+#
+# **正确性验证**：合成基线（124 帧 sha256 逐帧比对）实测完全一致。
+_RESIZE_CACHE = {}
+_RESIZE_LOCK = threading.RLock()
+_RESIZE_BUDGET_MB = 64          # 缩放结果缓存上限（1920x1440x3 ≈ 8.3MB/份）
+
+
+def _img_fingerprint(img):
+    """内容指纹：形状 + 步长 + 字节和。静态图每帧不变 -> 指纹稳定。
+
+    用字节和（而非哈希全量）是为了便宜：一次 np.sum 走连续内存，
+    1080p 约 1ms；比 hashlib 全量哈希（要拷贝）便宜一个量级。
+    碰撞风险：sum 相同但内容不同的两张图 -> 误命中 -> 画面错。
+    为此**再加一项**：取首/中/尾各 64 字节做一次校验（几乎零成本）。
+    """
+    try:
+        a = np.ascontiguousarray(img)
+        flat = a.reshape(-1)
+        n = flat.size
+        if n == 0:
+            return (int(a.shape[0]), int(a.shape[1]), int(a.shape[2]
+                                                     if a.ndim > 2 else 1), 0, 0)
+        step = max(1, n // 192)
+        probe = flat[::step][:192]
+        ps = int(probe.sum(dtype=np.int64))
+        edge = int(flat[:64].sum(dtype=np.int64)) + \
+            int(flat[-64:].sum(dtype=np.int64))
+        return (int(a.shape[0]), int(a.shape[1]),
+                int(a.shape[2]) if a.ndim > 2 else 1,
+                int(flat.sum(dtype=np.int64)), ps ^ edge)
+    except Exception:
+        return None
+
+
+def _resize_cached(img, nw, nh, interp):
+    """cv2.resize + 内容指纹缓存（命中即 0 成本）。
+
+    键 = (指纹, 目标宽, 目标高, 插值方式)。指纹相同即内容相同，
+    resize 结果必然逐像素相同。
+    """
+    import cv2
+    fp = _img_fingerprint(img)
+    if fp is None:
+        return cv2.resize(img, (nw, nh), interpolation=interp)
+    key = (fp, int(nw), int(nh), int(interp))
+    with _RESIZE_LOCK:
+        hit = _RESIZE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    out = cv2.resize(img, (nw, nh), interpolation=interp)
+    with _RESIZE_LOCK:
+        _RESIZE_CACHE.pop(key, None)
+        _RESIZE_CACHE[key] = out
+        _cache_shrink(_RESIZE_CACHE, _RESIZE_BUDGET_MB * 1048576, keep=2)
+    return out
+
+
+def _resize_cache_clear():
+    with _RESIZE_LOCK:
+        _RESIZE_CACHE.clear()
+
+
 def fit_paste(canvas, img):
     """等比缩放居中贴到画布（fit，黑边）——第一阶段唯一适配模式。"""
     H, W = canvas.shape[:2]
@@ -1309,7 +1494,9 @@ def fit_paste(canvas, img):
     s = min(W / w, H / h)
     nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
     import cv2
-    r = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
+    # v3.7.5：同样走缩放缓存（静态背景图每帧重复缩放）
+    r = _resize_cached(img, nw, nh,
+                       cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR)
     x, y = (W - nw) // 2, (H - nh) // 2
     canvas[y:y + nh, x:x + nw] = r
     return canvas
@@ -1422,8 +1609,11 @@ def paste_layer(canvas, img, lay):
     nw = max(1, int(round(w * s)))
     nh = max(1, int(round(h * s)))
     interp = cv2.INTER_AREA if s < 1 else cv2.INTER_LINEAR
-    rgb = cv2.resize(rgb, (nw, nh), interpolation=interp)
-    alpha = cv2.resize(alpha, (nw, nh), interpolation=interp) \
+    # v3.7.5：缩放结果按内容指纹缓存（cProfile 实测 resize 占合成耗时 33%，
+    # 且几乎全是同一张静态背景图反复缩放）。resize 是纯函数，命中与重算
+    # 逐像素相同。
+    rgb = _resize_cached(rgb, nw, nh, interp)
+    alpha = _resize_cached(alpha, nw, nh, interp) \
         if alpha is not None else None
     ox, oy, rw, rh = layer_rect(w, h, W, H, lay)
     if rot == 0.0:
@@ -1466,26 +1656,42 @@ def paste_layer(canvas, img, lay):
     return canvas
 
 
-def _lip_seq_for(proj, clip, aid=None):
-    """figure clip 的口型开口度序列 -> (list[float] | None, gain)。
+LIP_COVER_MIN = 0.20        # 语音窗口内「嘴动」帧占比低于此值 = 口型覆盖不足
+_LIP_WARNED = set()         # 已报过 LIPWARN 的 clip id（同一 clip 只报一次）
+# v3.7.3：渲染侧回读已校验过的 clip（每 clip 只抽查一次，避免每帧一次 JS 往返）
+_LIP_RB_CHECKED = set()
+_LIP_RB_TRIES = {}          # clip id -> 已尝试回读次数（判「表未落地」用）
 
-    v3.6.4。返回的序列**按 clip 内相对时间**排列（第 k 个 = clip 第 k 帧），
+
+def _lip_seq_for(proj, clip, aid=None, track=None):
+    """figure clip 的口型开口度序列 -> (list[float] | None, gain, info)。
+
+    返回的序列**按 clip 内相对时间**排列（第 k 个 = clip 第 k 帧），
     正好对上 PuppetSource.frame() 传的 `t - clip.start + src_in` 网格。
 
-    缓存策略：按 (clip id, 语音 id, clip 起点, 时长, 增益, fps) 记一份，
-    同一 clip 逐帧调用只算一次 —— 包络计算要读整段 wav，逐帧重算是灾难。
+    v3.7.0「口型消失」修复（重叠语音逐帧取 max，不再只认一句）：
+      旧实现只取 `clip["lip"]["voice"]` **一句**语音烘焙，且 `lip is None`
+      时直接 return None —— 于是 100 秒的 c21 只有 2 秒在动，未绑定口型的
+      c8/c16/c22/c23 整段不动，全片覆盖率 2.3%。
+      现在：收集与本 clip 时间区间**重叠的全部语音**（video_model.
+      overlap_voices，按角色优先/时间兜底），逐句按自己的 offset 烘焙包络
+      后**逐帧 max 合并**；`lip=None` 也走同一套（纯时间重叠自动匹配）。
 
-    没绑口型 / 语音缺失 / 素材读不了 -> (None, 1.0)，调用方保持「不控嘴」。
+    缓存策略：按 (clip id, 模式, 起点, 时长, 增益, fps, src_in, 语音指纹)
+    记一份。语音指纹含每句 id + offset + 素材路径，任何一句被拖动/换素材
+    都会换 key，不会吃到旧包络。没语音/素材读不了 -> (None, 1.0, info)，
+    调用方保持「不控嘴」。
+
+    info: {"mode","voices","frames","nonzero","voice_frames","cover"}，
+    供 compose_frame 的覆盖率自检与 DSH `lip.cover` 查询共用。
     """
     try:
         import video_model as VM
         import lip_sync as LS
     except Exception:
-        return None, 1.0
+        return None, 1.0, {}
     lp = VM._sanitize_lip((clip or {}).get("lip"))
-    if not lp:
-        return None, 1.0
-    gain = float(lp.get("gain") or 1.0)
+    gain = float(lp.get("gain") or 1.0) if lp else 1.0
     try:
         fps = float((proj or {}).get("fps") or 30.0)
     except (TypeError, ValueError):
@@ -1493,39 +1699,188 @@ def _lip_seq_for(proj, clip, aid=None):
     if fps <= 0:
         fps = 30.0
     cid = str((clip or {}).get("id") or "")
-    # 片段内相对时间 -> 音频内时刻的偏移：
-    # clip 第 0 帧对应工程时间 clip.start，而语音在工程时间 vc.t 开始，
-    # 所以第 0 帧对应音频的 (clip.start - vc.t) 处；再扣掉 clip 自己的
-    # src_in（源内裁剪起点）。
     start = float((clip or {}).get("start") or 0.0)
     dur = float((clip or {}).get("dur") or 0.0)
-    if dur <= 0:
-        return None, 1.0
-    vc = VM.voice_clip_by_id(proj, lp.get("voice"), aid)
-    if vc is None:
-        return None, 1.0
-    v_t = float(vc.get("t") or 0.0)
     src_in = float((clip or {}).get("src_in") or 0.0)
+    # v3.7.0：只有「有素材内部时间的源」（video/audio）才把 src_in 算进口型
+    # 偏移。puppet（立绘）与 image 的动画按 clip 相对时间走，src_in 对该类
+    # 源无意义 —— 旧数据里切段产生的 src_in=30.4 会把口型窗口整段推到音频
+    # 之外（实测 c39/c41 覆盖率 0.0%），这里再兜一层，数据脏了也不哑。
+    if str(((clip or {}).get("source") or {}).get("kind") or "") not in ("video", "audio"):
+        src_in = 0.0
+    mode = "bound" if lp else "auto"
+    if dur <= 0:
+        return None, 1.0, {"mode": mode, "voices": [], "frames": 0,
+                           "nonzero": 0, "voice_frames": 0, "cover": None}
+
+    voices, role_filtered = VM.overlap_voices(proj, clip, aid, track)
+    if lp and not any(str(v.get("id") or "") == str(lp.get("voice"))
+                      for v in voices):
+        # 显式绑定的那句压根不落在这个片段里：仍按它算（保持旧语义，
+        # 免得用户手绑的意图被静默丢掉），只是嘴基本不会动、覆盖率自检会报。
+        _b = VM.voice_clip_by_id(proj, lp.get("voice"), aid)
+        if _b is not None:
+            voices = [_b]
+    if not voices:
+        return None, 1.0, {"mode": mode, "voices": [], "frames": 0,
+                           "nonzero": 0, "voice_frames": 0, "cover": None}
+
     # offset = 「片段第 0 帧对应音频里的哪一刻」：
     #   立绘 0.5s 入场、语音 1.0s 才开始 -> 第 0 帧对应音频 -0.5s（前 0.5s 静音）
     #   立绘 0s 入场、语音已经在 0s 前说过一半（src_in>0）-> 从音频 src_in 处取
-    offset = (start - v_t) + src_in
+    items, sig = [], []
+    for vc in voices:
+        v_t = float(vc.get("t") or 0.0)
+        offset = (start - v_t) + src_in
+        items.append((LS.envelope(vc.get("path"), ""), offset, gain))
+        sig.append((str(vc.get("id") or ""), round(offset, 3),
+                    str(vc.get("path") or "")))
 
-    key = (cid, lp.get("voice"), round(start, 3), round(dur, 3),
-           round(gain, 3), round(fps, 3), round(src_in, 3),
-           str(vc.get("path") or ""))
+    key = (cid, mode, round(start, 3), round(dur, 3), round(gain, 3),
+           round(fps, 3), round(src_in, 3), tuple(sig))
     cache = _LIP_SEQ_CACHE
     hit = cache.get(key)
     if hit is not None:
-        return hit[0], hit[1]
-    env = LS.envelope(vc.get("path"), "")
-    if env is None:
-        return None, 1.0
-    vals = env.bake(fps, dur, offset=offset)
-    if len(cache) > 64:                 # 简单防膨胀（导出整片也就几十条）
+        return hit[0], hit[1], hit[2]
+    vals = LS.bake_multi(items, fps, dur)
+    vf = VM.voice_overlap_frames(proj, clip, aid, track, fps)
+    ids = [str(v.get("id") or "") for v in voices]
+    if not vals:
+        info = {"mode": mode, "voices": ids, "role_filtered": role_filtered,
+                "frames": 0, "nonzero": 0, "voice_frames": vf, "cover": None}
+        cache[key] = (None, 1.0, info)
+        return None, 1.0, info
+    nz = int(sum(1 for v in vals if v > 1e-4))
+    info = {"mode": mode, "voices": ids, "role_filtered": role_filtered,
+            "frames": len(vals), "nonzero": nz, "voice_frames": vf,
+            "cover": (float(nz) / vf) if vf > 0 else None}
+    if len(cache) > 128:                # 简单防膨胀（导出整片也就几十条）
         cache.clear()
-    cache[key] = (vals, gain)
-    return vals, gain
+    cache[key] = (vals, gain, info)
+    return vals, gain, info
+
+
+def _lip_tag_of(clip):
+    """口型表 tag = clip 标识 + 起止时间。
+
+    v3.7.3：同一 model_path 在整条时间线上共用一个渲染 slot，相邻 clip 的
+    ref/motion/expression 常常一字不变（projects.mp4 的 c21/c39/c41 就是），
+    所以「换台词了」必须由调用方显式告知渲染层 —— 这个 tag 就是那句话。
+    逐帧稳定（同一 clip 永远同一个值），换 clip 必变，且人可读（日志里能
+    直接看出是哪一段）。
+    """
+    c = clip or {}
+    return "%s|%.3f|%.3f" % (str(c.get("id") or ""),
+                            float(c.get("start") or 0.0),
+                            float(c.get("dur") or 0.0))
+
+
+def _lip_rb_check(cid, clip, info):
+    """渲染侧回读校验：页面到底有没有按我们下发的表画嘴（每 clip 一次）。
+
+    覆盖率（_lip_seq_for 的 cover）只证明「表里有开口度」，看不到「页面手上
+    是不是这张表」。同 ref 连续多 clip 的老故障正是后者：表算得没错、cover
+    54%，但页面还挂着上一个 clip 的表，按本 clip 的偏移去取就越界、夹到末值，
+    嘴从此定死。这里读渲染层落下的回读台账（每张表落地后采一次）：
+      ① has=False          页面没有表（setLip 压根没到）
+      ② skipped == "stale" 页面判越界跳过（相位与本表不匹配）
+      ③ lipNow 与期望值不一致（表在、但写进去的不是它该有的值）
+    三项任一成立即 LIPWARN —— 这是**静态覆盖率永远发现不了**的那一类失败。
+    """
+    if not cid or cid in _LIP_RB_CHECKED:
+        return
+    try:
+        import l2d_renderer as R
+        rb = R.lip_readback()
+    except Exception:
+        return
+    rb = rb or {}                   # 台账为空也要走：空=表从未落地，是真故障
+    tag = _lip_tag_of(clip)
+    hit = None
+    for _mid, e in rb.items():
+        if str(e.get("tag") or "") == tag:
+            hit = e
+            break
+    # v3.7.4：回读缺失也是一种失败。若这个 clip 已经连续渲染 90 帧（3s）
+    # 还没见到自己的 tag 落地，说明表压根没到页面（或渲染层一直在出缓存帧），
+    # 这正是「嘴定死」的前兆，必须报出来而不是继续等。
+    tries = int(_LIP_RB_TRIES.get(cid) or 0) + 1
+    _LIP_RB_TRIES[cid] = tries
+    if hit is None:
+        if tries >= 90:
+            _LIP_RB_CHECKED.add(cid)
+            print("LIPWARN clip=%s 渲染侧回读缺失：连续 %d 帧未见本 clip 的"
+                  "口型表落地（tag=%s）" % (cid, tries, tag), flush=True)
+        return                      # 本 clip 的表还没落地，下一帧再看
+    if hit.get("pending"):
+        # 表已下发，只是还在等第一个有开口度的帧被回读（静音前奏长的 clip
+        # 可能等十几秒）。这不是失败，继续等，别计 _LIP_RB_CHECKED。
+        return
+    _LIP_RB_CHECKED.add(cid)
+    bad = []
+    if hit.get("has") is False:     # None=未采到，不当作失败
+        bad.append("页面无表")
+    if str(hit.get("skipped") or "") == "stale":
+        bad.append("页面判越界跳过(stale)")
+    now, exp, exp1 = hit.get("now"), hit.get("expect"), hit.get("expect1")
+    if exp is not None and now is not None:
+        try:
+            n = float(now)
+            ok = abs(n - float(exp)) <= 0.05 or (
+                exp1 is not None and abs(n - float(exp1)) <= 0.05)
+            if not ok:
+                bad.append("lipNow=%.3f≠期望%.3f" % (n, float(exp)))
+        except (TypeError, ValueError):
+            pass
+    if bad:
+        print("LIPWARN clip=%s 渲染侧回读异常：%s（tag=%s k=%s len=%s）" % (
+            cid, "；".join(bad), tag, hit.get("k"), hit.get("len")),
+            flush=True)
+
+
+def _lip_check_warn(clip, info):
+    """口型覆盖率自检：语音窗口内嘴动帧 < 20% 打 LIPWARN（每 clip 一次）。
+
+    为什么要这层：口型链路的失败是**静默**的 —— 包络读不到、绑定指向不存在
+    的语音、语音被拖出片段范围，任何一处出问题画面都只是「嘴不动」，
+    导出照样成功。没有断言就只能靠人眼在 561 秒成片里找。
+    """
+    cid = str((clip or {}).get("id") or "")
+    if not cid or cid in _LIP_WARNED:
+        return
+    vf = int((info or {}).get("voice_frames") or 0)
+    if vf <= 0:
+        _LIP_WARNED.add(cid)            # 片段内没对白：不需要嘴，不算问题
+        return
+    cover = (info or {}).get("cover")
+    # v3.7.3：不管覆盖率是否达标，都抽查一次渲染侧回读（每 clip 一次）。
+    # 老故障恰是「覆盖率 53.5% 达标、页面却拿着上一个 clip 的表」——只盯
+    # cover 永远发现不了，所以两路检查并列而不是二选一。
+    _lip_rb_check(cid, clip, info)
+    if cover is not None and cover >= LIP_COVER_MIN:
+        return
+    _LIP_WARNED.add(cid)
+    print("LIPWARN clip=%s mode=%s voices=%s 语音窗口帧=%d 非零帧=%d "
+          "cover=%s < %.0f%%" % (
+              cid, (info or {}).get("mode"),
+              ",".join((info or {}).get("voices") or []), vf,
+              int((info or {}).get("nonzero") or 0),
+              ("%.1f%%" % (cover * 100)) if cover is not None else "0.0%",
+              LIP_COVER_MIN * 100), flush=True)
+
+
+def lip_coverage(proj, clip, aid=None, track=None):
+    """单个立绘 clip 的口型覆盖率（DSH `lip.cover` 用，不渲染只算包络）。"""
+    vals, gain, info = _lip_seq_for(proj, clip, aid, track)
+    out = dict(info or {})
+    out["clip_id"] = str((clip or {}).get("id") or "")
+    out["start"] = round(float((clip or {}).get("start") or 0.0), 3)
+    out["dur"] = round(float((clip or {}).get("dur") or 0.0), 3)
+    out["gain"] = gain
+    out["ok"] = bool(vals)
+    c = out.get("cover")
+    out["cover_pct"] = (round(c * 100.0, 1) if c is not None else None)
+    return out
 
 
 _LIP_SEQ_CACHE = {}
@@ -1575,6 +1930,18 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                 setp = getattr(src, "set_preset", None)
                 if callable(setp):
                     setp(clip.get("motion", ""), clip.get("expression", ""))
+                # v3.6.9 口型：无滤镜分支也要挂开口度序列。
+                # 原来只有下面的「分层合成（带滤镜）」分支才赋 src._lip_vals，
+                # 无滤镜工程（大多数工程走这条）的导出根本没有嘴部动作。
+                # 计算与滤镜分支共用同一份 _lip_seq_for() 缓存，零额外开销。
+                if hasattr(src, "_lip_vals"):
+                    _lip, _gain, _lipo = _lip_seq_for(proj, clip, aid, tr)
+                    _lip_check_warn(clip, _lipo)      # v3.7.0 覆盖率自检
+                    src._lip_vals = _lip
+                    src._lip_gain = _gain
+                    # v3.7.3：把「这张表属于哪个 clip」一起挂上。同 ref 连续
+                    # 多 clip 时渲染层就是靠它判断换台词并强制重发 setLip。
+                    src._lip_tag = _lip_tag_of(clip)
                 # **clip["src_in"] 可能不存在**（手写/外部构造的 clip 不带它，
                 # 只有 V.new_clip 会补）。原来直接下标取 -> KeyError -> 被
                 # 外层 except 吞掉 -> 整条轨静默跳过 -> 画面全黑。
@@ -1611,9 +1978,13 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
                 # 逐帧调用只算一遍）；没有绑定时返回 None，源会保持
                 # 「不控嘴」，模型自己按动作/物理走。
                 if hasattr(src, "_lip_vals"):
-                    _lip, _gain = _lip_seq_for(proj, clip, aid)
+                    _lip, _gain, _lipo = _lip_seq_for(proj, clip, aid, tr)
+                    _lip_check_warn(clip, _lipo)      # v3.7.0 覆盖率自检
                     src._lip_vals = _lip
                     src._lip_gain = _gain
+                    # v3.7.3：把「这张表属于哪个 clip」一起挂上。同 ref 连续
+                    # 多 clip 时渲染层就是靠它判断换台词并强制重发 setLip。
+                    src._lip_tag = _lip_tag_of(clip)
                 # 同旧路径：src_in 可能缺失，不能直接下标（否则 KeyError
                 # 被外层吞掉 -> 该轨静默跳过 -> 合成全黑）
                 img = src.frame(max(0.0, t - clip["start"]
@@ -1623,6 +1994,9 @@ def compose_frame(proj, t, src_get, canvas=None, aid=None, subtitle=True,
             if img is None or img.size == 0: continue
             if bool(lay.get("cover")): bg_jobs.append((img, lay, clip.get("source")))
             elif is_fig:
+                # 方案 A 的「clip 边界交叉淡入」**不在这里**做：本函数是
+                # 帧级并行里的无状态纯函数，多线程下拿不到「上一帧成品」。
+                # 混合放在写编码器的顺序循环里（fig_blend_plan/blend_frame）。
                 fig_jobs.append((img, lay,
                                  bool(getattr(src, "is_static", False))))
             else: main_jobs.append((img, lay))
@@ -1841,6 +2215,55 @@ def extract_audio(path):
         with contextlib.suppress(OSError): os.remove(tmp)
 
 
+def _voice_dur_map(proj, aid=None):
+    """{(归一化素材路径, 起点秒): 真实配音时长} —— 修「语音被截断」用。
+
+    **为什么需要它**（v3.7.6，用户报「语音被截断了」）：
+    同一个配音时长在工程里有**两份**记录，而且可能不一致：
+      ① dialogue[i].voice.dur  —— 合成时按 wav 实测写入，**这是真值**
+      ② 配音轨 clip.dur        —— 时间轴投影/历史导入时算出来的，可能偏短
+    实测某工程 10 条配音，② 普遍是 ① 的 75%~91%（0.75/0.8 这类整数比），
+    于是 mix_audio 按 ② 切片，尾巴 0.2~1.8 秒被整段丢掉 —— 听感就是
+    「话没说完就没了」，而画面/字幕完全正常，极难定位。
+
+    真值取 ①：它由合成后实测 wav 得到，与 lip_sync 取包络用的是同一份。
+    """
+    out = {}
+    try:
+        import video_model as _VM
+        view = _VM.act_view(proj, aid)
+        dl = view.get("dialogue") or []
+    except Exception:
+        return out
+    for it in dl:
+        if not isinstance(it, dict):
+            continue
+        v = it.get("voice") or {}
+        p = v.get("path")
+        if not p:
+            continue
+        try:
+            vd = float(v.get("dur") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if vd <= 0:
+            continue
+        try:
+            st = float(it.get("t") or 0.0)
+        except (TypeError, ValueError):
+            st = 0.0
+        # detach 时起点以 voice.t 为准（与 voice_clips 投影口径一致）
+        if v.get("detach") is True:
+            try:
+                st = float(v.get("t") or st)
+            except (TypeError, ValueError):
+                pass
+        key = (os.path.normcase(os.path.normpath(str(p))), round(st, 3))
+        if vd > out.get(key, 0.0):
+            out[key] = vd
+    return out
+
+
 def mix_audio(proj, sr=44100):
     """整工程混音 -> int16 ndarray（时长=project_duration）。无音频返回 None。
 
@@ -1849,12 +2272,17 @@ def mix_audio(proj, sr=44100):
       · 长度 = clip 的 dur（乘 speed 换算成素材时长）
     早先的实现直接把整条素材塞进 buf，导致「3 秒片段用了 4 分钟的歌 ->
     后面一直在响」，相邻/重叠片段也互相串音。
+
+    v3.7.6：**配音**以 dialogue 里的真实 voice.dur 为准（见 _voice_dur_map）。
+    配音轨的 clip.dur 可能比真实 wav 短（实测 75%~91%），照它切片会把
+    每句话的尾巴切掉；而 voice.dur 是合成后实测的，与口型取包络同源。
     """
     dur = V.project_duration(proj)
     if dur <= 0: return None
     total = int(dur * sr) + sr // 2
     buf = np.zeros(total, np.int16)
     any_a = False
+    vdur_map = _voice_dur_map(proj)
     for tr in proj.get("tracks", []):
         if tr.get("hidden"):          # 隐藏轨不参与混音（与画面一致）
             continue
@@ -1878,6 +2306,19 @@ def mix_audio(proj, sr=44100):
             if speed <= 0: speed = 1.0
             clip_dur = float(c.get("dur") or 0.0)
             src_in = max(0.0, float(c.get("src_in") or 0.0))
+            cstart = float(c.get("start") or 0.0)
+            # v3.7.6 语音截断修复：该 clip 若对应一条配音，用**真实时长**兜底。
+            # 只在「不是手工裁剪」的前提下放宽（src_in 为 0、1 倍速、且记录
+            # 时长明显偏短），避免把用户刻意缩短的语音又拉长回去。
+            try:
+                _vk = (os.path.normcase(os.path.normpath(str(path))),
+                       round(cstart, 3))
+                _vd = vdur_map.get(_vk)
+            except Exception:
+                _vd = None
+            if _vd and speed == 1.0 and src_in <= 1e-6 \
+                    and clip_dur < _vd - 0.02:
+                clip_dur = _vd
             # 素材内起点（秒）-> 采样索引
             s0 = int(round(src_in * sr))
             s0 = max(0, min(s0, len(samples)))
@@ -1901,6 +2342,16 @@ def mix_audio(proj, sr=44100):
                 seg = seg[-at:]
                 at = 0
             if at >= total or not len(seg): continue
+            # 音量（v3.7.0）：clip 级线性增益。缺键 = 1.0，保持旧工程逐样本一致。
+            try:
+                _g = float(c.get("gain")) if c.get("gain") is not None else 1.0
+            except (TypeError, ValueError):
+                _g = 1.0
+            if _g != 1.0:
+                if _g <= 0.0:
+                    any_a = True        # 显式静音也算"有音频"（用户可能就想留静默段）
+                    continue
+                seg = np.clip(seg.astype(np.float32) * _g, -32768, 32767).astype(np.int16)
             take = min(len(seg), total - at)
             _place(buf, seg[:take], at)
             any_a = True
@@ -2089,6 +2540,133 @@ def normalize_workers(workers=None):
     return max(1, min(upper, w))
 
 
+# ---------------- 方案 A：立绘 clip 边界交叉淡入 ----------------
+def _smoothstep(x):
+    """0..1 的平滑阶跃 3x²-2x³：两端一阶导为 0，起步/收尾都不会"顶"一下。"""
+    x = 0.0 if x < 0.0 else (1.0 if x > 1.0 else float(x))
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _fig_vis_end(proj, st):
+    """该 FIG clip（起点 st）对应的立绘**实际可见结束时刻**（秒）。
+
+    FIG clip 的 dur 会拉满到下一句开始（哪怕中间立绘已退场），所以
+    clip 首尾相接 **不等于** 立绘连续在场。真正的可见时长取对话项里
+    语音时长（voice.dur），没有语音就退回对话 dur。
+    """
+    for d in (proj.get("dialogue") or []):
+        try:
+            if abs(float(d.get("t")) - st) > 0.05:
+                continue
+            vd = float((d.get("voice") or {}).get("dur") or 0.0)
+            if vd <= 0.0:
+                vd = float(d.get("dur") or 0.0)
+            return st + vd if vd > 0.0 else None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def fig_blend_plan(proj, fps, n, aid=None):
+    """算出「哪几帧要做立绘边界交叉淡入」-> {帧序号: 新帧权重}。
+
+    **为什么在写编码器这一层做、而不是塞进 compose_frame**：导出是
+    「NW 线程乱序合成 + 按序写编码器」（见 VideoExportWorker.run）。
+    compose_frame 是无状态的纯函数，多线程下拿不到「上一帧成品」；
+    而写循环里天然是顺序的，上一帧就在手上 —— 混合因此**逐帧精确**，
+    不需要预渲染、不需要重跑泵、不会因为线程调度而抖动。
+
+    **为什么整帧混合是安全的**：背景 / 字幕 / 水印在相邻两帧像素相同，
+    out = w·cur + (1-w)·prev 在相同像素上恒等于原值，只有真正在动的
+    立绘会被拉出过渡（同一 clip 内 FIG 是唯一动的东西；BG 轨同时切的
+    那一两处会被顺带柔化，观感只会更好）。
+
+    两类窗口（项目配置，0 = 关闭）：
+    - `fig_blend_ms`（默认 200）：同轨内 clip 首尾相接的切换点。新 clip
+      首帧权重 smoothstep(1/F)（F=6 @30fps 时 ≈0.07，几乎全是旧姿态），
+      之后 F 帧爬到 1.0 —— 200ms 过渡。
+    - `fig_enter_ms`（默认 267 = 8 帧 @30fps）：立绘首次入场（首 clip 起点
+      >0）或留白后再出现。老实现 t=31.970 立绘是"啪"一下出现的（全片
+      最大差分 84.85），这里补入场淡入。
+    """
+    plan = {}
+    try:
+        bms = float(proj.get("fig_blend_ms", 200) or 0.0)
+    except (TypeError, ValueError):
+        bms = 200.0
+    try:
+        ems = float(proj.get("fig_enter_ms", 267) or 0.0)
+    except (TypeError, ValueError):
+        ems = 267.0
+    if bms <= 0.0 and ems <= 0.0:
+        return plan
+    fpb = max(1, int(round(bms / 1000.0 * fps))) if bms > 0 else 0
+    fpe = max(1, int(round(ems / 1000.0 * fps))) if ems > 0 else 0
+    try:
+        tracks = V._tracks_of(proj, aid)
+    except Exception:
+        return plan
+    for tr in tracks:
+        if not str(tr.get("name") or "").startswith("FIG"):
+            continue
+        if tr.get("hidden"):
+            continue
+        clips = sorted((c for c in (tr.get("clips") or [])
+                        if c.get("start") is not None),
+                       key=lambda c: float(c["start"]))
+        prev_end = None
+        prev_vis = None
+        for c in clips:
+            st = float(c["start"])
+            # 帧序号必须与 _track_clip_at 的判定**逐帧一致**：那边是
+            # `start - EPS <= t`，所以新 clip 的首帧是满足 i/fps >= st-EPS
+            # 的最小 i（st=31.970@30fps -> (31.970-0.005)*30=958.95 -> 959）。
+            # 早先写成 ceil(st*fps) 会让窗口晚一帧：小数部分小的切点
+            # （如 42.102 -> 1263.06）硬切落在 1263、窗口却从 1264 起，
+            # 跳变整帧漏在窗口外没被柔化（实测 7 处 d0 仍 2.8~4.8）。
+            i0 = int(math.ceil((st - V.EPS) * fps - 1e-6))
+            contiguous = prev_end is not None and abs(st - prev_end) <= V.EPS * 2
+            if contiguous:
+                frames = fpb
+            else:
+                frames = fpe if i0 > 0 else 0     # 从 0 秒就在场：没有"入场"
+            # 「留白后重新显现」：FIG clip 首尾相接，但上一句立绘早已退场
+            # 十几秒（如 t=122.570，上句可见结束 107.709）。clip 层面连续，
+            # 画面层面却是 alpha 0→1 的瞬间出现 —— 参数插值无法表达 alpha，
+            # 必须在这里补 alpha 淡入（下层是纯背景，整帧混合 == 淡入，不会
+            # 产生双层重影）。gap 阈值取 3s：本片相邻句间隙仅 1.35~2.17s。
+            vis_end = _fig_vis_end(proj, st)
+            if (not contiguous) or (frames <= 0):
+                if prev_vis is not None and (st - prev_vis) > 3.0 and i0 > 0:
+                    frames = fpe
+            for k in range(frames):
+                i = i0 + k
+                if i < 0 or i >= n:
+                    continue
+                w = _smoothstep((k + 1.0) / frames)
+                # 窗口重叠时取更接近 1 的那个，别把已经淡完的画面拉回去
+                if i in plan:
+                    w = max(plan[i], w)
+                plan[i] = w
+            prev_end = st + float(c.get("dur") or 0.0)
+            prev_vis = vis_end if vis_end is not None else prev_end
+    return plan
+
+
+def blend_frame(prev, cur, w):
+    """把当前帧按权重 w 叠到上一帧成品上（w = 当前帧占比；1.0 = 原样返回）。
+
+    只影响 blend_plan 点到的那几十帧，其余帧零开销。"""
+    if prev is None or w >= 1.0:
+        return cur
+    if prev.shape != cur.shape:
+        return cur
+    import cv2
+    if w <= 0.0:
+        return prev.copy()
+    return cv2.addWeighted(cur, float(w), prev, float(1.0 - w), 0.0)
+
+
 # ---------------- 导出 Worker ----------------
 try:
     from PySide6.QtCore import QThread, Signal
@@ -2109,7 +2687,8 @@ try:
         done = Signal(bool, str)
 
         def __init__(self, proj, out_path, preview_scale=1.0, fps=None,
-                     quality=None, workers=None, l2d_animate=None, parent=None):
+                     quality=None, workers=None, l2d_animate=None, parent=None,
+                     codec=None):
             super().__init__(parent)
             self.proj = proj
             self.path = out_path
@@ -2125,6 +2704,9 @@ try:
             # quality 保留占位：cv2 mp4v 后端实测不支持 QUALITY（set 后
             # 输出字节不变，H264 四元组假成功 0 字节），恒用默认质量。
             self.quality = quality
+            # v3.7.5 编码档：None=默认（mp4v，小体积）；"avc1"=H.264
+            # （实测快 42%，但体积 +280%）。见 _pick_video_codec 的取舍说明。
+            self.codec = codec
             # workers：帧级并行线程数。None/非法 -> 自动（核数//4，2..4）。
             # 用户可在导出对话框选；上限由 export_worker_limits() 给（UI 用
             # 同一个函数算下拉上限，避免两边口径不一致）。
@@ -2173,8 +2755,15 @@ try:
                 H = max(2, int(round(self.proj["height"] * self.scale)) & ~1)
                 fps = self.fps_override or float(self.proj["fps"])
                 n = max(1, int(round(V.project_duration(self.proj) * fps)))
-                vw = cv2.VideoWriter(self.path, cv2.VideoWriter_fourcc(*"mp4v"),
-                                    fps, (W, H))
+                vw = cv2.VideoWriter(self.path,
+                                     cv2.VideoWriter_fourcc(
+                                         *_pick_video_codec(self.codec)),
+                                     fps, (W, H))
+                if not vw.isOpened():
+                    # 探测选出的 fourcc 在本机不可用 -> 退回 mp4v 再试一次
+                    vw = cv2.VideoWriter(self.path,
+                                         cv2.VideoWriter_fourcc(*"mp4v"),
+                                         fps, (W, H))
                 if not vw.isOpened():
                     self.done.emit(False, "无法创建视频编码器（cv2 mp4v）")
                     return
@@ -2189,9 +2778,29 @@ try:
                 window = deque()
                 nxt = 0
                 written = 0
+                # 方案 A：立绘边界交叉淡入（写循环里顺序执行，见 fig_blend_plan）
+                blend_plan = fig_blend_plan(self.proj, fps, n)
+                prev_out = None
+                # ---- v3.7.5 编码与合成**重叠** ----
+                # 原来编码（vw.write）在写循环里**同步**做，编码耗时
+                # （实测 mp4v 1080p 约 4-7ms/帧）期间合成线程全在空等
+                # —— 编码是串行的，合成是并行的，两者叠不到一起。
+                # 改成：编码丢给一个**单独线程**，写循环只负责按序取帧、
+                # 混合、交给编码线程。合成(NW 线程) ∥ 编码(1 线程) 并行。
+                # 帧序仍由写循环保证（先混合再入队），产物逐位不变。
+                enc_pool = ThreadPoolExecutor(max_workers=1,
+                                              thread_name_prefix="venc")
+                pending = deque()          # 已交给编码线程、尚未写完的帧数
+
+                def _flush_encoder():
+                    """等编码线程把已入队的帧全部写完。"""
+                    while pending:
+                        pending.popleft().result()
+
                 while written < n:
                     if self._cancel:
                         pool.shutdown(wait=False, cancel_futures=True)
+                        enc_pool.shutdown(wait=False, cancel_futures=True)
                         vw.release()
                         self.done.emit(False, "已取消")
                         return
@@ -2203,15 +2812,27 @@ try:
                     if frame.shape[0] != H or frame.shape[1] != W:
                         frame = cv2.resize(frame, (W, H),
                                            interpolation=cv2.INTER_AREA)
-                    vw.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                    if blend_plan:
+                        wb = blend_plan.get(written)
+                        if wb is not None:
+                            frame = blend_frame(prev_out, frame, wb)
+                    prev_out = frame
+                    # 编码线程写盘；写循环不阻塞在上面
+                    pending.append(enc_pool.submit(
+                        vw.write, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)))
                     written += 1
                     if written % max(1, n // 50) == 0:
                         self.progress.emit(int(written / n * 80))
+                _flush_encoder()
                 pool.shutdown(wait=False)
+                enc_pool.shutdown(wait=True)
                 vw.release()
                 self.progress.emit(80)
-                # 混音合流
-                audio = mix_audio(self.proj) if self.scale >= 1.0 else None
+                # 混音合流。**必须无条件混音**：早先这里写成
+                # `mix_audio(...) if self.scale >= 1.0 else None`，导致所有
+                # 非「跟工程」档位（720p/540p/480p）导出**静默无声**——
+                # 混音与画面缩放毫无关系，缩放只影响编码分辨率。
+                audio = mix_audio(self.proj)
                 if audio is None or not np.any(audio):
                     self.done.emit(True, self.path)
                     return
@@ -2221,17 +2842,48 @@ try:
                     return
                 wavp = tempfile.mktemp(suffix=".wav")
                 write_wav(wavp, audio)
-                finalp = tempfile.mktemp(suffix=".mp4")
+                # 临时输出放到目标文件同目录：同盘 rename 才快且不跨盘
+                # （系统临时目录在 C:，用户输出常在 D:/E:，os.replace 会
+                #  抛 OSError(18)「无法移到不同的磁盘驱动器」）。
+                _odir = os.path.dirname(os.path.abspath(self.path)) or "."
+                finalp = os.path.join(
+                    _odir, ".mux_%d.mp4" % int(time.time() * 1000 % 10 ** 9))
+                # **必须显式 -f mov**：本机 ffmpeg 是 --disable-everything 精简
+                # 构建，muxer 只编进了 wav/mov/ipod/f32le，其中 mov muxer
+                # **不注册 .mp4 扩展名映射**（不是完整的 ffmpeg 那个会自动
+                # 认 .mp4）。靠扩展名推断会直接报
+                #   "Unable to choose an output format for '....mp4'"
+                # -> returncode 非 0 -> 「音轨合流失败，输出无声视频」。
+                # 这就是「导出没有声音」的真因（与分辨率档位无关）。
                 r = subprocess.run(
                     [ff, "-y", "-i", self.path, "-i", wavp,
-                     "-c:v", "copy", "-c:a", "aac", "-shortest", finalp],
+                     "-c:v", "copy", "-c:a", "aac", "-shortest",
+                     "-f", "mov", finalp],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE, creationflags=0x08000000, timeout=600)
                 self.progress.emit(98)
                 if r.returncode == 0 and os.path.isfile(finalp):
-                    os.replace(finalp, self.path)
+                    # **不能直接 os.replace 跨盘**：finalp 在系统临时目录
+                    # （通常 C:），用户输出可能在 D:/E:，os.replace 会抛
+                    # OSError(18)「系统无法将文件移到不同的磁盘驱动器」。
+                    # 先尝试 rename，跨盘失败就整文件复制再删源。
+                    try:
+                        os.replace(finalp, self.path)
+                    except OSError:
+                        import shutil as _sh
+                        _sh.copyfile(finalp, self.path)
+                        with contextlib.suppress(OSError):
+                            os.remove(finalp)
                     msg = "已导出（含音轨）"
-                else: msg = "音轨合流失败，输出无声视频"
+                else:
+                    # 失败原因别吞：ffmpeg 的 stderr 尾行是唯一线索
+                    # （以前只写「音轨合流失败」，用户和排查的人都看不到为什么）
+                    _tail = ""
+                    with contextlib.suppress(Exception):
+                        _tail = (r.stderr or b"").decode(
+                            "utf-8", "replace").strip().splitlines()[-1][:160]
+                    msg = ("音轨合流失败，输出无声视频" +
+                           ("（%s）" % _tail if _tail else ""))
                 for p in (wavp, finalp):
                     with contextlib.suppress(OSError): os.remove(p)
                 self.done.emit(True, "%s %s" % (self.path, msg))

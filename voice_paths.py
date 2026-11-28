@@ -26,6 +26,7 @@ GPT_SoVITS 代码 + 底模）任何一个零件找不到，合成就起不来。
 
 **import 零副作用**：不建目录、不扫盘、不抛异常。
 """
+import contextlib
 import io
 import json
 import os
@@ -45,6 +46,118 @@ def _user_data_dir():
     if not base:
         return ""
     return os.path.join(base, "MuppetStudio")
+
+
+# ---------------- v3.7.6 用户自选目录（外置引擎 / 外置语音包） ----------------
+# **为什么要这个**：引擎动辄 4GB、语音包（音色 ckpt+pth）上百 MB 一个，
+# 用户几乎不可能把它们放进程序目录：①装到 Program Files 时程序目录只读；
+# ②C 盘常年告急，引擎/音色通常放在 D:/E: 的大盘上；③一个人可能有多套
+# 引擎（中文基础档 / 中日双语档）或几组音色包，分目录存更方便搬迁。
+# 所以两个位置都必须**用户可选 + 记住**：
+#   · 引擎根目录 —— 含 GPT_SoVITS/ 与 runtime/ 的那个目录
+#   · 语音包目录 —— 放 *.ckpt + *.pth 音色的目录（<引擎>/voices 只是默认）
+#
+# 存法：%APPDATA%/MuppetStudio/voice_paths.json
+#   {"engine": "<引擎根>", "pack": "<语音包目录>"}
+# **只存用户显式选过的键**；没选过就不写（保持旧的候选探测行为，零回归）。
+_MEMO_NAME = "voice_paths.json"
+
+
+def _memo_path():
+    """用户自选目录的记忆文件；取不到用户目录时落到程序旁 .runtime。"""
+    ud = _user_data_dir()
+    if ud:
+        with contextlib.suppress(Exception):
+            os.makedirs(ud, exist_ok=True)
+        return os.path.join(ud, _MEMO_NAME)
+    return os.path.join(_APPDIR, ".runtime", _MEMO_NAME)
+
+
+def _memo_load():
+    """读记忆 {"engine": str, "pack": str}；缺失/损坏 -> {}。"""
+    try:
+        with io.open(_memo_path(), encoding="utf-8") as f:
+            o = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(o, dict):
+        return {}
+    out = {}
+    for k in ("engine", "pack"):
+        v = o.get(k)
+        # 只认字符串（`{"engine": 123}` 这种脏数据不能变成 "123" 当路径）
+        if isinstance(v, str) and v.strip():
+            out[k] = os.path.normpath(v.strip())
+    return out
+
+
+def _memo_save(**kw):
+    """写记忆（只更新传入的键，其余保留）。失败静默。"""
+    cur = _memo_load()
+    for k, v in kw.items():
+        if k not in ("engine", "pack"):
+            continue
+        if v is None:
+            cur.pop(k, None)
+        else:
+            cur[k] = os.path.normpath(str(v))
+    try:
+        p = _memo_path()
+        with contextlib.suppress(Exception):
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+        with io.open(p, "w", encoding="utf-8") as f:
+            json.dump(cur, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def remember_engine_dir(d):
+    """记住用户选的引擎根目录（传 None/"" 清除）。"""
+    return _memo_save(engine=(d or None))
+
+
+def remember_pack_dir(d):
+    """记住用户选的语音包目录（传 None/"" 清除）。"""
+    return _memo_save(pack=(d or None))
+
+
+def remembered_engine_dir():
+    """用户选过的引擎目录；没选过返回 None。**不校验存在性**。"""
+    return _memo_load().get("engine")
+
+
+def remembered_pack_dir():
+    """用户选过的语音包目录；没选过返回 None。**不校验存在性**。"""
+    return _memo_load().get("pack")
+
+
+def engine_dir_ok(d):
+    """该目录能不能当引擎根（对外暴露，UI 判「可保存」用）。
+
+    与 _is_engine 的区别：_is_engine 只认底模标志文件（严格）；
+    这里放宽一点 —— 只要**像个引擎**（有 GPT_SoVITS 目录或 runtime 目录
+    或底模），就让用户先选上，缺什么由 describe/available 如实报告。
+    否则用户选了半装好的目录会被直接拒绝，没法先指过去再补装。
+    """
+    if not d or not os.path.isdir(d):
+        return False
+    if _is_engine(d):
+        return True
+    for rel in (os.path.join("GPT_SoVITS"),
+                os.path.join("runtime"),
+                os.path.join("GPT_SoVITS", "pretrained_models")):
+        if os.path.isdir(os.path.join(d, rel)):
+            return True
+    # 直接指到底模目录也算（有人在 <root>/GPT_SoVITS/pretrained_models 里选）
+    if os.path.isfile(os.path.join(d, "s1v3.ckpt")):
+        return True
+    return False
+
+
+def pack_dir_ok(d):
+    """该目录能不能当语音包目录（存在即可；音色文件由上层扫描）。"""
+    return bool(d) and os.path.isdir(d)
 
 
 def _env_dir():
@@ -73,18 +186,25 @@ def _is_engine(d):
 
 
 def candidates():
-    """候选目录列表（按优先级）。env 设置时**只返回它**（硬限定）。"""
+    """候选目录列表（按优先级）。env 设置时**只返回它**（硬限定）。
+
+    v3.7.6：**用户显式选过的目录排在第一位** —— 那是他最明确的意思表示，
+    不该被「%APPDATA% 下的推荐位」压过去。没选过时行为与旧版完全一致。
+    """
     env = _env_dir()
     if env is not None:
         return [env]
     out = []
+    memo = remembered_engine_dir()
+    if memo:
+        out.append(memo)
     ud = _user_data_dir()
     if ud:
         out.append(os.path.join(ud, "voice"))
     out.append(os.path.join(_APPDIR, "voice"))
     out.append(os.path.normpath(os.path.join(_APPDIR, "..", "voice")))
     reg = _reg_dir()
-    if reg:
+    if reg and reg not in out:
         out.append(reg)
     return out
 
@@ -246,8 +366,21 @@ def code_dir(root=None):
 
 
 def voices_dir(root=None):
-    """音色目录（<engine>/voices）—— 角色 ckpt+pth 成对放这里。"""
-    r = root or voice_dir()
+    """音色目录 —— 角色 ckpt+pth 成对放这里。
+
+    v3.7.6：**用户选过的语音包目录优先**。语音包（音色权重）与引擎
+    （推理程序）是两种东西：引擎 4GB 装哪都行，音色包可能来自另一块盘、
+    另一台机器拷过来，甚至一套引擎配几组音色包。所以独立可选。
+      ① root 显式传入
+      ② 用户选的语音包目录（remembered_pack_dir）
+      ③ <引擎根>/voices（旧默认，保持向后兼容）
+    """
+    if root:
+        return root
+    pack = remembered_pack_dir()
+    if pack:
+        return pack
+    r = voice_dir()
     if not r:
         return ""
     return os.path.join(r, "voices")
@@ -283,7 +416,7 @@ def available():
 
 
 def describe():
-    """诊断用：候选列表 + 各自状态。"""
+    """诊断用：候选列表 + 各自状态 + 用户自选目录。"""
     rows = []
     for d in candidates():
         rows.append({"dir": d, "ok": _is_engine(d),
@@ -291,4 +424,7 @@ def describe():
                      "has_api": bool(api_entry(d))})
     return {"resolved": voice_dir(), "env_locked": bool(_env_dir()),
             "available": available(), "tier": installed_tier(),
+            "engine_picked": remembered_engine_dir() or "",
+            "pack_picked": remembered_pack_dir() or "",
+            "voices_dir": voices_dir(),
             "candidates": rows}

@@ -492,12 +492,19 @@ if HAS_WEBENGINE:
             import video_model as VM
             figs = VM.figure_clips_at(proj, t)
             target = {}
+            # v3.6.9：**口型/动作连贯性**——slot 按「模型路径 + 轨道」派生，
+            # 不再按 clip id（详见 VM.figure_slot_id 的注释）。
+            # 同一角色跨片段共用一个 slot：模型实例不重建，动作只在 motion
+            # 字符串真的变了才切。
+            slots_map = VM.figure_slot_map(proj)
             for c in figs:
                 cid = str(c.get("id"))
                 src = c.get("source") or {}
-                ref = self.register_model_dir(src.get("path") or "")
+                path = src.get("path") or ""
+                ref = self.register_model_dir(path)
+                slot_id = slots_map.get(cid) or cid
                 lay = VM.layout_at(c)
-                target[cid] = {
+                target[slot_id] = {
                     "ref": ref,
                     "layout": (round(float(lay["x"]), 4),
                                round(float(lay["y"]), 4),
@@ -505,6 +512,7 @@ if HAS_WEBENGINE:
                                round(float(lay["rot"]), 3)),
                     "motion": str(c.get("motion") or ""),
                     "expression": str(c.get("expression") or ""),
+                    "clip_id": cid,
                 }
             old = self._figstate
             for cid, st in target.items():
@@ -539,6 +547,9 @@ if HAS_WEBENGINE:
             self._apply_bg(proj, t)
             self._apply_subtitle(proj, t)
             self._apply_filter(proj, t)
+            # v3.6.5：**先同步播放头时间**再算口型 —— 页面按工程时间取
+            # 开口度（墙上时钟会和按片段内时间烘好的表错位）。
+            self._send("setTime", {"t": round(float(t), 4)})
             self._apply_lip(proj, t)
             self._apply_camera(proj, t)      # v3.6.2：镜头动画
 
@@ -563,10 +574,14 @@ if HAS_WEBENGINE:
                         for c in VM.figure_clips_at(proj, t)}
                 # 只处理**当前在场**的立绘：不在场的模型页面上也没有，
                 # 发了也白发（还占 diff 表）
+                # v3.6.9：立绘按 slot 复用后，口型也必须按 **slot** 下发，
+                # 否则 setLip 发到一个不存在的 modelId（clip id）上，嘴就不动。
+                slots_map = VM.figure_slot_map(proj)
                 for cid, lp in binds.items():
                     fig = figs.get(cid)
                     if fig is None:
                         continue
+                    slot_id = slots_map.get(cid) or cid
                     vc = VM.voice_clip_by_id(proj, lp.get("voice"), aid)
                     if vc is None:
                         continue
@@ -581,17 +596,21 @@ if HAS_WEBENGINE:
                     vals = env.bake(fps, dur, offset=-off)
                     sig = (lp.get("voice"), round(off, 3), round(dur, 3),
                            round(float(lp.get("gain") or 1.0), 3),
-                           len(vals))
-                    sig_now[cid] = sig
-                    if self._lip_sig.get(cid) == sig:
+                           len(vals), round(fig_start, 3))
+                    sig_now[slot_id] = sig
+                    if self._lip_sig.get(slot_id) == sig:
                         continue                      # 没变，不重发
                     self._send("setLip", {
-                        "modelId": cid, "vals": vals, "fps": fps,
-                        "gain": float(lp.get("gain") or 1.0)})
+                        "modelId": slot_id, "vals": vals, "fps": fps,
+                        "gain": float(lp.get("gain") or 1.0),
+                        # v3.6.5：片段起点 —— 页面用它把**工程时间**换算成
+                        # 片段内时间。不下发的话页面只能拿墙上时钟猜，
+                        # 嘴会越播越偏（用户报「做动作时嘴闭上不对口型」）。
+                        "start": fig_start})
                 # 解除：上一轮有、这轮没有的
-                for cid in list(self._lip_sig):
-                    if cid not in sig_now:
-                        self._send("setLip", {"modelId": cid, "vals": []})
+                for sid in list(self._lip_sig):
+                    if sid not in sig_now:
+                        self._send("setLip", {"modelId": sid, "vals": []})
                 self._lip_sig = sig_now
 
         # ---------- v3.5.2：三层推送（各自 diff，不重复发）----------

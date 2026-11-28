@@ -373,6 +373,23 @@ def voice_move(proj, index, new_t, aid=None):
         "index": index, "detach": False, "t": nt}
 
 
+def voice_remove(proj, index, aid=None):
+    """删除第 index 条台词的语音（**台词本身保留**，只摘掉配音）。
+
+    时间轴 Del 键删语音轨选中段走这里：语音是 dialogue 的投影，
+    不在 tracks 里，remove_clip 摸不到它。
+    """
+    view = act_view(proj, aid)
+    dl = view.get("dialogue")
+    if not isinstance(dl, list) or not (0 <= index < len(dl)):
+        return False, "台词下标越界"
+    it = dl[index]
+    if not isinstance(it, dict) or not isinstance(it.get("voice"), dict):
+        return False, "该台词没有语音"
+    it.pop("voice", None)
+    return True, "已删除该段语音（台词保留）"
+
+
 def act_ids(proj):
     """已声明的幕 id 列表（v1 单幕 -> ['a1'] 虚拟幕，便于 UI 统一展示）。"""
     if not isinstance(proj, dict): return []
@@ -578,6 +595,51 @@ def add_track(proj, kind, name=None, aid=None):
     tracks.append({"id": tid, "kind": kind, "name": label,
                    "hidden": False, "locked": False, "clips": []})
     return True, "", tid
+
+
+def remove_track(proj, track_id, aid=None):
+    """删除整条轨道（连同轨上全部 clip）。返回 (ok, msg)。
+
+    语音轨是投影（不在 tracks 里），没有可删的实体——返回明确错误
+    而不是静默失败。
+    """
+    if track_id == VOICE_TRACK_ID:
+        return False, "语音轨是台词的投影，请选中语音段后删除"
+    tr = find_track(proj, track_id, aid)
+    if tr is None: return False, "轨道不存在: %s" % track_id
+    tracks = _tracks_of(proj, aid)
+    try:
+        tracks.remove(tr)
+    except ValueError:
+        return False, "删除失败（不在当前幕）"
+    return True, "已删除轨道「%s」（含 %d 个片段）" % (
+        tr.get("name") or track_id, len(tr.get("clips") or []))
+
+
+def duplicate_track(proj, track_id, aid=None):
+    """复制整条轨道：clips 深拷贝 + 新轨 id + 新 clip id（全工程唯一）。
+
+    新轨名 = 原名 +「副本」；同轨重叠不可能（一比一拷贝），插入到
+    原轨后面（保持相邻，与剪映一致）。返回 (ok, msg, new_track_id)。
+    """
+    tr = find_track(proj, track_id, aid)
+    if tr is None: return False, "轨道不存在: %s" % track_id, None
+    tracks = _tracks_of(proj, aid)
+    kind = tr["kind"]
+    tid = next_track_id(proj, kind, aid)
+    cnt = sum(1 for t in tracks if t["kind"] == kind) + 1
+    label = "%s 副本" % (tr.get("name") or tid)
+    nt = {"id": tid, "kind": kind, "name": label,
+          "hidden": bool(tr.get("hidden", False)),
+          "locked": False,               # 复制出来的轨解锁（原轨锁着不该连坐）
+          "clips": []}
+    for c in tr.get("clips") or []:
+        cc = copy.deepcopy(c)
+        cc["id"] = next_clip_id(proj)
+        nt["clips"].append(cc)
+    i = tracks.index(tr)
+    tracks.insert(i + 1, nt)
+    return True, "已复制轨道「%s」 -> %s" % (tr.get("name") or track_id, tid), tid
 
 
 # ---------------- 查询 ----------------
@@ -845,11 +907,15 @@ def split_clip(proj, clip_id, t):
     left = t - c["start"]
     right = clip_end(c) - t
     if left < MIN_DUR - EPS or right < MIN_DUR - EPS: return False, "切分后片段太短", None
-    if c["source"]["kind"] != "image" and not _src_limit_ok(c, c["src_in"] + left, right):
+    # v3.7.0：puppet（立绘）与 image 一样没有「素材内部时间」——立绘动画
+    # 按 clip 相对时间走，src_in 对该类源无意义。原来只放过 image，切立绘
+    # clip 时右段被塞进 src_in = 左段时长（实测 c21 切段后 30.4/44.4），
+    # 渲染取 t-src_in 时把 L2D 相位推歪，口型网格整段错位（覆盖率 0%）。
+    static_src = c["source"]["kind"] in ("image", "puppet")
+    if not static_src and not _src_limit_ok(c, c["src_in"] + left, right):
         return False, "超出素材长度", None
     right_clip = new_clip(c["source"], t, right,
-                          src_in=(0.0 if c["source"]["kind"] == "image"
-                                  else c["src_in"] + left),
+                          src_in=(0.0 if static_src else c["src_in"] + left),
                           clip_id=next_clip_id(proj))
     right_clip["layout"] = copy.deepcopy(c["layout"]) if "layout" in c \
         else default_layout()          # 切分两半是同一画面区域：布局继承
@@ -879,8 +945,10 @@ def delete_range(proj, t0, t1):
                 out.append(c)
             if post >= MIN_DUR - EPS:
                 # 右段：起点 t1，素材偏移 = 原 src_in + 被抠掉的左段时长
+                # （puppet/image 无素材内部时间，见 split_clip 同款说明）
                 rc = new_clip(c["source"], t1, post,
-                              src_in=max(0.0, c["src_in"] + (t1 - c["start"])),
+                              src_in=(0.0 if c["source"]["kind"] in ("image", "puppet")
+                                      else max(0.0, c["src_in"] + (t1 - c["start"]))),
                               clip_id=next_clip_id(proj))
                 if "layout" in c:               # 布局同 split：继承
                     rc["layout"] = copy.deepcopy(c["layout"])
@@ -903,6 +971,27 @@ def _num(x, dft=0.0):
         return v if v == v and abs(v) != float("inf") else dft   # nan/inf 回退
     except (TypeError, ValueError):
         return dft
+
+
+def _sanitize_fig_blend(obj):
+    """立绘边界淡入参数（方案 A，工程级）。返回 dict 或 None。
+
+    只在**显式写了键**时输出，保证老工程 load→save 零 diff（与 transition
+    同一口径）。两个都缺失时返回 None，导出侧按默认 200/267 处理。
+
+    · fig_blend_ms：同一 FIG 轨内 clip 首尾相接处的交叉淡入时长，夹到
+      [0, 2000]，0 = 关闭（要能关掉，调参/对比复测都靠它）
+    · fig_enter_ms：立绘从无到有（首 clip 起点 >0，或留白后再出现）的
+      入场淡入时长，同上夹到 [0, 2000]，0 = 关闭
+    """
+    if not isinstance(obj, dict): return None
+    out = {}
+    for k in ("fig_blend_ms", "fig_enter_ms"):
+        if k not in obj: continue
+        v = _num(obj.get(k), -1.0)
+        if v < 0: continue
+        out[k] = int(max(0, min(2000, v)))
+    return out or None
 
 
 def _sanitize_transition(raw):
@@ -1231,6 +1320,8 @@ def sanitize_project(obj, warn=None):
         if not proj["acts"]: return None
         _tr = _sanitize_transition(obj.get("transition"))
         if _tr is not None: proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
+        _pb = _sanitize_fig_blend(obj)
+        if _pb: proj.update(_pb)                          # 立绘边界淡入（同上）
         return proj
 
     # ---------- v1 单幕（原行为逐字节保留）----------
@@ -1247,6 +1338,8 @@ def sanitize_project(obj, warn=None):
     proj["effects"] = _sanitize_effects(obj.get("effects"))
     _tr = _sanitize_transition(obj.get("transition"))
     if _tr is not None: proj["transition"] = _tr      # 工程级转场（未设不写键，老工程零 diff）
+    _pb = _sanitize_fig_blend(obj)
+    if _pb: proj.update(_pb)                          # fig_blend_ms/fig_enter_ms（同上：未设不写键）
     return proj
 
 
@@ -1381,6 +1474,9 @@ def _sanitize_preset(raw, ids_fn):
 #     换语音，lip 不用跟着改；id 会自动指到新的位置
 #   · 记路径的话，同一句话换音色后立绘还指着旧文件
 LIP_GAIN_MIN, LIP_GAIN_MAX = 0.3, 2.5
+# 音频 clip 的线性增益范围（v3.7.0）。0 = 静音，2.0 = +6dB 左右。
+# 上限不做太大：单轨超过 2 倍很容易削波，混音是 int16 直加。
+CLIP_GAIN_MIN, CLIP_GAIN_MAX = 0.0, 2.0
 
 
 def _sanitize_lip(raw):
@@ -1400,6 +1496,20 @@ def _sanitize_lip(raw):
         n = _num(g, 1.0)
         out["gain"] = round(min(LIP_GAIN_MAX, max(LIP_GAIN_MIN, n)), 3)
     return out
+
+
+def _sanitize_clip_gain(raw):
+    """音频 clip 的线性增益校验（v3.7.0）。
+
+    None / 脏值 -> None（调用方据此**不写键**，保持工程文件干净：
+    老工程没有这个键，读回来也不该凭空多一个 1.0）。
+    合法值钳到 [CLIP_GAIN_MIN, CLIP_GAIN_MAX]。
+    """
+    if raw is None: return None
+    n = _num(raw, None)
+    if n is None: return None
+    if n != n: return None                       # NaN
+    return round(min(CLIP_GAIN_MAX, max(CLIP_GAIN_MIN, float(n))), 3)
 
 
 def lip_bindings(proj, aid=None):
@@ -1426,6 +1536,140 @@ def voice_clip_by_id(proj, vid, aid=None):
     for c in voice_clips(proj, aid):
         if c.get("id") == vid: return c
     return None
+
+
+# ---------------- 口型自动匹配（v3.7.0） ----------------
+# 为什么需要「时间重叠」这一层
+# --------------------------
+# `clip["lip"]` 只能记**一句**语音，但一个立绘 clip 常跨好几句台词
+# （本片 c21 100 秒里有 3 句）。导出层必须知道「这个片段里到底有哪几句」，
+# 才能把窗口内的嘴都动起来 —— 这个函数就是那唯一的口径来源，
+# 导出（video_export）与 DSH 命令（lip_commands）都调它。
+_LIP_MATCH_MIN_OVERLAP = 0.12      # 秒；太短的擦边重叠不算「说到这句」
+
+
+def figure_who(track=None):
+    """立绘轨 -> 角色名。轨名约定 `FIG-<who>`（与 remote_control 一致）。"""
+    name = str((track or {}).get("name") or "")
+    if name.upper().startswith("FIG-"):
+        return name[4:].strip()
+    return ""
+
+
+def voice_matches_who(vc, who):
+    """语音是否属于该角色。返回 True/False/None（None = 无从判断）。
+
+    **只有能确定时才返回 True/False**：语音没填 role、或立绘轨没有角色名，
+    一律返回 None —— 调用方据此退回「纯时间重叠」，绝不用猜测去筛语音。
+    判定用双向包含（`爱音` ⊂ `千早爱音`），因为分轨名与台词里的角色名
+    宽严不一。
+    """
+    w = str(who or "").strip().lower()
+    r = str((vc or {}).get("role") or "").strip().lower()
+    if not w or not r:
+        return None
+    if w == r or w in r or r in w:
+        return True
+    return False
+
+
+def clip_span(clip):
+    """clip -> (start, dur, end)。脏值按 0 处理，绝不抛。"""
+    try:
+        s = float((clip or {}).get("start") or 0.0)
+    except (TypeError, ValueError):
+        s = 0.0
+    try:
+        d = float((clip or {}).get("dur") or 0.0)
+    except (TypeError, ValueError):
+        d = 0.0
+    if d < 0:
+        d = 0.0
+    return s, d, s + d
+
+
+def overlap_voices(proj, clip, aid=None, track=None, who=None):
+    """与立绘 clip 时间区间重叠的语音 -> (voices, role_filtered)。
+
+    返回的 voices 按开始时间升序；每项就是 voice_clips() 的 dict 引用。
+    `role_filtered=True` 表示「有角色信息且筛过」，False 表示退回全量重叠
+    （语音没 role / 立绘轨没角色名时**不做任何猜测性筛选**）。
+
+    who 不传时从 track 名推（FIG-<who>）；track 也不传则只按时间重叠。
+    """
+    out = []
+    if not isinstance(proj, dict):
+        return out, False
+    s0, d0, s1 = clip_span(clip)
+    if d0 <= 0:
+        return out, False
+    if who is None and track is not None:
+        who = figure_who(track)
+    vs = []
+    for vc in voice_clips(proj, aid):
+        if not isinstance(vc, dict):
+            continue
+        vt, vd, ve = clip_span({"start": vc.get("t") or 0.0,
+                                "dur": vc.get("dur") or 0.0})
+        if vd <= 0:
+            continue
+        ov = min(s1, ve) - max(s0, vt)
+        if ov < _LIP_MATCH_MIN_OVERLAP:      # 擦边/刚好首尾相接不算
+            continue
+        vs.append(vc)
+    vs.sort(key=lambda v: float(v.get("t") or 0.0))
+    if not vs:
+        return out, False
+    yes, unknown = [], False
+    for vc in vs:
+        m = voice_matches_who(vc, who) if who else None
+        if m is True:
+            yes.append(vc)
+        elif m is None:
+            unknown = True
+    if yes and not unknown:
+        # 全部语音都能判角色、且有同角色的 -> 只留同角色
+        return yes, True
+    # 有人角色不明（或全都不明）-> 宁可多动嘴也不漏嘴，退回全量重叠
+    return vs, False
+
+
+def voice_overlap_frames(proj, clip, aid=None, track=None, fps=30.0):
+    """clip 窗口内「有语音」的帧数（导出覆盖率自检的分母）。
+
+    多句重叠时不重复计数（按并集算），所以结果不会超过 clip 总帧数。
+    """
+    vs, _f = overlap_voices(proj, clip, aid, track)
+    s0, d0, s1 = clip_span(clip)
+    try:
+        f = float(fps) or 30.0
+    except (TypeError, ValueError):
+        f = 30.0
+    if f <= 0:
+        f = 30.0
+    if d0 <= 0 or not vs:
+        return 0
+    spans = []
+    for vc in vs:
+        vt = float(vc.get("t") or 0.0)
+        vd = float(vc.get("dur") or 0.0)
+        a, b = max(s0, vt), min(s1, vt + vd)
+        if b > a:
+            spans.append((a, b))
+    spans.sort()
+    total = 0.0
+    cur_a = cur_b = None
+    for a, b in spans:
+        if cur_a is None:
+            cur_a, cur_b = a, b
+        elif a <= cur_b + 1e-6:
+            cur_b = max(cur_b, b)
+        else:
+            total += cur_b - cur_a
+            cur_a, cur_b = a, b
+    if cur_a is not None:
+        total += cur_b - cur_a
+    return int(round(total * f))
 
 
 # 滤镜（原「特效」页）：只收 setTransform 那套数值键，范围按引擎语义夹紧。
@@ -1523,6 +1767,14 @@ def _sanitize_clip(c, seen_clip_ids):
     # 形状 {"voice": <voice_clip_id>, "gain": 0.5~2.0}
     lp = _sanitize_lip(c.get("lip"))
     if lp: out["lip"] = lp
+    # 音量（v3.7.0）：BGM / 语音 clip 的线性增益。
+    # 只对能出声的源有意义（audio/video），图片和立绘没有音轨，忽略。
+    # 1.0 视为默认值**不写键**：老工程读回来不该凭空多一个 gain 字段，
+    # 否则 save/load 往返会改变文件内容（测试也按这个口径断言）。
+    if src["kind"] in ("audio", "video"):
+        g = _sanitize_clip_gain(c.get("gain"))
+        if g is not None and abs(g - 1.0) > 1e-9:
+            out["gain"] = g
     return out
 
 
@@ -1565,6 +1817,48 @@ def figure_clips_at(proj, t):
             if not is_figure_clip(c, tr): continue
             s = _num(c.get("start"), 0.0)
             if s <= tf < s + _num(c.get("dur"), 0.0): out.append(c)
+    return out
+
+
+def figure_slot_id(clip, track=None):
+    """立绘的**预览 slot id**：同一角色跨片段复用（v3.6.9 动作连贯）。
+
+    为什么不是 clip id：工程里同一角色切成几十个片段（fig1…fig37），
+    按 clip id 派 slot = 每跨一次片段都重建模型实例、动作从头起播。
+    用户看到的就是「每 4~5 秒人物重新加载、动作从第 0 帧重来」。
+
+    规则：**同一轨道 + 同一模型路径** = 同一个 slot。
+    轨道区分同屏多份相同角色（persona 双开场景），路径区分不同模型。
+    拿不到轨道信息时退回路径本身；都没有才用 clip id（最坏情况退化成
+    旧的逐片段行为，不会比改之前更糟）。
+    """
+    src = (clip or {}).get("source") or {}
+    path = str(src.get("path") or "")
+    if not path:
+        return str((clip or {}).get("id") or "")
+    tid = ""
+    if isinstance(track, dict):
+        tid = str(track.get("id") or track.get("name") or "")
+    if not tid:
+        tid = str((clip or {}).get("_track_id") or (clip or {}).get("track") or "")
+    return "fig:%s|%s" % (tid, os.path.normcase(path))
+
+
+def figure_slot_map(proj):
+    """clip id -> slot id 映射（口型按 slot 派发要用）。
+
+    预览按 slot 复用模型，口型表却是按**片段**烘的（vals 是片段内相对
+    时间）。口型下发必须把 clip 换成 slot，否则 setLip 发到一个不存在的
+    modelId 上，嘴就不动了。
+    """
+    out = {}
+    if not isinstance(proj, dict): return out
+    for tr in _tracks_of(proj):
+        if not isinstance(tr, dict) or tr.get("kind") == "audio": continue
+        for c in tr.get("clips") or []:
+            if not is_figure_clip(c, tr): continue
+            cid = str(c.get("id") or "")
+            if cid: out[cid] = figure_slot_id(c, tr)
     return out
 
 

@@ -76,6 +76,16 @@ GAIN = {"zh": 1.00, "ja": 0.96, "en": 0.98, "": 1.00}
 REF = {"zh": 0.30, "ja": 0.27, "en": 0.29, "": 0.30}
 FLOOR = 0.02            # 静音门限：低于它就闭嘴（不想让呼吸声动嘴）
 CEIL = 1.0
+# 开口度抬升曲线（v' = 1-(1-v)^K）。**用户报「嘴开得有点小」后加的**。
+#
+# 为什么光调 REF 不够：REF 调小会让 p50 接近 1、嘴长期顶格（一直大张），
+# 而真正的问题是**分布整体偏低** —— 实测 12683 个有声窗口：
+#     p10=0.286  p50=0.633  p90=0.814
+# p10 说明「说话时嘴最小的时刻也张着近三成」，视觉上就是"张不开"。
+# 这条曲线保端点（0->0、1->1）、单调抬升中段：
+#     p10 0.286->0.417   p50 0.633->0.799   p90 0.814->0.932
+# 而顶格只 0.3%、<0.15 占比仍为 0%（闭嘴行为不变）。
+OPEN_CURVE_K = 1.6
 
 _CACHE_LOCK = threading.Lock()
 _CACHE = {}             # path+mtime+size -> _Env
@@ -243,6 +253,10 @@ def _build(a, sr, lang):
 
     # 非线性抬升 + 门限
     v = np.power(np.clip(rms / max(1e-6, ref), 0.0, 4.0), EXP) * gain
+    # 开口度抬升曲线（见 OPEN_CURVE_K 的注释）：保端点、抬中段。
+    # 放在门限前后都行（0 过曲线还是 0），放前面少一次 where。
+    if OPEN_CURVE_K and abs(OPEN_CURVE_K - 1.0) > 1e-6:
+        v = 1.0 - np.power(np.clip(1.0 - v, 0.0, 1.0), OPEN_CURVE_K)
     v = np.where(rms < FLOOR, 0.0, np.clip(v, 0.0, CEIL)).astype(np.float32)
 
     dur = n / float(sr)
@@ -274,6 +288,57 @@ def bake_clip(voice_clip, lang="", fps=30):
     if env is None:
         return []
     return env.bake(fps, voice_clip.get("dur") or 0.0, offset=0.0)
+
+
+def bake_multi(items, fps, dur):
+    """多句语音 -> 一条开口度序列（逐帧取 **max**）。
+
+    v3.7.0：一个立绘 clip 常常跨好几句话（c21 100 秒里有 3 句），而
+    `clip["lip"]` 只能记一句 —— 旧实现只按那**一句**烘焙，其余时间整段
+    静音，成片里「立绘一直在说话，嘴却不动」就是这么来的。
+
+    items: [(env, offset, gain), ...]
+      · env    = `envelope(path)` 的返回值，None 表示素材读不了（跳过）
+      · offset = 该句「片段第 0 帧对应音频里的哪一刻」（见 _Env.bake）
+      · gain   = 开口度倍率，逐句独立（喊叫句可以放大）
+
+    取 max 而不是求和：两句重叠（抢话/祝福叠音）时嘴只该张到最大那一档，
+    求和会顶格爆掉（open 恒 1.0 = 嘴一直大张）。
+
+    返回 list[float]（长度 = dur*fps 向上取整）；全部素材不可用返回 []。
+    """
+    try:
+        f = float(fps)
+    except (TypeError, ValueError):
+        f = 30.0
+    if f <= 0:
+        f = 30.0
+    n = int(np.ceil(max(0.0, float(dur)) * f))
+    if n <= 0:
+        return []
+    out = np.zeros(n, dtype=np.float32)
+    used = 0
+    for it in (items or []):
+        try:
+            env, offset, gain = it
+        except (TypeError, ValueError):
+            continue
+        if env is None:
+            continue
+        g = 1.0 if gain is None else float(gain)
+        if g <= 0:
+            continue
+        vals = env.bake(f, dur, offset=offset)
+        m = min(n, len(vals))
+        if m <= 0:
+            continue
+        seg = np.asarray(vals[:m], dtype=np.float32) * g
+        np.maximum(out[:m], seg, out=out[:m])
+        used += 1
+    if not used:
+        return []
+    np.clip(out, 0.0, 1.0, out=out)
+    return out.tolist()
 
 
 def stats():

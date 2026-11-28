@@ -67,3 +67,7 @@ build_launcher_work/
 /refs/
 *.ckpt
 *.pth
+
+# 本机调试转储 / 改 UI 前的备份 —— 不是产品文件，别跟着代码发版
+/temp/
+/ui_backup/

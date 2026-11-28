@@ -100,6 +100,12 @@ class VoiceManagerDialog(QDialog):
             "参考音频决定「用哪段话克隆」。")
         self.btn_refs.clicked.connect(self._open_refs)
         head.addWidget(self.btn_refs)
+        self.btn_dir = PushButton("语音包目录…", self)
+        self.btn_dir.setToolTip(
+            "音色（.ckpt + .pth）可以放在任意目录，不必塞进引擎里。\n"
+            "选一次会记住；清空则回退到「引擎内置 voices」。")
+        self.btn_dir.clicked.connect(self._pick_pack_dir)
+        head.addWidget(self.btn_dir)
         self.summary = CaptionLabel("", self)
         self.summary.setStyleSheet("color:%s;" % TH.t("text_dim"))
         head.addWidget(self.summary)
@@ -173,6 +179,10 @@ class VoiceManagerDialog(QDialog):
         self.status = CaptionLabel("", self)
         self.status.setStyleSheet("color:%s;" % TH.t("text_dim"))
         foot.addWidget(self.status, 1)
+        self.btn_auto = PushButton("用引擎内置", self)
+        self.btn_auto.setToolTip("清除手工选的语音包目录，回退到引擎内置 voices")
+        self.btn_auto.clicked.connect(self._clear_pack_dir)
+        foot.addWidget(self.btn_auto)
         btn_refresh = PushButton("刷新", self)
         btn_refresh.clicked.connect(self.reload)
         foot.addWidget(btn_refresh)
@@ -254,6 +264,38 @@ class VoiceManagerDialog(QDialog):
         self.reload()
 
     # ---------------------------------------------------------------- 数据
+    def _pick_pack_dir(self):
+        """选语音包目录（v3.7.6）：音色权重放哪由用户定，不必在引擎里。
+
+        交互取舍：已选过再点 → 菜单式二选（换目录 / 清除回默认），
+        只用两下点击，比「再点一次才弹选择框」直观。
+        """
+        import voice_paths as VP
+        cur = VP.remembered_pack_dir() or ""
+        d = QFileDialog.getExistingDirectory(
+            self, "选择语音包目录（放 *.ckpt 与 *.pth）%s"
+            % ("（当前：%s）" % cur if cur else ""),
+            cur or os.path.expanduser("~"))
+        if not d:
+            # 取消 = 不动。清除要走下面的「自动」按钮语义，避免误清
+            return
+        if not VP.pack_dir_ok(d):
+            TOAST.toast_warn(self, "目录不存在", d, duration=4000)
+            return
+        VP.remember_pack_dir(d)
+        self.reload()
+        st = _voice_lib().stats()
+        TOAST.toast_ok(self, "语音包目录已设",
+                       "%s\n%d 个音色（完整 %d）"
+                       % (d, st["total"], st["ok"]), duration=3500)
+
+    def _clear_pack_dir(self):
+        import voice_paths as VP
+        VP.remember_pack_dir(None)
+        self.reload()
+        TOAST.toast_info(self, "已清除语音包目录，改用引擎内置 voices",
+                         duration=2500)
+
     def _open_refs(self):
         """打开参考音频管理。"""
         try:
@@ -261,7 +303,7 @@ class VoiceManagerDialog(QDialog):
             dlg = voice_refs_ui.VoiceRefsDialog(self)
             dlg.exec()
         except Exception as e:
-            TOAST.toast(self, "打不开参考音频管理：%s" % e)
+            TOAST.toast_err(self, "打开失败", "打不开参考音频管理：%s" % e)
 
     def reload(self):
         while self.list_layout.count():
@@ -278,10 +320,23 @@ class VoiceManagerDialog(QDialog):
         self.summary.setText("%d 个（完整 %d，不完整 %d）"
                              % (st["total"], st["ok"], st["incomplete"]))
         self.empty.setVisible(not rows)
-        self.status.setText("目录：%s" % (st["dir"] or "未找到（引擎未安装）"))
+        # v3.7.6：状态行要说清「音色到底从哪个目录读」——用户选了语音包目录后
+        # 必须能立刻确认生效，否则会以为导入没成功
+        try:
+            import voice_paths as VP
+            picked = VP.remembered_pack_dir() or ""
+        except Exception:
+            picked = ""
+        if st["dir"]:
+            self.status.setText("音色目录：%s%s"
+                                % (st["dir"], "（手工指定）" if picked else ""))
+        else:
+            self.status.setText("音色目录：未找到")
+        self.btn_auto.setEnabled(bool(picked))
         if not st["engine_ready"]:
-            self.status.setText("语音引擎未就绪 —— 请先在资产管理里安装引擎，"
-                                "否则导入的音色无处可放")
+            self.status.setText(
+                "语音引擎未就绪 —— 可在「语音服务」里指定外置引擎目录；"
+                "音色目录：%s" % (st["dir"] or "未找到"))
 
 
 class _ImportVoiceDialog(MessageBoxBase):

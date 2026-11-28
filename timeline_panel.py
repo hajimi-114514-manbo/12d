@@ -85,6 +85,35 @@ def _refresh_colors():
         with contextlib.suppress(Exception): p._apply_theme()
 
 
+def _input_qss():
+    """头部原生输入控件（QDoubleSpinBox / QSpinBox / QComboBox）的 QSS。
+
+    v3.8.0（UI 审计 M2）：这三个是**原生 Qt 控件**，不吃 qfluentwidgets 主题，
+    深色工作台下被画成整块白色（审计实测 rgb(255,255,255)），和磨砂深色
+    头部打架。这里按主题给实色底 + 主题文字色，切主题时由 _apply_theme
+    重刷。刻意用实色而不是 rgba 小数 alpha —— Qt QSS 对小数 alpha 支持
+    不稳，工程里踩过一次（深色下整控件被画成纯白）。
+    """
+    if TH.is_light():
+        bg, bd, hv = "#ffffff", "#c8cdd6", "#eef2f7"
+    else:
+        bg, bd, hv = "#252a33", "#3a3f4a", "#2f3644"
+    fg = C_TEXT.name()
+    return (
+        "QDoubleSpinBox, QSpinBox, QComboBox {"
+        " background-color:%s; color:%s; border:1px solid %s;"
+        " border-radius:4px; padding:1px 4px; }"
+        "QDoubleSpinBox:hover, QSpinBox:hover, QComboBox:hover {"
+        " border-color:%s; }"
+        "QDoubleSpinBox::up-button, QSpinBox::up-button,"
+        "QDoubleSpinBox::down-button, QSpinBox::down-button {"
+        " width:12px; background:%s; border:none; }"
+        "QComboBox::drop-down { width:14px; border:none; }"
+        "QComboBox QAbstractItemView { background-color:%s; color:%s;"
+        " border:1px solid %s; selection-background-color:%s; }"
+        % (bg, fg, bd, C_HANDLE_HL.name(), hv, bg, fg, bd, hv))
+
+
 _PANELS = []          # 存活的 TimelinePanel，切主题时重刷头部样式
 TH.register(_refresh_colors)
 _refresh_colors()
@@ -203,6 +232,12 @@ class TimelinePanel(QWidget):
             self._head.setStyleSheet(
                 "QWidget#tlHead{background:%s;}" % C_HEAD.name())
             self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
+            # v3.8.0（M2）：三个原生输入控件按主题重刷（消除深色白块）
+            _q = _input_qss()
+            for _n in ("spin_dur", "spin_fps", "cmb_scale"):
+                _w = getattr(self, _n, None)
+                if _w is not None:
+                    _w.setStyleSheet(_q)
         except Exception:
             pass
         with contextlib.suppress(Exception): self.area.update()
@@ -216,7 +251,9 @@ class TimelinePanel(QWidget):
         ctl_h = max(20, int(round(26 * s)))
         self._head.setFixedHeight(max(28, int(round(HEAD_H * s))))
         for w in (self.btn_add, self.btn_clear):
-            w.setFixedHeight(ctl_h)
+            # v3.8.0（S4）：Fluent 按钮 sizeHint 比 26 高 3px，用 FixedHeight
+            # 会把文字压扁，改成下限约束，让按钮自然取 sizeHint。
+            w.setMinimumHeight(ctl_h)
         for w in (self.spin_dur,):
             w.setFixedWidth(max(70, int(round(88 * s))))
             w.setFixedHeight(ctl_h)

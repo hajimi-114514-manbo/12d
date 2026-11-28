@@ -25,7 +25,8 @@ import time
 
 import numpy as np
 
-from PySide6.QtCore import Qt, QTimer, QSize, QSettings, QEvent, QThread
+from PySide6.QtCore import (Qt, QTimer, QSize, QSettings, QEvent, QThread,
+                            Signal)
 from PySide6.QtGui import (QImage, QPixmap, QIcon, QKeySequence, QShortcut,
                            QPainter)
 from PySide6.QtWidgets import (QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -36,11 +37,12 @@ from qfluentwidgets import (Pivot, CardWidget, PrimaryPushButton, PushButton,
                             StrongBodyLabel, BodyLabel, CaptionLabel,
                             LineEdit, ScrollArea, InfoBar, InfoBarPosition,
                             MessageBoxBase, ProgressBar, FluentIcon,
-                            FlowLayout, PillPushButton)
+                            FlowLayout, PillPushButton, Slider)
 
 import video_model as V
 import video_export as VE
 import ui_theme as TH
+import shortcut_prefs as SP
 import audio_library as AL
 import character_library as CL
 import model_thumb as MT
@@ -278,14 +280,88 @@ class _AudioCard(CardWidget):
         super().mouseDoubleClickEvent(ev)
 
 
-class _RoleHeaderCard(CardWidget):
+class _FlowHost(QWidget):
+    """FlowLayout 的宿主：尺寸变化时把「铺满宽度」的分组卡重新拉齐。
+
+    为什么需要：分组标题卡（角色/作者/音频组/背景分类/特效分类）原来
+    写死 300px 宽，左边加了来源树后内容区只剩 ~250px，卡片溢出，
+    右边的「91 套」被滚动条压住（用户实报）。
+
+    FlowLayout 不会拉伸子控件，所以得在 resize 时主动 setFixedWidth。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._cards = []
+
+    def register_card(self, card):
+        """登记一张需要跟随宽度的卡。"""
+        if card is None:
+            return
+        self._cards.append(card)
+        with contextlib.suppress(Exception):
+            card.attach_host(self)
+        self.sync_cards()
+
+    def clear_cards(self):
+        self._cards = []
+
+    def sync_cards(self):
+        w = self.width()
+        if w <= 0:
+            return
+        for c in self._cards:
+            with contextlib.suppress(Exception):
+                c.sync_width()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.sync_cards()
+
+
+class _FullWidthCard(CardWidget):
+    """铺满内容区宽度的分组标题卡（角色/作者/音频组/背景分类/特效分类）。
+
+    v3.6.6：以前这些卡是**写死 300px** 的（那时候左栏就是 300 宽）。
+    左边加了来源树之后内容区只剩 ~250px，写死的宽度就溢出去，
+    右边的「91 套」被滚动条压住（用户实报）。
+    现在改成跟随内容区宽度自适应。
+
+    实现：FlowLayout 不会给子控件拉伸，所以要在 host 的 resizeEvent
+    里统一把这类卡的宽度设成 host 的可用宽度。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._host = None
+
+    def attach_host(self, host):
+        """记住承载它的 FlowLayout host（用于算可用宽度）。"""
+        self._host = host
+
+    def sync_width(self):
+        """把宽度同步成 host 的可用宽度（由 host 的 resizeEvent 驱动）。"""
+        h = self._host
+        if h is None:
+            return
+        try:
+            w = h.width()
+            if w <= 0:
+                return
+            # 留 2px 余量，避免正好顶到滚动条
+            self.setFixedWidth(max(120, w - 2))
+        except Exception:
+            pass
+
+
+class _RoleHeaderCard(_FullWidthCard):
     """角色页的角色标题卡：中文名 + 模型数，点击展开/收起该角色的模型。"""
 
     def __init__(self, role, expanded=False, on_toggle=None, parent=None):
         super().__init__(parent)
         self.role = role
         self.on_toggle = on_toggle
-        self.setFixedSize(300, 52)
+        self.setFixedHeight(52)
         self.setCursor(Qt.PointingHandCursor)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 6, 10, 6)
@@ -304,11 +380,11 @@ class _RoleHeaderCard(CardWidget):
         super().mousePressEvent(e)
 
 
-class _AuthorHeaderCard(CardWidget):
+class _AuthorHeaderCard(_FullWidthCard):
     """角色页的第二级标题卡：改模作者 + 该作者在本角色下的模型数。
 
     用户要求「父分类用角色名，子分类用改模作者」——角色展开后先看到作者
-    分组，再点作者展开它的模型。比角色标题卡窄一档、缩进一级，层级一眼看得出来。
+    分组，再点作者展开它的模型。比角色标题卡缩进一级，层级一眼看得出来。
     """
 
     INDENT = 18
@@ -318,10 +394,10 @@ class _AuthorHeaderCard(CardWidget):
         super().__init__(parent)
         self.author = author
         self.on_toggle = on_toggle
-        self.setFixedSize(300 - self.INDENT, 40)
+        self.setFixedHeight(40)
         self.setCursor(Qt.PointingHandCursor)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 4, 10, 4)
+        lay.setContentsMargins(10 + self.INDENT, 4, 10, 4)
         lay.setSpacing(6)
         arrow = "▾" if expanded else "▸"
         self.lbl = BodyLabel("%s %s" % (arrow, CL.author_label(author)), self)
@@ -337,14 +413,14 @@ class _AuthorHeaderCard(CardWidget):
         super().mousePressEvent(e)
 
 
-class _AudioGroupCard(CardWidget):
+class _AudioGroupCard(_FullWidthCard):
     """音频页的分组标题卡：组名 + 条数，点击展开/收起该组。"""
 
     def __init__(self, group, expanded=False, on_toggle=None, parent=None):
         super().__init__(parent)
         self.group = group
         self.on_toggle = on_toggle
-        self.setFixedSize(300, 46)
+        self.setFixedHeight(46)
         self.setCursor(Qt.PointingHandCursor)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 5, 10, 5)
@@ -618,7 +694,179 @@ class _FxRow(CardWidget):
             self.on_remove()
 
 
-class _BgCateCard(CardWidget):
+class _IconPivotItem(QWidget):
+    """顶部标签栏的一项：**图标在上、文字在下**（参考产品的媒体面板排版）。
+
+    qfluentwidgets 自带的 Pivot 是纯文字横排、字号 18，没有图标位；
+    参考产品那种「图标 + 下方小字」的竖排标签更紧凑、辨识度更高，
+    所以自己画一个（点击区 = 整块）。
+
+    图标用 QLabel 承载而不是 ToolButton：ToolButton 的 disabled 态会把
+    图标自动灰掉，而这里只需要「图标不吃点击」这一件事。
+    """
+
+    clicked = Signal(str)
+
+    def __init__(self, key, text, icon=None, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self.text = text
+        self._selected = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedWidth(58)
+        self.setFixedHeight(50)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 2, 0, 0)
+        lay.setSpacing(1)
+        lay.setAlignment(Qt.AlignCenter)
+        self.icon_lbl = QLabel(self)
+        self.icon_lbl.setFixedSize(20, 20)
+        self.icon_lbl.setAlignment(Qt.AlignCenter)
+        if icon is not None:
+            # FluentIcon 是枚举，不是 QIcon —— 要先 .icon() 再取 pixmap
+            try:
+                qico = icon.icon() if hasattr(icon, "icon") else icon
+                pm = qico.pixmap(20, 20)
+                if not pm.isNull():
+                    self.icon_lbl.setPixmap(pm)
+            except Exception:
+                pass
+        lay.addWidget(self.icon_lbl, 0, Qt.AlignCenter)
+        self.lbl = BodyLabel(text, self)
+        self.lbl.setAlignment(Qt.AlignCenter)
+        self.lbl.setStyleSheet("color:%s; font-size:11px;" % TH.t("text_dim"))
+        lay.addWidget(self.lbl)
+        self._restyle()
+
+    def _restyle(self):
+        c = TH.t("accent") if self._selected else TH.t("text_dim")
+        self.lbl.setStyleSheet("color:%s; font-size:11px;" % c)
+        # 选中项的图标换成强调色（未选中用原始图标色）
+        try:
+            self.icon_lbl.setPixmap(self.icon_lbl.pixmap())
+        except Exception:
+            pass
+
+    def setSelected(self, sel):
+        if self._selected == sel:
+            return
+        self._selected = sel
+        self._restyle()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            self.clicked.emit(self.key)
+        super().mousePressEvent(e)
+
+
+class _IconPivot(QWidget):
+    """顶部图标标签栏：等宽平铺，当前项高亮。
+
+    替代 qfluentwidgets 的 Pivot —— 那个不支持图标，且不能与顶部的
+    「保存工程 / 导出」按钮并排时保持紧凑。
+    """
+
+    currentItemChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items = {}
+        self._order = []
+        self._current = None
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(2)
+        self._lay = lay
+
+    def addItem(self, key, text, icon=None):
+        it = _IconPivotItem(key, text, icon, self)
+        it.clicked.connect(self._on_click)
+        self._items[key] = it
+        self._order.append(key)
+        self._lay.addWidget(it)
+        return it
+
+    def _on_click(self, key):
+        if key == self._current:
+            return
+        self.setCurrentItem(key)
+        self.currentItemChanged.emit(key)
+
+    def setCurrentItem(self, key):
+        if key not in self._items:
+            return
+        if self._current is not None:
+            self._items[self._current].setSelected(False)
+        self._current = key
+        self._items[key].setSelected(True)
+
+    def currentItem(self):
+        return self._current
+
+
+class _TreeItem(QWidget):
+    """左侧来源树的一行：名称 + 右侧数量。
+
+    对标参考产品的「媒体」面板左列（本地 / 导入 / 我的预设 / 云素材 /
+    素材库 + 其下的分类项）。那条树的语义是**分类导航**：点一项，右边
+    内容区只显示这一类的素材。
+
+    这里不做成 QTreeWidget：qfluentwidgets 的树样式要自己写 QSS，
+    而分类项要跟右侧卡片同款的圆角/悬停反馈，用自绘的一行更省事也更好看。
+
+    **不画展开箭头**（用户要求去掉）：树项是「切换选中」而不是「展开
+    子级」，箭头会让人以为点一下能展开下一层 —— 实际点了只是筛选右边
+    的内容，箭头是误导。
+    """
+
+    def __init__(self, text, count=None, expanded=False, has_children=False,
+                 selected=False, on_click=None, parent=None):
+        super().__init__(parent)
+        self.text = text
+        self.on_click = on_click
+        self._selected = selected
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFixedHeight(34)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 2, 8, 2)
+        lay.setSpacing(6)
+        self.lbl = BodyLabel(str(text), self)
+        self.lbl.setStyleSheet(
+            "color:%s; font-size:13px; font-weight:%s;"
+            % (TH.t("text_hi") if selected else TH.t("text"),
+               "600" if selected else "400"))
+        lay.addWidget(self.lbl, 1)
+        if count is not None:
+            cap = CaptionLabel(str(count), self)
+            cap.setStyleSheet("color:%s; font-size:11px;" % TH.t("text_dim"))
+            lay.addWidget(cap)
+        self._restyle()
+
+    def _restyle(self):
+        """选中态：淡强调色底 + 圆角（参考产品里选中项是整块高亮）。"""
+        if self._selected:
+            self.setStyleSheet(
+                "QWidget{background:%s;border-radius:6px;}" % TH.t("accent_soft"))
+        else:
+            self.setStyleSheet("QWidget{background:transparent;}")
+
+    def setSelected(self, sel):
+        if self._selected == sel:
+            return
+        self._selected = sel
+        self.lbl.setStyleSheet(
+            "color:%s; font-size:13px; font-weight:%s;"
+            % (TH.t("text_hi") if sel else TH.t("text"),
+               "600" if sel else "400"))
+        self._restyle()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton and self.on_click:
+            self.on_click(self)
+        super().mousePressEvent(e)
+
+
+class _BgCateCard(_FullWidthCard):
     """背景页的分类标题卡：分类名 + 张数，点击展开/收起（同一时刻一个）。
 
     与 _FxCateCard 同款交互（用户要求背景「和角色一样分类」）——首屏只
@@ -630,7 +878,7 @@ class _BgCateCard(CardWidget):
         super().__init__(parent)
         self.cat = cat
         self.on_toggle = on_toggle
-        self.setFixedSize(300, 46)
+        self.setFixedHeight(46)
         self.setCursor(Qt.PointingHandCursor)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 5, 10, 5)
@@ -691,7 +939,7 @@ class _BgCard(CardWidget):
         super().mousePressEvent(e)
 
 
-class _FxCateCard(CardWidget):
+class _FxCateCard(_FullWidthCard):
     """特效页的分类标题卡：分类名 + 条数，点击展开/收起（默认收起）。
 
     206 个特效全展开会建 206 个卡片（实测明显卡顿），所以按分类折叠，
@@ -703,7 +951,7 @@ class _FxCateCard(CardWidget):
         super().__init__(parent)
         self.cat = cat
         self.on_toggle = on_toggle
-        self.setFixedSize(300, 46)
+        self.setFixedHeight(46)
         self.setCursor(Qt.PointingHandCursor)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(10, 5, 10, 5)
@@ -1002,6 +1250,11 @@ class VideoWorkbench(QWidget):
         self._author_open = set()   # 角色页：当前展开的作者名集合
         self._author_open_role = None   # 上面这组作者属于哪个角色
         self._audio_open = None     # 音频页：当前展开的分组 id（None=全部收起）
+        # v3.6.6：左侧来源树的当前选中项（按页签各记一个）。
+        # None = 「全部」，内容区显示该页签的所有分类。
+        self._tree_sel = {"media": None, "audio": None, "bg": None,
+                          "filter": None, "transition": None, "template": None}
+        self._tree_items = {}       # 树项 key -> _TreeItem（用于高亮同步）
         self._audio_player = None   # 素材库试听播放器（QMediaPlayer，懒创建）
         self._audio_out = None      # QAudioOutput
         self._previewing = None     # 正在试听的 _AudioCard（停止时复位图标）
@@ -1033,17 +1286,20 @@ class VideoWorkbench(QWidget):
         self.setObjectName("videoWorkbenchRoot")
         self.setStyleSheet(
             "QWidget#videoWorkbenchRoot{background:%s;}" % TH.t("window_bg"))
-        self.pivot = Pivot(self)
-        # Pivot 页签：去掉「贴纸」（用户要求），「特效」改为「滤镜」。
-        # v3.6.2：模板页改成特效库（页签名同步）；背景单独成一页签
-        # （用户要求「背景放这个分类里面」——和角色/音频并列，不是独立栏）。
-        for key, text in [("media", "角色"), ("audio", "音频"),
-                          ("text", "文本"), ("bg", "背景"),
-                          ("filter", "滤镜"), ("transition", "转场"),
-                          ("template", "特效")]:
-            self.pivot.addItem(key, text)
+        self.pivot = _IconPivot(self)
+        # 页签：图标 + 文字（参考产品的媒体面板排版）。
+        # v3.6.2：去掉「贴纸」（用户要求），「特效」改名并另开页。
+        for key, text, ic in [
+                ("media", "角色", FluentIcon.PEOPLE),
+                ("audio", "音频", FluentIcon.MUSIC),
+                ("text", "文本", FluentIcon.DOCUMENT),
+                ("bg", "背景", FluentIcon.PHOTO),
+                ("filter", "滤镜", FluentIcon.FILTER),
+                ("transition", "转场", FluentIcon.PLAY),
+                ("template", "特效", FluentIcon.BRUSH)]:
+            self.pivot.addItem(key, text, ic)
         self.pivot.setCurrentItem("media")
-        self._asset_tab = "media"   # currentItemChanged 槽参数记录（PivotItem 无 routeKey）
+        self._asset_tab = "media"   # 页签切换记录
         self.pivot.currentItemChanged.connect(self._filter_assets)
         pv = QWidget(self)
         pl = QHBoxLayout(pv)
@@ -1085,40 +1341,89 @@ class VideoWorkbench(QWidget):
         ll = QVBoxLayout(left)
         ll.setContentsMargins(10, 10, 10, 10)
         ll.setSpacing(8)
-        lh = QHBoxLayout()
-        self.asset_header = StrongBodyLabel("素材库", left)
-        lh.addWidget(self.asset_header)
-        lh.addStretch(1)
-        # 角色页专用「导入模型」按钮：只在这一页出现（其余页签导模型没意义）。
-        # 挂在标题行右侧，和「素材库」同一行，不额外占高度。
-        self.btn_import_model = PushButton("导入模型", left)
-        self.btn_import_model.setToolTip("把模型复制进素材库（分类 / 改模人 / 缩略图）")
-        self.btn_import_model.clicked.connect(self._import_model)
-        self.btn_import_model.setVisible(False)
-        lh.addWidget(self.btn_import_model)
-        ll.addLayout(lh)
         # v3.6.1：左栏不再放「添加素材文件 / 导入木偶工程」按钮
         # （用户要求去掉）。功能入口移到「文件」菜单，见
         # l2d_rig_qt._build_video_menus。这里保留占位属性，避免
         # _show_script_editor 等旧调用点报 AttributeError。
         self.btn_add_file = None
         self.btn_add_puppet = None
-        self.asset_scroll = ScrollArea(left)
+
+        # ---- v3.6.6：左栏改成「左树 + 右内容」（参考产品媒体面板排版）----
+        # 原来是一个滚动流：分类标题卡和素材卡混在一起（角色页先看到
+        # 一列「高松灯 91套 / 千早爱音 84套 …」，点开才出模型卡）。
+        # 参考产品是**左列分类导航 + 右侧内容**：左树列分类（带数量），
+        # 右边只显示选中分类的内容。当前页签不同，左树的分类来源不同
+        # （角色页=角色，音频页=音频分组，背景页=背景分类…）。
+        self._tree_cols = QWidget(left)
+        self._tree_cols.setObjectName("assetCols")
+        _cols = QHBoxLayout(self._tree_cols)
+        _cols.setContentsMargins(0, 0, 0, 0)
+        _cols.setSpacing(0)
+
+        # 左：分类导航树
+        self.tree_host = QWidget(self._tree_cols)
+        self.tree_host.setObjectName("assetTree")
+        self.tree_host.setMinimumWidth(132)
+        self.tree_host.setMaximumWidth(190)
+        _th = QVBoxLayout(self.tree_host)
+        _th.setContentsMargins(0, 0, 0, 0)
+        _th.setSpacing(2)
+        self.tree_scroll = ScrollArea(self.tree_host)
+        self.tree_scroll.setWidgetResizable(True)
+        self.tree_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tree_content = QWidget()
+        self.tree_content.setObjectName("assetTreeContent")
+        self.tree_layout = QVBoxLayout(self.tree_content)
+        self.tree_layout.setContentsMargins(4, 2, 4, 2)
+        self.tree_layout.setSpacing(1)
+        self.tree_layout.addStretch(1)
+        _tb = _inner_bg()
+        self.tree_scroll.setStyleSheet(
+            "QScrollArea{background:transparent;border:none;}"
+            "QScrollArea::viewport{background:transparent;}"
+            "QScrollArea > QWidget > QWidget{background:transparent;}"
+            "QWidget#assetTreeContent{background:transparent;}")
+        self.tree_scroll.setWidget(self.tree_content)
+        _th.addWidget(self.tree_scroll, 1)
+        _cols.addWidget(self.tree_host)
+
+        # 右：内容区（承载原有滚动流 / 剧情编辑器 / 背景面板）
+        self._content_host = QWidget(self._tree_cols)
+        self._content_host.setObjectName("assetContent")
+        _ch = QVBoxLayout(self._content_host)
+        _ch.setContentsMargins(8, 0, 0, 0)
+        _ch.setSpacing(8)
+        # 内容区标题行：左边标题、右边「导入模型」（角色页才出现）。
+        # 参考产品里标题和动作按钮都在**内容区**，左树只有分类项。
+        lh = QHBoxLayout()
+        self.asset_header = StrongBodyLabel("素材库", self._content_host)
+        lh.addWidget(self.asset_header)
+        lh.addStretch(1)
+        self.btn_import_model = PushButton("导入模型", self._content_host)
+        self.btn_import_model.setToolTip("把模型复制进素材库（分类 / 改模人 / 缩略图）")
+        self.btn_import_model.clicked.connect(self._import_model)
+        self.btn_import_model.setVisible(False)
+        lh.addWidget(self.btn_import_model)
+        _ch.addLayout(lh)
+        _cols.addWidget(self._content_host, 1)
+        ll.addWidget(self._tree_cols, 1)
+
+        self.asset_scroll = ScrollArea(self._content_host)
         # v3.6.2：运镜编辑器常驻在特效页左栏顶部（整宽，不流动布局）。
         # 放在 ScrollArea 之前，避免被 FlowLayout 当卡片挤扁；
         # 只在特效页可见，其他页隐藏（_switch_asset_page 里控制）。
         try:
             import camera_editor as CE
-            self._cam_panel = CE.CameraPathPanel(left)
+            self._cam_panel = CE.CameraPathPanel(self._content_host)
             self._cam_panel.applied.connect(self._apply_camera_path)
             self._cam_panel.preview_sampled.connect(self._on_camera_preview)
             self._cam_panel.preview_reset.connect(self._on_camera_reset)
             self._cam_panel.setVisible(False)     # 默认不在特效页
-            ll.addWidget(self._cam_panel)
+            _ch.addWidget(self._cam_panel)
         except Exception:
             self._cam_panel = None
         self.asset_scroll.setWidgetResizable(True)
-        self.asset_host = QWidget()
+        self.asset_host = _FlowHost()
         # v3.4.7：viewport 默认浅底，深色面板中间露一整块白（属性面板
         # pscroll 修过同款问题，素材库这里漏了）；host 用 objectName 限定，
         # 不用通配选择器，避免盖掉 CardWidget 卡片自绘底色。
@@ -1134,14 +1439,14 @@ class VideoWorkbench(QWidget):
         self.asset_flow = FlowLayout(self.asset_host, needAni=False)
         self.asset_flow.setContentsMargins(0, 0, 0, 0)
         self.asset_scroll.setWidget(self.asset_host)
-        ll.addWidget(self.asset_scroll, 1)
+        _ch.addWidget(self.asset_scroll, 1)
         self.asset_empty = CaptionLabel("还没有素材\n点上方按钮导入，或双击卡片上轨",
-                                        left)
+                                        self._content_host)
         self.asset_empty.setAlignment(Qt.AlignCenter)
-        ll.addWidget(self.asset_empty)
+        _ch.addWidget(self.asset_empty)
         # F1：文本页剧情编辑器常驻（tab 切换只 show/hide，表单内容不丢）
-        self.script_editor = ScriptEditor(self, left)
-        ll.addWidget(self.script_editor, 1)
+        self.script_editor = ScriptEditor(self, self._content_host)
+        _ch.addWidget(self.script_editor, 1)
 
         # v3.6.2：批量操作工具条（对标对方工具的「批量操作」）。
         # 挂在剧情编辑器**下方**：用户正看着台词表时，一键做批处理。
@@ -1149,10 +1454,10 @@ class VideoWorkbench(QWidget):
         # 的模式，多一层确认反而烦；每次执行都 push_history 可回退。
         try:
             import batch_bar as BB
-            self._batch_bar = BB.BatchBar(left)
+            self._batch_bar = BB.BatchBar(self._content_host)
             self._batch_bar.run_requested.connect(self._run_batch)
             self._batch_bar.setVisible(False)     # 仅在文本页显示
-            ll.addWidget(self._batch_bar)
+            _ch.addWidget(self._batch_bar)
         except Exception:
             self._batch_bar = None
 
@@ -1160,7 +1465,7 @@ class VideoWorkbench(QWidget):
         # 和其它素材页签并列（角色/音频/背景/特效），切到「背景」页时
         # 显示这个面板、隐藏素材卡片区。不是独立栏——用户明确要页签。
         # 数据 = 素材库 kind=bg（1053 张），点缩略图=换当前时刻的背景。
-        self.bg_panel = QWidget(left)
+        self.bg_panel = QWidget(self._content_host)
         self.bg_panel.setObjectName("bgPanel")
         self.bg_panel.setStyleSheet(
             "QWidget#bgPanel{background:transparent;}")
@@ -1181,7 +1486,7 @@ class VideoWorkbench(QWidget):
         bl.addWidget(self.bg_combo)
         self.bg_scroll = ScrollArea(self.bg_panel)
         self.bg_scroll.setWidgetResizable(True)
-        self.bg_host = QWidget()
+        self.bg_host = _FlowHost()
         self.bg_host.setObjectName("bgHost")
         _ibg = _inner_bg()
         self.bg_scroll.setStyleSheet(
@@ -1197,7 +1502,7 @@ class VideoWorkbench(QWidget):
             "素材库里没有背景图\n（资产管理里确认素材库位置）", self.bg_panel)
         self.bg_empty.setAlignment(Qt.AlignCenter)
         bl.addWidget(self.bg_empty)
-        ll.addWidget(self.bg_panel, 1)
+        _ch.addWidget(self.bg_panel, 1)
         self.bg_panel.setVisible(False)     # 默认在「角色」页，背景面板隐藏
         self._bg_items = []          # 背景条目缓存（首次展开时读索引）
 
@@ -1205,6 +1510,7 @@ class VideoWorkbench(QWidget):
 
         # 中：预览
         center = QWidget(self)
+        self._center_widget = center            # 中央预览容器（供布局恢复引用）
         cl = QVBoxLayout(center)
         cl.setContentsMargins(0, 0, 0, 0)
         cl.setSpacing(6)
@@ -1227,9 +1533,12 @@ class VideoWorkbench(QWidget):
         self._stack.setContentsMargins(0, 0, 0, 0)
         stack_host = QWidget(center)
         stack_host.setLayout(self._stack)
+        self._stack_host = stack_host          # 全屏预览要拿它做宿主
         self._stack.addWidget(self.stage)
         cl.addWidget(stack_host, 1)
         self._preview_badge = None
+        self._fs_on = False                    # 全屏预览状态
+        self._fs_snapshot = {}                 # 全屏前的可见性快照
         try:
             import webgal_preview as WP
             self._wp = WP
@@ -1253,7 +1562,17 @@ class VideoWorkbench(QWidget):
         self.sld_pos.setTextVisible(False)
         self.sld_pos.setRange(0, 1000)
         pb.addWidget(self.sld_pos, 1)
+        # 全屏预览按钮（剪映风格）：进入后**主窗口全屏 + 只留预览区**，
+        # 左右面板与时间轴隐藏。不做 reparent —— 之前用 setCentralWidget
+        # 把宿主搬进独立窗口，QMainWindow 会夺走 stage 的 C++ 所有权，
+        # 退出时访问已析构的对象直接崩（实测 libshiboken: already deleted）。
+        self.btn_fullscreen = ToolButton(center)
+        self.btn_fullscreen.setIcon(FluentIcon.FULL_SCREEN.icon())
+        self.btn_fullscreen.setToolTip("全屏预览（ESC 退出）")
+        self.btn_fullscreen.clicked.connect(self._toggle_fullscreen_preview)
+        pb.addWidget(self.btn_fullscreen)
         cl.addLayout(pb)
+        self._transport_bar = pb
         center.setMinimumWidth(SPLIT_H_MIN[1])
         hsplit.addWidget(center)
 
@@ -1338,13 +1657,16 @@ class VideoWorkbench(QWidget):
         # 批量删除按钮
         _fx_btns = QHBoxLayout()
         self.btn_clear_effects = PushButton("清空所有特效", right)
-        self.btn_clear_effects.setFixedHeight(26)
+        # v3.8.0（UI 审计 S4）：setFixedHeight(26) 压扁了自然高度 31px 的按钮，
+        # 改最小高度让布局按 sizeHint 分配，空间不足时才回落。
+        self.btn_clear_effects.setMinimumHeight(26)
         self.btn_clear_effects.setToolTip(
             "删除当前幕里全部 setTransform / setTempAnimation 特效指令")
         self.btn_clear_effects.clicked.connect(self._clear_all_effects)
         _fx_btns.addWidget(self.btn_clear_effects)
         self.btn_clear_filters = PushButton("清空所有滤镜", right)
-        self.btn_clear_filters.setFixedHeight(26)
+        # v3.8.0（UI 审计 S4）：同上，改最小高度避免压扁
+        self.btn_clear_filters.setMinimumHeight(26)
         self.btn_clear_filters.setToolTip("删除所有片段上挂的滤镜参数")
         self.btn_clear_filters.clicked.connect(self._clear_all_filters)
         _fx_btns.addWidget(self.btn_clear_filters)
@@ -1370,6 +1692,44 @@ class VideoWorkbench(QWidget):
             row.addWidget(sp, 1)
             rl.addLayout(row)
 
+        # ---- 音量组：仅音频/视频片段显示（v3.7.0）----
+        # 用户诉求：「选中 bgm 或语音时，编辑工程属性应该可以改声音大小」。
+        # 做成滑块 + 数字双控：滑块好拖，数字好精调/回填。
+        self.vol_group = StrongBodyLabel("音量", right)
+        self.vol_group.setVisible(False)
+        rl.addWidget(self.vol_group)
+        _vr = QHBoxLayout()
+        self.sld_gain = Slider(Qt.Horizontal, right)
+        self.sld_gain.setRange(0, 200)          # 0~200% 线性
+        self.sld_gain.setValue(100)
+        self.sld_gain.valueChanged.connect(self._gain_slider_changed)
+        _vr.addWidget(self.sld_gain, 1)
+        self.spin_gain = TH.fix_spinbox(DoubleSpinBox(right))
+        self.spin_gain.setRange(0.0, 2.0)
+        self.spin_gain.setSingleStep(0.05)
+        self.spin_gain.setDecimals(2)
+        self.spin_gain.setSuffix(" ×")
+        self.spin_gain.setValue(1.0)
+        self.spin_gain.valueChanged.connect(self._gain_spin_changed)
+        _vr.addWidget(self.spin_gain)
+        rl.addLayout(_vr)
+        _vrb = QHBoxLayout()
+        self.btn_gain_reset = PushButton("还原 100%", right)
+        self.btn_gain_reset.setFixedHeight(26)
+        self.btn_gain_reset.clicked.connect(lambda: self._apply_clip_gain(1.0))
+        _vrb.addWidget(self.btn_gain_reset)
+        self.btn_gain_mute = PushButton("静音", right)
+        self.btn_gain_mute.setFixedHeight(26)
+        self.btn_gain_mute.clicked.connect(lambda: self._apply_clip_gain(0.0))
+        _vrb.addWidget(self.btn_gain_mute)
+        _vrb.addStretch(1)
+        self.vol_btns = QWidget(right)
+        _vbw = QHBoxLayout(self.vol_btns)
+        _vbw.setContentsMargins(0, 0, 0, 0)
+        _vbw.addLayout(_vrb)
+        self.vol_btns.setVisible(False)
+        rl.addWidget(self.vol_btns)
+
         # ---- 布局组：X/Y/Scale/Rot + 六向对齐（A2 StageView）----
         self.lay_group = StrongBodyLabel("布局（舞台）", right)
         self.lay_group.setVisible(False)
@@ -1393,7 +1753,8 @@ class VideoWorkbench(QWidget):
                                 ("右上", (1.0, 0.0)), ("左下", (0.0, 1.0)),
                                 ("下", (0.5, 1.0)), ("右下", (1.0, 1.0))):
             btn = PushButton(label, right)
-            btn.setFixedHeight(28)
+            # v3.8.0（UI 审计 S4）：六向对齐按钮原来钉死 28px（自然高度 31）
+            btn.setMinimumHeight(28)
             btn.clicked.connect(lambda _=False, a=nx, b=ny: self._align_clip(a, b))
             al.addWidget(btn)
         rl.addLayout(al)
@@ -1515,25 +1876,35 @@ class VideoWorkbench(QWidget):
         # 否则「角色」页一片空白 + 显示"还没有素材"（用户实报）。
         with contextlib.suppress(Exception): self._rebuild_asset_cards()
 
-        # 快捷键：Ctrl+S 保存 / Ctrl+Z Y 撤销重做 / 空格播放
-        QShortcut(QKeySequence("Ctrl+S"), self, activated=self.save_project)
-        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.undo)
-        QShortcut(QKeySequence("Ctrl+Y"), self, activated=self.redo)
-        QShortcut(QKeySequence(Qt.Key_Space), self, activated=self.toggle_play)
-        # v3.5.2：时间轴键盘导航（之前只有空格/Del，左右全靠鼠标拖）
-        # 左右 = ±1 帧（1/fps）；Shift = ±1 秒；Home/End = 首尾。
-        # QShortcut 是 WindowShortcut：焦点在输入框里时 Qt 先发
-        # ShortcutOverride 给输入框（它 accept 自己要的键），不会抢光标键。
-        for keys, fn in (
-                ("Left", lambda: self._seek_relative(-1)),
-                ("Right", lambda: self._seek_relative(1)),
-                ("Shift+Left", lambda: self._seek_relative(-1.0, True)),
-                ("Shift+Right", lambda: self._seek_relative(1.0, True)),
-                ("Home", lambda: self.seek(0.0)),
-                ("End", lambda: self.seek(V.project_duration(
-                    self.proj, getattr(self, "_cur_aid", None)))),
-        ):
-            QShortcut(QKeySequence(keys), self, activated=fn)
+        # 快捷键：全部走 shortcut_prefs 登记表（可在「编辑 → 设置…」里改键）。
+        # scope="video" 与木偶工程编辑器的 "rig" 分开存 —— 两个窗口各有
+        # 自己的 QShortcut，键位允许重复，互不干扰。
+        _bind = SP.REGISTRY.bind
+        _bind(self, "video", "save", "保存工程", "Ctrl+S",
+              self.save_project, group="通用")
+        _bind(self, "video", "undo", "撤销", "Ctrl+Z",
+              self.undo, group="通用")
+        _bind(self, "video", "redo", "重做", "Ctrl+Y",
+              self.redo, group="通用")
+        _bind(self, "video", "play", "播放 / 暂停", "Space",
+              self.toggle_play, group="通用")
+        _bind(self, "video", "cmd_palette", "命令面板", "Ctrl+K",
+              self._open_cmd_palette, group="通用")
+        # v3.5.2：时间轴键盘导航（左右 = ±1 帧；Shift = ±1 秒；Home/End 首尾）
+        _bind(self, "video", "seek_left", "上一帧", "Left",
+              lambda: self._seek_relative(-1), group="时间轴")
+        _bind(self, "video", "seek_right", "下一帧", "Right",
+              lambda: self._seek_relative(1), group="时间轴")
+        _bind(self, "video", "seek_left_sec", "后退 1 秒", "Shift+Left",
+              lambda: self._seek_relative(-1.0, True), group="时间轴")
+        _bind(self, "video", "seek_right_sec", "前进 1 秒", "Shift+Right",
+              lambda: self._seek_relative(1.0, True), group="时间轴")
+        _bind(self, "video", "go_start", "回到开头", "Home",
+              lambda: self.seek(0.0), group="时间轴")
+        _bind(self, "video", "go_end", "跳到结尾", "End",
+              lambda: self.seek(V.project_duration(
+                  self.proj, getattr(self, "_cur_aid", None))),
+              group="时间轴")
 
         self._apply_project(None)
         self._seed_history()
@@ -1541,6 +1912,129 @@ class VideoWorkbench(QWidget):
         with contextlib.suppress(Exception): self._refresh_fx_panel()
         # v3.6.2：背景页签**懒渲染** —— 首次切到「背景」时才读索引建卡
         # （1053 条目建 400 张卡有开销，不该拖慢启动）。这里只清空占位。
+
+    # ================= 命令面板（Ctrl+K） =================
+    def _open_cmd_palette(self):
+        """打开命令面板。"""
+        try:
+            import command_palette as CP
+        except Exception:
+            return
+        pal = getattr(self, "_cmd_palette", None)
+        if pal is None:
+            pal = CP.CommandPalette(self)
+            pal.invoked.connect(self._run_command)
+            self._cmd_palette = pal
+        pal.open_panel(self._cmd_items())
+
+    def _cmd_items(self):
+        """命令表：(标题, 提示, 分组, payload, 搜索键)。
+
+        payload 是个可调用对象或元组，_run_command 负责执行。
+        素材类命令点完会跳到对应页签/分类 —— 面板不只是"执行动作"，
+        也是"定位入口"。
+
+        第 5 项「搜索键」是**去掉前缀的核心词**（如「角色：高松灯」的
+        搜索键是「高松灯」）—— 匹配时用它，前缀不参与，否则搜「gsd」
+        会被「模型：」这类前缀的拼音首字母干扰。
+        """
+        items = []
+
+        def add(title, hint, group, fn, key=None):
+            items.append((title, hint, group, fn, key if key else title))
+
+        # ---- 工程动作 ----
+        add("保存工程", "Ctrl+S", "工程", self.save_project, "保存")
+        add("导出", "导出 WebGAL / 视频", "工程", self._open_export_dialog, "导出")
+        add("撤销", "Ctrl+Z", "工程", self.undo, "撤销")
+        add("重做", "Ctrl+Y", "工程", self.redo, "重做")
+        add("播放 / 暂停", "空格", "工程", self.toggle_play, "播放 暂停")
+        add("导入模型", "把模型复制进素材库", "工程", self._import_model, "导入模型")
+
+        # ---- 角色（定位到角色页并选中该角色）----
+        try:
+            for r in CL.roles():
+                def _sel(slug=r["slug"]):
+                    self._filter_assets("media")
+                    self._tree_sel["media"] = slug
+                    self._rebuild_tree()
+                    self._rebuild_asset_cards()
+                add("角色：%s" % r["cn"], "%d 套" % r["count"], "角色", _sel, r["cn"])
+        except Exception:
+            pass
+
+        # ---- 滤镜（应用）----
+        try:
+            import film_filters as FF
+            for f in FF.FILM_FILTERS:
+                add("滤镜：%s" % f["name"], f.get("desc") or "", "滤镜",
+                    (lambda n=f["name"]: self._apply_film_filter(n)), f["name"])
+        except Exception:
+            pass
+
+        # ---- 转场（应用）----
+        try:
+            import transitions as TR
+            for p in TR.catalog():
+                add("转场：%s" % p["name"], p.get("desc") or "", "转场",
+                    (lambda n=p["name"]: self._apply_transition(n)), p["name"])
+        except Exception:
+            pass
+
+        # ---- 演出特效（插入到当前时刻）----
+        try:
+            import stage_effects as SE
+            for cat, _n in SE.CATEGORIES:
+                for e in SE.by_category(cat):
+                    nm = e.get("name") or ""
+                    add("特效：%s" % nm, cat, "特效",
+                        (lambda ee=e: self._apply_stage_effect(ee)), nm)
+        except Exception:
+            pass
+
+        # ---- 氛围光效 ----
+        try:
+            import light_effects as LE
+            for p in LE.LIGHT_PRESETS:
+                nm = p["name"]
+                add("光效：%s" % nm, p.get("desc") or "", "光效",
+                    (lambda pp=p: self._apply_light_preset(
+                        {"name": pp["name"], "desc": pp.get("desc") or "",
+                         "kind": "transform", "_light": pp})), nm)
+        except Exception:
+            pass
+
+        # ---- 背景（设为当前时刻背景）----
+        try:
+            for b in self._load_bg_items():
+                nm = b.get("name") or os.path.basename(b["full"])
+                add("背景：%s" % nm, b.get("cat") or "", "背景",
+                    (lambda bb=b: self._apply_background(bb)), nm)
+        except Exception:
+            pass
+
+        # ---- 模型（加入时间轴）----
+        try:
+            for m in CL.all_models():
+                nm = CL.display_name(m)
+                add("模型：%s" % nm, (m.get("author") or ""), "模型",
+                    (lambda mm=m: self._model_to_timeline(
+                        _ModelCard(mm, None, parent=self.asset_host))), nm)
+        except Exception:
+            pass
+
+        return items
+
+    def _run_command(self, payload):
+        """执行命令面板选中的条目。"""
+        if callable(payload):
+            with contextlib.suppress(Exception):
+                payload()
+        elif isinstance(payload, tuple) and payload:
+            fn = payload[0]
+            if callable(fn):
+                with contextlib.suppress(Exception):
+                    fn()
 
     # ================= splitter 尺寸持久化 =================
     def _save_splitter_sizes(self):
@@ -1859,6 +2353,112 @@ class VideoWorkbench(QWidget):
         QTimer.singleShot(0, _fix)
         QTimer.singleShot(40, _fix)
 
+    # ---------- v3.6.6：左侧来源树（分类导航） ----------
+    def _tree_clear(self):
+        """清空树内容（保留尾部 stretch）。"""
+        while self.tree_layout.count() > 1:
+            it = self.tree_layout.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+        self._tree_items = {}
+
+    def _tree_add(self, key, text, count=None, has_children=False,
+                  expanded=False, on_click=None):
+        # 「全部」用特殊 key（它的语义是"不选任何分类" = None）
+        sel = self._tree_sel.get(self._asset_tab)
+        selected = (sel == key) if key != "__all__" else (sel is None)
+        it = _TreeItem(text, count=count, expanded=expanded,
+                       has_children=has_children,
+                       selected=selected,
+                       on_click=on_click, parent=self.tree_content)
+        self.tree_layout.insertWidget(self.tree_layout.count() - 1, it)
+        self._tree_items[key] = it
+        return it
+
+    def _rebuild_tree(self):
+        """按当前页签重建左侧分类树。
+
+        树是**导航**，不是分类标题卡的搬家：点一项 = 只看这一类，
+        内容区随之过滤。分页签的分类来源不同：
+          角色页   -> 角色（高松灯 91套 …）
+          音频页   -> 音频分组
+          背景页   -> 背景分类
+          滤镜/转场/特效 -> 对应预设的分类
+        """
+        self._tree_clear()
+        tab = self._asset_tab
+        if tab == "text":
+            # 文本页没有分类概念（剧情编辑器是单页表单），树隐藏
+            self.tree_host.setVisible(False)
+            return
+        self.tree_host.setVisible(True)
+        # 顶层「全部」：不选任何分类 = 显示该页签的所有内容
+        self._tree_add("__all__", "全部",
+                       on_click=lambda _w, s="__all__": self._tree_pick(s))
+        if tab == "media":
+            roles = CL.roles()
+            for r in roles:
+                self._tree_add(r["slug"], r["cn"], count=r["count"],
+                               has_children=True,
+                               expanded=(self._role_open == r["slug"]),
+                               on_click=lambda _w, s=r["slug"]: self._tree_pick(s))
+        elif tab == "audio":
+            for g in AL.groups():
+                self._tree_add(g["id"], g["name"], count=len(g["items"]),
+                               has_children=True,
+                               expanded=(self._audio_open == g["id"]),
+                               on_click=lambda _w, s=g["id"]: self._tree_pick(s))
+        elif tab == "bg":
+            items = self._load_bg_items()
+            from collections import Counter, OrderedDict
+            groups = OrderedDict()
+            for b in items:
+                groups.setdefault(b["cat"], []).append(b)
+            for cat, arr in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+                self._tree_add(cat, cat, count=len(arr), has_children=True,
+                               expanded=(getattr(self, "_bg_open", None) == cat),
+                               on_click=lambda _w, s=cat: self._tree_pick(s))
+        elif tab == "filter":
+            for name, desc, _fn in self._filter_presets():
+                self._tree_add(name, name,
+                               on_click=lambda _w, s=name: self._tree_pick(s))
+        elif tab == "transition":
+            import transitions as TR
+            for p in TR.catalog():
+                self._tree_add(p["name"], p["name"],
+                               on_click=lambda _w, s=p["name"]: self._tree_pick(s))
+        elif tab == "template":
+            import stage_effects as SE
+            with contextlib.suppress(Exception):
+                import light_effects as LE
+                self._tree_add("氛围光效", "氛围光效", count=len(LE.LIGHT_PRESETS),
+                               has_children=True,
+                               on_click=lambda _w, s="氛围光效": self._tree_pick(s))
+            for cat, n in SE.CATEGORIES:
+                self._tree_add(cat, cat, count=n, has_children=True,
+                               on_click=lambda _w, s=cat: self._tree_pick(s))
+
+    def _tree_pick(self, key):
+        """点树项：选中并切到该分类（再点同一项 = 取消选择，回「全部」）。"""
+        cur = self._tree_sel.get(self._asset_tab)
+        if key == "__all__":
+            new = None
+        else:
+            new = None if cur == key else key
+        # 换角色 => 作者展开状态清零（不同角色的作者分组不同，
+        # 沿用旧的会把不相干的作者展开着）
+        if self._asset_tab == "media" and new != cur:
+            with contextlib.suppress(Exception):
+                self._author_open = set()
+        self._tree_sel[self._asset_tab] = new
+        self._rebuild_tree()
+        self._rebuild_asset_cards()
+
+    def _tree_selected(self):
+        """当前页签选中的分类（None = 全部）。"""
+        return self._tree_sel.get(self._asset_tab)
+
     def _rebuild_asset_cards(self):
         """重建左栏卡片。
 
@@ -1897,6 +2497,10 @@ class VideoWorkbench(QWidget):
                 _anchor_idx = -1
 
         self._rebuild_asset_cards_inner()
+        # v3.6.6：树跟着内容一起刷新（分类数量会变：导入模型后套数增加）。
+        # 树项只有几十个，重建成本可忽略。
+        with contextlib.suppress(Exception):
+            self._rebuild_tree()
 
         if _sb is not None and _old_pos > 0:
             def _restore():
@@ -1924,6 +2528,10 @@ class VideoWorkbench(QWidget):
             wi = it.widget() if hasattr(it, "widget") else it
             if isinstance(wi, QWidget):
                 wi.deleteLater()
+        # 旧卡已销毁 -> 清掉登记（否则 host 里攒着失效 widget，
+        # 每次 resize 都去 setFixedWidth 一堆已死对象）
+        with contextlib.suppress(Exception):
+            self.asset_host.clear_cards()
         filt = self._asset_tab
         # 「导入模型」只在角色页可见：统一在这里判定，避免每个 return 分支
         # 各写一遍（漏一个就会出现「音频页也能导入模型」这种怪状态）。
@@ -1981,19 +2589,22 @@ class VideoWorkbench(QWidget):
                               parent=self.asset_host)
             self.asset_flow.addWidget(card)
         self.asset_empty.setVisible(
-            not any((self.pivot.currentItem() == "media") == (s["kind"] != "audio")
+            not any((self._asset_tab == "media") == (s["kind"] != "audio")
                     for s in self.assets))
 
-    # ---------- 角色页：角色 → 改模作者 → 模型 ----------
+    # ---------- 角色页：左树选角色 → 右内容列该角色的模型 ----------
     def _rebuild_role_cards(self):
-        """角色页：三级结构 —— 角色（父）→ 改模作者（子）→ 模型卡。
+        """角色页：左树选角色，右内容列该角色名下的模型。
 
-        用户要求「父分类用角色名，子分类用改模作者」：
-          ① 先列角色，点开一个角色；
-          ② 角色展开后按作者分组（作者标题卡，缩进一级）；
-          ③ 点作者展开它名下的模型卡（缩略图）。
-        角色同一时刻只展开一个（列表短、找得快）；作者可同时展开多个，
-        方便同一角色跨作者对比，展开状态按 (角色, 作者) 记住。
+        v3.6.6 改排版（参考产品的媒体面板）：分类（角色）挪到左树，
+        内容区不再重复角色标题卡 —— 树里已经写着「高松灯 91」，
+        右边再挂一张同样的标题卡纯属重复（用户要求去掉）。
+        作者仍作为**分组标题**保留（同一角色下有多个改模作者，不分组
+        会认不出哪个模型是谁改的），但**默认收起**：
+          · 展开要建该作者名下所有模型卡（高松灯有 91 套 = 97 张卡），
+            一次铺开建卡+布局要 600ms+，进页面就卡；
+          · 收起时首屏只有几个标题卡，几十毫秒。
+        点作者标题卡才展开它那组模型。
         """
         roles = CL.roles()
         if not roles:
@@ -2001,47 +2612,56 @@ class VideoWorkbench(QWidget):
                 "素材库里没有模型\n（确认素材库位置：资产管理里可见；也可以直接点右上角「导入模型」）")
             self.asset_empty.setVisible(True)
             return
-        opened = self._role_open
-        if opened is not None and not any(r["slug"] == opened for r in roles):
-            opened = self._role_open = None
-        # 角色变了就清掉上一角色的作者展开记录
-        if opened != getattr(self, "_author_open_role", None):
-            self._author_open = set()
-            self._author_open_role = opened
+        sel = self._tree_selected()
+        # 树上选的角色已不存在（素材库变了）-> 回到「全部」
+        if sel is not None and not any(r["slug"] == sel for r in roles):
+            sel = None
+            self._tree_sel["media"] = None
+        # 「全部」：**只列角色标题卡**，不展开模型。
+        # 原来靠「点角色卡展开」避开一次建 447 张卡的卡顿（实测建卡
+        # 987ms + 布局 1359ms）；现在分类挪到左树了，但「全部」仍不能
+        # 一次铺开全部模型 —— 树里点某个角色才铺那一类。
+        if sel is None:
+            for r in roles:
+                # 角色标题卡变成「入口」：点它 = 在左树里选中该角色
+                c = _RoleHeaderCard(
+                    r, expanded=True,
+                    on_toggle=lambda slug, _r=r: self._tree_pick(slug),
+                    parent=self.asset_host)
+                self.asset_host.register_card(c)
+                self.asset_flow.addWidget(c)
+            self.asset_empty.setVisible(False)
+            return
+        # 选中单个角色：**不再挂角色标题卡**（左树已经写着「高松灯 91」，
+        # 右边重复一张纯属冗余 —— 用户要求去掉）。直接从作者分组开始。
+        # 按改模作者分组，**默认收起**（见 docstring）
         open_auth = getattr(self, "_author_open", None)
         if open_auth is None:
             open_auth = self._author_open = set()
-
-        for r in roles:
-            exp = (r["slug"] == opened)
-            hdr = _RoleHeaderCard(
-                r, expanded=exp,
-                on_toggle=lambda slug, _r=r: self._toggle_role(slug),
+        for g in CL.authors_of(sel):
+            a = g["author"]
+            aexp = (a in open_auth)
+            c = _AuthorHeaderCard(
+                a, len(g["items"]), expanded=aexp,
+                on_toggle=lambda au: self._toggle_author(au),
                 parent=self.asset_host)
-            self.asset_flow.addWidget(hdr)
-            if not exp:
+            self.asset_host.register_card(c)
+            self.asset_flow.addWidget(c)
+            if not aexp:
                 continue
-            for g in CL.authors_of(r["slug"]):
-                a = g["author"]
-                aexp = (a in open_auth)
-                self.asset_flow.addWidget(_AuthorHeaderCard(
-                    a, len(g["items"]), expanded=aexp,
-                    on_toggle=lambda au, _s=r["slug"]: self._toggle_author(au),
-                    parent=self.asset_host))
-                if not aexp:
-                    continue
-                for m in g["items"]:
-                    pm = self._model_thumb_pixmap(m)
-                    card = _ModelCard(m, pm, on_add=self._model_to_timeline,
-                                      on_add_persona=self._model_to_timeline_persona,
-                                      parent=self.asset_host)
-                    self.asset_flow.addWidget(card)
+            for m in g["items"]:
+                pm = self._model_thumb_pixmap(m)
+                card = _ModelCard(m, pm, on_add=self._model_to_timeline,
+                                  on_add_persona=self._model_to_timeline_persona,
+                                  parent=self.asset_host)
+                self.asset_flow.addWidget(card)
         self.asset_empty.setVisible(False)
 
     # ---------- 导入模型（用户需求：命名 / 分类 / 改模人 / 缩略图）----------
     def _import_model(self):
         """打开导入对话框，把模型复制进素材库后刷新角色页。"""
-        presets = getattr(self, "_role_open", "") or ""
+        # 预设分类 = 左树当前选中的角色（v3.6.6：分类入口改成左树了）
+        presets = self._tree_sel.get("media") or ""
         dlg = _ImportModelDialog(self, preset_role=presets)
         if not dlg.exec():
             return
@@ -2058,11 +2678,9 @@ class VideoWorkbench(QWidget):
         # 缓存里旧缩略图作废（新目录可能已有 _thumb.png）
         with contextlib.suppress(Exception):
             self._thumb_cache = {}
-        # 导入后自动展开到该角色、该作者，让用户立刻看到新模型
+        # 导入后自动跳到该角色，让用户立刻看到新模型
         with contextlib.suppress(Exception):
-            self._role_open = slug
-            self._author_open = {author} if author else {""}
-            self._author_open_role = slug
+            self._tree_sel["media"] = slug
         self._rebuild_asset_cards()
         TOAST.toast_ok(self, "导入完成", msg, duration=3000)
         # 缩略图渠道①「导入后渲染」：这里只负责如实告知，不假装成功
@@ -2279,17 +2897,21 @@ class VideoWorkbench(QWidget):
                 "素材库里没有音频\n（确认素材库位置：资产管理里可见）")
             self.asset_empty.setVisible(True)
             return
-        opened = self._audio_open
-        if opened is not None and not any(g["id"] == opened for g in groups):
-            opened = self._audio_open = None
-        for g in groups:
-            exp = (g["id"] == opened)
-            hdr = _AudioGroupCard(
-                g, expanded=exp,
-                on_toggle=lambda gid: self._toggle_audio_group(gid),
-                parent=self.asset_host)
-            self.asset_flow.addWidget(hdr)
-            if not exp:
+        sel = self._tree_selected()
+        if sel is not None and not any(g["id"] == sel for g in groups):
+            sel = None
+            self._tree_sel["audio"] = None
+        target = ([g for g in groups if g["id"] == sel] if sel else list(groups))
+        for g in target:
+            if sel is None:
+                # 「全部」：只列分组标题卡（点它 = 在左树里选中该组）。
+                # 不一次铺开 333 张音频卡（实测建卡 609ms + 布局 944ms）。
+                c = _AudioGroupCard(
+                    g, expanded=True,
+                    on_toggle=lambda gid: self._tree_pick(gid),
+                    parent=self.asset_host)
+                self.asset_host.register_card(c)
+                self.asset_flow.addWidget(c)
                 continue
             for it in g["items"]:
                 card = _AudioCard(it, on_add=self._audio_item_to_timeline,
@@ -2391,7 +3013,13 @@ class VideoWorkbench(QWidget):
         WebGAL 的 setTransform 行；预览侧走 video_export 的合成。
         """
         presets = self._filter_presets()
+        sel = self._tree_selected()
+        if sel is not None and not any(p[0] == sel for p in presets):
+            sel = None
+            self._tree_sel["filter"] = None
         for name, desc, fn in presets:
+            if sel is not None and name != sel:
+                continue
             card = _TemplateCard(name, desc, fn, self.asset_host)
             self.asset_flow.addWidget(card)
         self.asset_empty.setVisible(False)
@@ -2799,32 +3427,33 @@ class VideoWorkbench(QWidget):
             w = it.widget() if hasattr(it, "widget") else it
             if isinstance(w, QWidget):
                 w.deleteLater()
+        with contextlib.suppress(Exception):
+            self.bg_host.clear_cards()
         # 分类 -> 条目
         from collections import Counter, OrderedDict
         groups = OrderedDict()
         for b in items:
             groups.setdefault(b["cat"], []).append(b)
-        # 打开状态：下拉选了具体分类 -> 展开它；否则用点击记忆
-        sel = ""
-        try:
-            sel = self.bg_combo.currentText() if self.bg_combo.count() else ""
-        except Exception:
-            sel = ""
-        opened = getattr(self, "_bg_open", None)
-        if opened is None:
-            opened = self._bg_open = None
-        if sel and sel not in ("", "全部"):
-            opened = sel
-            self._bg_open = sel
-        elif sel in ("", "全部"):
-            pass          # 保持点击记忆
+        # v3.6.6：分类挪到左树后，内容区只显示**选中分类**的图；
+        # 「全部」则按分类分组列出（保留分组标题卡，认出图的出处）。
+        sel = self._tree_selected()
+        if sel is not None and sel not in groups:
+            sel = None
+            self._tree_sel["bg"] = None
+        ordered = sorted(groups.items(), key=lambda kv: -len(kv[1]))
+        if sel is not None:
+            ordered = [(cat, arr) for cat, arr in ordered if cat == sel]
         self.bg_count.setText("%d 张 / %d 类" % (len(items), len(groups)))
-        for cat, arr in sorted(groups.items(), key=lambda kv: -len(kv[1])):
-            exp = (cat == opened)
-            self.bg_flow.addWidget(_BgCateCard(cat, len(arr), expanded=exp,
-                                               on_toggle=self._toggle_bg_cat,
-                                               parent=self.bg_host))
-            if not exp:
+        for cat, arr in ordered:
+            if sel is None:
+                # 「全部」：只列分类标题卡（点它 = 在左树里选中该分类）。
+                # 原来靠折叠规避一次建 1053 张缩略图卡的卡顿 —— 实测不折叠
+                # 时建卡+布局要 13.6s，完全不能接受。
+                c = _BgCateCard(cat, len(arr), expanded=True,
+                                on_toggle=lambda c=cat: self._tree_pick(c),
+                                parent=self.bg_host)
+                self.bg_host.register_card(c)
+                self.bg_flow.addWidget(c)
                 continue
             for b in arr:
                 pm = self._bg_thumb(b["full"])
@@ -2966,23 +3595,29 @@ class VideoWorkbench(QWidget):
         # v3.6.2：运镜编辑器是左栏顶部的常驻面板（构建期插入，见 _build），
         # 这里只管下面的现成特效库。编辑器不入流动布局——FlowLayout 会把
         # 整宽面板挤成卡片大小。
-        # 分类折叠状态（默认全收起：206 张卡全展开太慢）
-        opened = getattr(self, "_fx_open", None)
-        if opened is None:
-            opened = self._fx_open = set()
+        # v3.6.6：分类挪到左树 —— 选中某分类时内容区只列该分类，
+        # 「全部」时按分类分组列出（标题卡只做视觉分组，不再折叠）。
+        sel = self._tree_selected()
+        all_cats = [c for c, _n in SE.CATEGORIES]
+        if sel is not None and sel not in all_cats and sel != "氛围光效":
+            sel = None
+            self._tree_sel["template"] = None
 
         # v3.6.2：**氛围光效**置顶（用官方引擎真支持的滤镜拼出的布光观感）。
         # 它和下面的「206 个演出特效」是两套东西：光效库只有 13 条、每条
         # 是精调过的双层参数（bg+fig），点一下同时作用于两层。
         with contextlib.suppress(Exception):
             import light_effects as LE
-            exp_light = "氛围光效" in opened
-            self.asset_flow.addWidget(
-                _FxCateCard("氛围光效", len(LE.LIGHT_PRESETS),
-                            expanded=exp_light,
-                            on_toggle=self._toggle_fx_cat,
-                            parent=self.asset_host))
-            if exp_light:
+            if sel in (None, "氛围光效"):
+                exp_light = (sel == "氛围光效")
+                if sel is None:
+                    # 「全部」：只列分类标题卡（点它 = 在左树里选中该分类）
+                    c = _FxCateCard("氛围光效", len(LE.LIGHT_PRESETS),
+                                    expanded=True,
+                                    on_toggle=lambda: self._tree_pick("氛围光效"),
+                                    parent=self.asset_host)
+                    self.asset_host.register_card(c)
+                    self.asset_flow.addWidget(c)
                 for p in LE.LIGHT_PRESETS:
                     self.asset_flow.addWidget(
                         _FxCard({"name": p["name"], "desc": p["desc"],
@@ -2994,11 +3629,14 @@ class VideoWorkbench(QWidget):
             items = SE.by_category(cat)
             if not items:
                 continue
-            exp = cat in opened
-            self.asset_flow.addWidget(_FxCateCard(cat, len(items), expanded=exp,
-                                                  on_toggle=self._toggle_fx_cat,
-                                                  parent=self.asset_host))
-            if not exp:
+            if sel is not None and cat != sel:
+                continue
+            if sel is None:
+                c = _FxCateCard(cat, len(items), expanded=True,
+                                 on_toggle=lambda c=cat: self._tree_pick(c),
+                                 parent=self.asset_host)
+                self.asset_host.register_card(c)
+                self.asset_flow.addWidget(c)
                 continue
             for e in items:
                 self.asset_flow.addWidget(_FxCard(e, self._apply_stage_effect,
@@ -3289,7 +3927,13 @@ class VideoWorkbench(QWidget):
         import transitions as TR
         cur = (self.proj or {}).get("transition") or {}
         cur_name = str(cur.get("name") or "")
+        sel = self._tree_selected()
+        if sel is not None and not any(p["name"] == sel for p in TR.catalog()):
+            sel = None
+            self._tree_sel["transition"] = None
         for p in TR.catalog():
+            if sel is not None and p["name"] != sel:
+                continue
             # 已选中：标题加 ✓ 前缀（_TemplateCard 无选中态，文字前缀最稳）
             title = p["name"]
             if cur_name and cur_name == p["name"]:
@@ -3910,7 +4554,8 @@ class VideoWorkbench(QWidget):
         仅在「WebEngine 可用 + WebGAL 运行时已就位」时创建。"""
         btn = PushButton("实时预览", host)
         btn.setCheckable(True)
-        btn.setFixedHeight(26)
+        # v3.8.0（UI 审计 S4）：角标按钮原来钉死 26px（自然高度 31）
+        btn.setMinimumHeight(26)
         btn.setToolTip("用 WebGAL 引擎实时渲染立绘（布置辅助，不影响导出画质）")
         btn.toggled.connect(self._toggle_real_preview)
         self._preview_badge = btn
@@ -3937,6 +4582,14 @@ class VideoWorkbench(QWidget):
                 and ev.type() == QEvent.Resize:
             self._place_preview_badge()
         return super().eventFilter(obj, ev)
+
+    def keyPressEvent(self, ev):
+        # 全屏预览下 ESC 退出（主窗口自己接键，不再依赖独立窗口）
+        if getattr(self, "_fs_on", False) and ev.key() == Qt.Key_Escape:
+            self._exit_fullscreen_preview()
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
 
     def _ensure_webview(self):
         """懒创建 WebPreviewView（首次开实时预览时才建，避免启动开销）。"""
@@ -4106,6 +4759,69 @@ class VideoWorkbench(QWidget):
         finally:
             self._tick_busy = False
 
+    # ================= 全屏预览（剪映风格） =================
+    def _toggle_fullscreen_preview(self):
+        """进入/退出预览区全屏。
+
+        **不复用 reparent 方案**（踩过）：原先用一个独立 QMainWindow +
+        setCentralWidget(stack_host) 把预览宿主搬过去，QMainWindow 接管了
+        stage 的 C++ 所有权，退出时 setParent 回去 -> 原控件已被析构，
+        直接抛 `libshiboken: Internal C++ object (QWidget) already deleted`。
+
+        现在改为**原地留**：不动控件树，只
+          1) 主窗口 windowState 全屏
+          2) 隐藏左面板 / 时间轴 / 右属性面板
+        预览区因此独占整个窗口，退出时逐项恢复原可见性。零 reparent，
+        零所有权转移，反复进出也不会积累失效对象。"""
+        if getattr(self, "_fs_on", False):
+            self._exit_fullscreen_preview()
+            return
+        snap = {}
+        for name in ("_left_panel", "_right_panel", "timeline"):
+            w = getattr(self, name, None)
+            if w is not None:
+                snap[name] = w.isVisible()
+                with contextlib.suppress(Exception):
+                    w.hide()
+        # 垂直 splitter 的第二项（时间轴）隐藏后，把上方区域拉满
+        with contextlib.suppress(Exception):
+            vs = getattr(self, "_vsplit", None)
+            if vs is not None:
+                snap["_vsplit_sizes"] = list(vs.sizes())
+                vs.setSizes([1, 0])
+        self._fs_snapshot = snap
+        self._fs_on = True
+        with contextlib.suppress(Exception):
+            self.showFullScreen()
+        self.btn_fullscreen.setIcon(FluentIcon.BACK_TO_WINDOW.icon())
+        self.btn_fullscreen.setToolTip("退出全屏（ESC）")
+        with contextlib.suppress(Exception):
+            self.stage.updateGeometry()
+            self.stage.update()
+
+    def _exit_fullscreen_preview(self):
+        """退出全屏预览：还原窗口状态与各面板可见性。"""
+        self._fs_on = False
+        with contextlib.suppress(Exception):
+            self.showNormal()
+        snap = getattr(self, "_fs_snapshot", {}) or {}
+        for name in ("_left_panel", "_right_panel", "timeline"):
+            w = getattr(self, name, None)
+            if w is not None:
+                with contextlib.suppress(Exception):
+                    w.setVisible(bool(snap.get(name, True)))
+        with contextlib.suppress(Exception):
+            vs = getattr(self, "_vsplit", None)
+            old = snap.get("_vsplit_sizes")
+            if vs is not None and old:
+                vs.setSizes(old)
+        self._fs_snapshot = {}
+        self.btn_fullscreen.setIcon(FluentIcon.FULL_SCREEN.icon())
+        self.btn_fullscreen.setToolTip("全屏预览（ESC 退出）")
+        with contextlib.suppress(Exception):
+            self.stage.updateGeometry()
+            self.stage.update()
+
     def toggle_play(self):
         if self._playing:
             self.stop_play()
@@ -4156,7 +4872,11 @@ class VideoWorkbench(QWidget):
                     parts.append((k, (c.get("source") or {}).get("path"),
                                   round(float(c.get("start") or 0), 3),
                                   round(float(c.get("src_in") or 0), 3),
-                                  round(float(c.get("dur") or 0), 3)))
+                                  round(float(c.get("dur") or 0), 3),
+                                  # 音量必须进指纹：否则改完音量预览还是旧缓存
+                                  round(float(c.get("gain")
+                                              if c.get("gain") is not None
+                                              else 1.0), 3)))
             blob = _json.dumps(parts, sort_keys=True, ensure_ascii=False)
             return hashlib.md5(blob.encode("utf-8")).hexdigest()
         except Exception:
@@ -4273,6 +4993,28 @@ class VideoWorkbench(QWidget):
         self._fill_clip_props()
 
     def _fill_clip_props(self):
+        # 语音 clip 是 dialogue 投影，find_clip 摸不到 —— 单独判
+        _vidx = -1
+        try:
+            _vidx = self.timeline.selected_voice_index()
+        except Exception:
+            pass
+        is_voice = _vidx >= 0
+        if is_voice:
+            # 语音选中：属性面板只给「删除语音」，不显示 clip 布局组
+            self.btn_del_clip.setEnabled(True)
+            self.btn_del_clip.setText("删除这段语音（台词保留）")
+            self.lay_group.setVisible(False)
+            self.act_group.setVisible(False)
+            self.vol_group.setVisible(False)
+            self.vol_btns.setVisible(False)
+            self.sld_gain.setEnabled(False)
+            self.spin_gain.setEnabled(False)
+            self.clip_info.setText("语音（台词 %d）" % _vidx)
+            for sp in (self.spin_start, self.spin_in, self.spin_dur):
+                sp.setEnabled(False)
+            return
+        self.btn_del_clip.setText("删除选中片段")
         tr, c = V.find_clip(self.proj, self._sel_clip) if self._sel_clip \
             else (None, None)
         on = c is not None
@@ -4284,6 +5026,14 @@ class VideoWorkbench(QWidget):
         # puppet 预置动作组：仅 puppet 片段显示
         is_puppet = bool(on and (c.get("source") or {}).get("kind") == "puppet")
         self.act_group.setVisible(is_puppet)
+        # 音量组：仅音频/视频片段（有音轨的源）显示
+        _kind = (c.get("source") or {}).get("kind") if on else None
+        is_audio = bool(on and _kind in ("audio", "video"))
+        self.vol_group.setVisible(is_audio)
+        self.vol_btns.setVisible(is_audio)
+        if not is_audio:
+            self.sld_gain.setEnabled(False)
+            self.spin_gain.setEnabled(False)
         self._loading = True
         if on:
             self.clip_info.setText("%s\n%s" % (
@@ -4301,6 +5051,17 @@ class VideoWorkbench(QWidget):
                                    self._motion_ids)
             self._set_combo_by_data(self.cmb_expr, c.get("expression", ""),
                                    self._expression_ids)
+            # 音量回填（缺键 = 1.0）
+            if is_audio:
+                self.sld_gain.setEnabled(True)
+                self.spin_gain.setEnabled(True)
+                _g = c.get("gain")
+                try:
+                    _g = 1.0 if _g is None else float(_g)
+                except (TypeError, ValueError):
+                    _g = 1.0
+                self.sld_gain.setValue(int(round(_g * 100)))
+                self.spin_gain.setValue(round(_g, 2))
         else:
             self.clip_info.setText("未选中")
             for sp in (self.spin_start, self.spin_in, self.spin_dur):
@@ -4310,6 +5071,8 @@ class VideoWorkbench(QWidget):
                 sp.setValue(0.0)
             self._set_combo_by_data(self.cmb_motion, "", self._motion_ids)
             self._set_combo_by_data(self.cmb_expr, "", self._expression_ids)
+            self.sld_gain.setValue(100)
+            self.spin_gain.setValue(1.0)
         self._loading = False
 
     def _set_combo_by_data(self, combo, val, ids):
@@ -4464,8 +5227,73 @@ class VideoWorkbench(QWidget):
         self.timeline.refresh()
         self._after_edit()
 
+    # ---------- 音量（v3.7.0） ----------
+    def _gain_slider_changed(self, v):
+        """滑块（0~200 整数）-> 线性增益 0~2.0，同步数字框。"""
+        if self._loading:
+            return
+        self._loading = True
+        with contextlib.suppress(Exception):
+            self.spin_gain.setValue(round(v / 100.0, 2))
+        self._loading = False
+        self._apply_clip_gain(round(v / 100.0, 3))
+
+    def _gain_spin_changed(self, v):
+        """数字框 -> 滑块同步 + 写工程。"""
+        if self._loading:
+            return
+        self._loading = True
+        with contextlib.suppress(Exception):
+            self.sld_gain.setValue(int(round(float(v) * 100)))
+        self._loading = False
+        self._apply_clip_gain(v)
+
+    def _apply_clip_gain(self, gain):
+        """把音量写进当前选中 clip。
+
+        只对能出声的源生效（audio/video）；立绘/图片没有音轨，直接忽略。
+        gain 走 V._sanitize_clip_gain 钳位，1.0 时**删掉键**保持工程干净。
+        """
+        if self._loading or not self._sel_clip:
+            return
+        tr, c = V.find_clip(self.proj, self._sel_clip)
+        if c is None:
+            return
+        kind = (c.get("source") or {}).get("kind")
+        if kind not in ("audio", "video"):
+            return
+        g = V._sanitize_clip_gain(gain)
+        if g is None:
+            return
+        if abs(g - 1.0) < 1e-6:
+            c.pop("gain", None)          # 还原 1.0 = 不写键（旧工程口径）
+        else:
+            c["gain"] = g
+        self._loading = True
+        with contextlib.suppress(Exception):
+            self.sld_gain.setValue(int(round(g * 100)))
+            self.spin_gain.setValue(g)
+        self._loading = False
+        self.push_history()
+        # 预览混音缓存要失效（指纹含 gain），否则改了音量还听到旧的
+        self._mix_key = None
+        with contextlib.suppress(Exception):
+            self.timeline.refresh()
+        self._after_edit()
+
     def _delete_selected(self):
         # 多选（框选/Ctrl 加选）时成组删；单选集合就一个元素，行为同旧。
+        # 语音 clip 是 dialogue 投影：timeline.remove_selected 内部会
+        # 分流到 voice_remove（台词保留），这里只处理普通 clip。
+        if self.timeline.selected_voice_index() >= 0:
+            ok, msg = self.timeline.voice_delete_selected()
+            if ok:
+                self._sel_clip = None
+                self.push_history()
+                self._after_edit()
+            else:
+                TOAST.toast_warn(self, "删除失败", msg, duration=2500)
+            return
         ids = self.timeline.selected_clip_ids() or (
             [self._sel_clip] if self._sel_clip else [])
         if not ids:
@@ -4511,8 +5339,8 @@ class VideoWorkbench(QWidget):
             if not dlg._fps_valid():
                 TOAST.toast_warn(self, "帧率无效", "帧率需为 1-120 的整数，请修正后再导出", duration=4000)
                 return
-            path, scale, fps, workers, animate = dlg.result_values()
-            self._start_export(path, scale, fps, workers, animate)
+            path, scale, fps, workers, animate, codec = dlg.result_values()
+            self._start_export(path, scale, fps, workers, animate, codec)
 
     def _export_sidecar(self, kind, path):
         """导出附属产物：仅音轨 / SRT 字幕（v3.6.2）。
@@ -4542,7 +5370,8 @@ class VideoWorkbench(QWidget):
         else:
             TOAST.toast_warn(self, "未导出", msg, duration=5000)
 
-    def _start_export(self, path, scale, fps=None, workers=None, animate=None):
+    def _start_export(self, path, scale, fps=None, workers=None, animate=None,
+                      codec=None):
         self.stop_play()
         self.act_export.setEnabled(False)
         # v3.5.11：L2D 立绘预渲染（**必须在主线程做**——渲染依赖
@@ -4566,7 +5395,14 @@ class VideoWorkbench(QWidget):
         if animate is None:
             animate = True
         self._export_animate = False
-        if animate and n_states:
+        # **不能拿 n_states 当门槛**：n_states 是「定格预渲染成功了几张」，
+        # 它受 WebEngine 就绪时机、渲染器首帧冷启动影响，完全可能这次是 0。
+        # 而口型（lip）**只在泵的动画路径里生效** —— PuppetSource.frame()
+        # 的预渲染分支是查表拿定格图，压根没有传 lip 的入口。早先写成
+        # `if animate and n_states:`，n_states=0 时泵根本不起，整片导出
+        # 直接退回定格立绘 -> 嘴一动不动（用户实测「口型又没有了」）。
+        # 现在：只要用户要动画就尝试起泵；预渲染只是兜底，0 张也不拦。
+        if animate:
             try:
                 import l2d_pump as LPM
                 eff_fps = float(fps) if fps else float(self.proj.get("fps") or 30.0)
@@ -4575,12 +5411,33 @@ class VideoWorkbench(QWidget):
                 # 盖不住就要走「回拖重载」那条慢且重的路
                 pm.configure(True, eff_fps, VE.normalize_workers(workers))
                 self._export_animate = bool(pm.start())
+                # 诊断：把泵状态写进导出回执，用户能看到「这次导出有没有动画」
+                _pump_state = "enabled=%s active=%s reason=%s" % (
+                    pm.enabled, pm._active, pm.reason() or "")
                 if not self._export_animate:
-                    TOAST.toast_warn(self, "逐帧动画未启用", "渲染泵起不来（%s），本次导出改用定格立绘"
-                                    % pm.reason(),
-                               duration=5000)
-            except Exception:
+                    # start 失败：必须把全局 enabled 收回去。否则
+                    # PuppetSource 仍以为动画在跑，逐帧 request 全部撞
+                    # 超时（每帧白等一个 REQUEST_TIMEOUT），导出变得极慢
+                    # 且最后还是回落到定格图。
+                    with contextlib.suppress(Exception):
+                        pm.configure(False)
+                    TOAST.toast_warn(self, "逐帧动画未启用",
+                                     "渲染泵起不来（%s），本次导出改用定格立绘"
+                                     "（口型不可用）" % pm.reason(),
+                                     duration=5000)
+                else:
+                    # 成功也留痕：导出完成后的 msg 里能看到「含逐帧动画」
+                    TOAST.toast_info(self, "逐帧动画已启用",
+                                     "口型/呼吸/眨眼将逐帧渲染", duration=2500)
+            except Exception as e:
                 self._export_animate = False
+                with contextlib.suppress(Exception):
+                    import l2d_pump as LPM
+                    LPM.pump().configure(False)
+                TOAST.toast_warn(self, "逐帧动画未启用",
+                                 "渲染泵异常（%s），本次导出改用定格立绘"
+                                 "（口型不可用）" % str(e)[:80],
+                                 duration=5000)
         # v3.5.8：导出进度计时（滑动平均估速 -> 剩余时间）
         self._export_t0 = time.monotonic()
         self._export_last_t = self._export_t0
@@ -4589,6 +5446,7 @@ class VideoWorkbench(QWidget):
         self._export_worker = VE.VideoExportWorker(self.proj, path, scale,
                                                    fps=fps, workers=workers,
                                                    l2d_animate=self._export_animate,
+                                                   codec=codec,
                                                    parent=self)
         self._export_worker.progress.connect(self._export_progress)
         self._export_worker.done.connect(self._export_done)
@@ -4641,6 +5499,8 @@ class VideoWorkbench(QWidget):
                 if bad:
                     msg = "%s（立绘动画 %d 帧，其中 %d 帧超时/失败已回落定格）" % (
                         msg, st.get("frames", 0), bad)
+                else:
+                    msg = "%s（含逐帧动画，口型已渲染）" % msg
         self.act_export.setEnabled(True)
         self.act_export.setText("导出")
         (InfoBar.success if ok else InfoBar.error)(
@@ -4790,6 +5650,34 @@ class _ExportDialog(MessageBoxBase):
         self.anim_hint.setStyleSheet("color:%s; font-size:11px;"
                                      % TH.t("text_dim"))
         _vb.addWidget(self.anim_hint)
+
+        # 编码档（v3.7.5）：编码是「定格导出」的最大头（实测 1080p 全片
+        # 编码占 61%），H.264 比现状 MPEG-4 Part 2 快 42%，代价是体积
+        # +280%。默认仍是「兼容（小体积）」，不偷偷换用户的成片规格。
+        r6 = QHBoxLayout()
+        r6.addWidget(CaptionLabel("编码"))
+        self.cmb_enc = ComboBox()
+        self._enc_opts = []
+        try:
+            import video_export as _VE2
+            avail = _VE2.video_encoder_options()
+            for cc, label in _VE2.VIDEO_ENCODERS:
+                if cc in avail:
+                    self._enc_opts.append((cc, label))
+        except Exception:
+            self._enc_opts = [("mp4v", "兼容（小体积）")]
+        if not self._enc_opts:
+            self._enc_opts = [("mp4v", "兼容（小体积）")]
+        self.cmb_enc.addItems([lbl for _cc, lbl in self._enc_opts])
+        r6.addWidget(self.cmb_enc, 1)
+        _vb.addLayout(r6)
+        self.enc_hint = CaptionLabel(
+            "编码只影响成片体积与导出速度，不影响画面内容。"
+            "「快速（H.264）」实测快约 42%，但文件约大 3 倍。", self)
+        self.enc_hint.setWordWrap(True)
+        self.enc_hint.setStyleSheet("color:%s; font-size:11px;"
+                                    % TH.t("text_dim"))
+        _vb.addWidget(self.enc_hint)
 
         # 耗时预估（CaptionLabel，随任一下拉变化刷新）
         self.est_lbl = CaptionLabel("耗时预估：—", self)
@@ -4952,12 +5840,20 @@ class _ExportDialog(MessageBoxBase):
         except Exception:
             return True
 
+    def _encoder_value(self):
+        """当前所选编码档的 fourcc（默认 mp4v）。"""
+        try:
+            i = max(0, min(len(self._enc_opts) - 1, self.cmb_enc.currentIndex()))
+            return self._enc_opts[i][0]
+        except Exception:
+            return "mp4v"
+
     def result_values(self):
         scale = self._RES_SCALES[max(0, self.cmb_out.currentIndex())]
         fps = self._fps_value()
         workers = self._workers_value()
         return (os.path.normpath(self.ed_path.text().strip()), scale, fps,
-                workers, self._animate_value())
+                workers, self._animate_value(), self._encoder_value())
 
 class _ImportModelDialog(MessageBoxBase):
     """导入模型对话框（用户需求：命名 + 一级分类 + 二级改模人 + 缩略图）。

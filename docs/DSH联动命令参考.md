@@ -20,7 +20,7 @@
 2. [工程与存档](#2-工程与存档)
 3. [轨道与剪辑](#3-轨道与剪辑)
 4. [场景 / 幕 / 分支](#4-场景--幕--分支)
-5. [立绘与角色](#5-立绘与角色)
+5. [立绘与角色](#5-立绘与角色)（含 [口型 lip.*](#55-口型lip)）
 6. [台词](#6-台词)
 7. [运镜（多段路径）](#7-运镜多段路径)
 8. [氛围光效](#8-氛围光效)
@@ -223,6 +223,116 @@
 | 参数 | 说明 |
 |---|---|
 | kind | `motion` / `expression` / `bg` / `bgm` / `model` |
+
+---
+
+## 5.5 口型（lip.*）
+
+口型只对 **Live2D 立绘**有效（定格图 / PNG 没有 `PARAM_MOUTH_OPEN_Y`）。
+一条链路三个环节：**立绘 clip 有 `lip` 绑定** → **语音落在片段区间内** →
+**导出时按重叠语音逐帧 max 合并开口度**。任一环节断了，画面就是「嘴不动」。
+
+> v3.7.0 起导出的口型是**多句合并**的：一个片段里只要时间上有几句语音重叠，
+> 会各按 offset 烘焙包络再逐帧取 max，所以「一个片段绑一句」不再漏嘴；
+> `lip` 为空时也会**按时间重叠自动匹配**，不再整段静止。
+> 覆盖率 = 语音窗口内非零开口帧 / 语音窗口总帧，导出覆盖率 < 20% 会打
+> `LIPWARN` 日志（每个片段一条），可用 `lip.cover` 提前查。
+
+### `lip.status`
+口型能力总览，AI 判断「这里能不能用口型」的第一入口。
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| role | string | 可选，只看这个角色的语音 |
+
+返回 `figures` / `figures_live2d` / `voices` / `bound` / `usable` / `note`。
+
+### `lip.list`
+列出当前幕的**已绑定 / 未绑定**立绘与可绑语音候选。编排前先查它拿
+`clip_id`、`voice_id`。绑定指向的语音被删后，该项带 `broken: true`。
+
+### `lip.bind`
+手动把立绘绑到某句语音。
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| clip_id | string | — | **必填**，立绘 clip id |
+| voice_id | string | — | 语音 id，形如 `vc:0`；也可给 `voice_index`（整数） |
+| gain | number | 1.0 | 开口度倍率 0.3~2.5 |
+| auto_pick | bool | false | 没给 voice_id 时自动挑「时间重叠的第一句同角色语音」，**必须显式开启** |
+
+```json
+{"cmd": "lip.bind", "args": {"clip_id": "c9", "voice_id": "vc:27", "gain": 1.2}}
+```
+
+### `lip.unbind`
+给 `clip_id` 解一条；不给 `clip_id` = 清掉当前幕**全部**绑定（返回 `cleared`）。
+
+### `lip.auto`
+为**未绑定**的立绘按「时间重叠 + 说话人/角色」自动挂上主语音。
+只写 `lip`（一句主语音），片段内其余句子由导出侧重叠合并自动补上。
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| overwrite | bool | false | true = 连已绑定的也按重叠重挑 |
+| gain | number | 1.0 | 统一增益（overwrite 时保留原 gain） |
+| who | string | — | 只处理某角色（如 `anon` / `爱音`） |
+| dry_run | bool | false | 只出计划、不改工程 |
+
+返回 `applied` / `planned`（含 clip_id、voice、文本前 40 字、cover_pct）/
+`skipped`（含 `why`：片段内没有重叠语音 / 语音不可用）。
+
+```json
+{"cmd": "lip.auto", "args": {"dry_run": true}}
+```
+
+### `lip.split`
+把**跨多句**的立绘片段按语音句边界切段，每段只覆盖自己那句。
+用 `clip.split` 同款切分（新建 clip、不动 source），motion/expression 与
+layout 原样继承，动作与构图在切点前后连续。
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| clip_id | string | — | 只处理这个片段；留空 = 当前幕全部跨句立绘 |
+| min_dur | number | 0.8 | 最短段长，切点离两端不足它的不切 |
+| max_parts | number | 6 | 单片段最多切几段（2~12） |
+| dry_run | bool | false | 只出计划 |
+
+```json
+{"cmd": "lip.split", "args": {"clip_id": "c21", "dry_run": true}}
+```
+
+### `lip.recalc`
+**一键重算**：切段治跨句 + 自动匹配补未绑 + 报前后覆盖率（先用 `dry_run` 看方案）。
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| split | bool | true | 是否按句边界切分跨句片段 |
+| overwrite | bool | true | 是否重挑已绑定的主语音 |
+| min_dur / max_parts / gain / dry_run | — | — | 透传给 split / auto |
+
+返回 `before` / `split` / `auto` / `after`（均为覆盖率统计）。
+`msg` 形如「口型重算完成：覆盖率 53.1% -> 54.2%，嘴动帧 442 -> 451」。
+
+### `lip.cover`
+口型覆盖率查询（与导出 `LIPWARN` 同口径）。
+
+| 参数 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| clip_id | string | — | 只查这个片段；留空 = 当前幕全部立绘 |
+| min_pct | number | 0 | 只列覆盖率低于此值的问题片段 |
+
+逐片段返回 `frames` / `nonzero` / `voice_frames` / `cover_pct` / `mode`
+（`bound` 显式绑定、`auto` 时间重叠自动），`total` 里另有
+`cover_of_all_pct`（占该片段总帧数的比例）。
+
+```json
+{"cmd": "lip.cover", "args": {"min_pct": 50}}
+```
+
+> **典型排障顺序**：`lip.status`（能不能用口型）→ `lip.cover`（哪段不动）→
+> `lip.recalc` 带 `dry_run`（看方案）→ `lip.recalc`（落地）→ 重导出复测。
+> 片段内**根本没有语音**时嘴不动是正常现象，`lip.auto` 会明确跳过并说明原因。
 
 ---
 

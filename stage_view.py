@@ -15,7 +15,9 @@ TODO(C 方案)：旋转/裁剪/透明度/关键帧等自由变换工具一律不
 
 布局读写契约：读一律走 video_model.layout_at；写一律原地改 clip["layout"]。
 """
+import contextlib
 import math
+import os
 import time
 
 import numpy as np
@@ -358,20 +360,56 @@ class StageView(QWidget):
     _DLG_MAX_LINES = 4          # 高度自适应上限行数（2-4 行）
     _SUB_PAD_X = 28             # 正文两侧内边距（widget 像素）
     _SUB_MARGIN_B = 26          # 文字块距 widget 底边
-    _SUB_OUTLINE = 3            # 黑色描边宽度（8 方向偏移）
+    # 描边宽度（8 方向偏移，widget 像素）。v3.6.x：3 -> 2 ——
+    # 用户反馈黑边太粗（江城圆体笔画本身偏圆粗，3px 会糊成一圈墨）。
+    _SUB_OUTLINE = 2
+
+    # 字幕字体：江城圆体 500W（MyGO 主题的标准台词字体，用户指定）。
+    # 与导出 PDF/PIL 侧共用同一个 ttf，避免预览/导出字形不一致。
+    _SUB_FONT_FILE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "templates", "webgal", "fonts", "JiangChengYuanTi.ttf")
+    _SUB_FONT_FAMILY = "JiangChengYuanTi"
 
     def _dialog_font(self):
-        """台词正文字体（MyGO 风大字，随 widget 宽度缩放，钳 14-32pt）。
+        """台词正文字体（江城圆体，随 widget 宽度缩放，钳 14-32pt）。
 
         v3.5.2：缓存 QFont —— 原来每帧 new 一个 QFont（构造+设置属性
-        有成本），而字号只随宽度变，宽度不变就该复用。"""
+        有成本），而字号只随宽度变，宽度不变就该复用。
+        v3.6.x：字体换成项目内的江城圆体 ttf（QFontDatabase 注册一次，
+        全进程共享）；注册失败退回微软雅黑，不崩预览。"""
         cw = max(1, self.width())
         px = max(14, min(32, cw // 38))
         cache = getattr(self, "_font_cache", None)
         if cache is not None and cache[0] == px: return cache[1]
-        f = QFont("Microsoft YaHei", px)
+        fam = self._ensure_sub_font()
+        f = QFont(fam, px)
         self._font_cache = (px, f)
         return f
+
+    @classmethod
+    def _ensure_sub_font(cls):
+        """加载项目内江城圆体到 QFontDatabase（进程内只做一次）。
+
+        返回可用字体家族名：加载成功用江城圆体，失败退回 Microsoft YaHei。
+        用类属性做哨兵，避免每次重建字体都去碰文件系统。"""
+        cached = getattr(cls, "_sub_font_family_ok", None)
+        if cached: return cached
+        fam = "Microsoft YaHei"
+        with contextlib.suppress(Exception):
+            from PySide6.QtGui import QFontDatabase
+            fp = cls._SUB_FONT_FILE
+            if os.path.isfile(fp):
+                fid = QFontDatabase.addApplicationFont(fp)
+                if fid >= 0:
+                    fams = QFontDatabase.applicationFontFamilies(fid)
+                    if fams:
+                        # 以 ttf 内部家族名为准（江城圆体实际报的是这个名）
+                        fam = fams[0]
+                    else:
+                        fam = cls._SUB_FONT_FAMILY
+        cls._sub_font_family_ok = fam
+        return fam
 
     def _wrap_text(self, painter, text, max_w):
         """QFontMetrics 手算自动换行（禁 QGraphicsTextItem 场景层）。

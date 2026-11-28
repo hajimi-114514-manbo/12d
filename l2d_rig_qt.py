@@ -44,6 +44,7 @@ from qfluentwidgets import (FluentWindow, FluentIcon, PushButton,
 
 import anim as A          # v2.11.0 关键帧动画数据层
 from timeline_panel import TimelinePanel   # v2.11.0 时间轴面板
+import shortcut_prefs as SP   # 可改键位：登记表 + 持久化（设置对话框用）
 
 # task-27 / A4：DSH 联动远程控制。remote_control 是纯 stdlib 模块，import 容错
 # （万一缺失，菜单只显示状态、点击给提示，不影响主程序）。
@@ -260,13 +261,22 @@ def zh_err(e):
     return "%s：%s" % (type(e).__name__, s[:160])
 V2 = os.path.dirname(os.path.abspath(__file__))
 # 单一版本源：每次小更新 patch+1（v2.0.1、v2.0.2…），成体系大功能 minor+1
-VERSION = "3.6.1"
+VERSION = "3.7.0"
 # 输出/示例数据全部相对应用目录：整个文件夹搬到哪都不影响
 OUT_BASE = os.path.join(V2, "seethrough_out")
 PREVIEW_SCALE = 0.5          # 播放/画布用 LOD 分辨率（导出 PSD/帧/MP4 仍是全分辨率）
 ICON_PNG = os.path.join(V2, "assets", "anon_sewing_icon.png")
 ICON_ICO = os.path.join(V2, "assets", "anon_sewing_icon.ico")
 DEFAULT_DIR = os.path.join(V2, "示例工程")
+
+# v3.6.7：标题栏高度（用户要求「上面窗体行可以减少高度」）。
+# qfluentwidgets 的 FluentTitleBar 写死 48px，而那条里只有「图标 + 标题 +
+# 三个菜单按钮 + 窗口按钮」，48 有明显富余。压到 40 后仍能放下 28px 按钮，
+# 又给内容区多让出 8px。
+# **两处都要同步改**（只改一处会留空白）：
+#   ① 标题栏控件本身的高度（setFixedHeight）
+#   ② FluentWindow 内容区的顶部内距（widgetLayout 的 top margin）
+TITLEBAR_H = 40
 
 
 def _runtime_file(name):
@@ -2203,6 +2213,12 @@ class AssetMenuMixin:
         self.asset_menu.addAction(Action(
             FluentIcon.SYNC, "语音服务检测…",
             triggered=self._open_voice_service))
+        # v3.7.6：外置引擎/语音包目录 —— 与「检测」同属语音配置，放一起。
+        # 单开一个入口是有必要的：用户第一次用时引擎还没装到默认位置，
+        # 得先指过去；藏在检测对话框里会让人找不到。
+        self.asset_menu.addAction(Action(
+            FluentIcon.FOLDER, "语音外置目录…",
+            triggered=self._open_voice_dirs))
         # task-27 / A4：DSH 联动开关（远程命令通道，两窗口共享）
         self.asset_menu.addSeparator()
         self.asset_menu.addAction(Action(
@@ -2227,6 +2243,26 @@ class AssetMenuMixin:
             dlg.exec()
         except Exception as e:
             TOAST.toast_warn(self, "语音服务", "打开失败：%s" % e, duration=4000)
+
+    def _open_voice_dirs(self):
+        """打开「语音外置目录」——直接落到目录卡片那个页签（v3.7.6）。
+
+        与 _open_voice_service 是同一个对话框：那边是连通性检测，这边
+        只是**提前聚焦到目录区**，避免用户为了指一个路径还要先看一遍检测流程。
+        """
+        try:
+            import voice_service_ui as VSU
+        except Exception as e:
+            TOAST.toast_warn(self, "语音外置目录", "模块缺失：%s" % e, duration=4000)
+            return
+        try:
+            dlg = VSU.VoiceServiceDialog(self)
+            # 打开后把焦点给引擎目录输入框，用户可直接粘贴路径
+            with contextlib.suppress(Exception):
+                dlg.row_engine.ed.setFocus()
+            dlg.exec()
+        except Exception as e:
+            TOAST.toast_warn(self, "语音外置目录", "打开失败：%s" % e, duration=4000)
 
     def _dsh_link_toggle(self):
         """切换 DSH 联动：开启则接管当前视频窗工作台，关闭则停服务。"""
@@ -2510,27 +2546,44 @@ class Workbench(AssetMenuMixin, QWidget):
 
         edit = ToggleDropDownButton("编辑", self)
         em = RoundMenu(parent=self)
-        em.addAction(Action(FluentIcon.HISTORY, "撤销  Ctrl+Z", triggered=self.act_undo))
-        em.addAction(Action(FluentIcon.HISTORY, "重做  Ctrl+Y", triggered=self.act_redo))
+        # 键位文案不写死：留个 (动作, 名称, sid) 表，菜单每次打开时按
+        # 登记表里的**当前**键位重写 —— 否则用户在设置里改了键，菜单还
+        # 显示老键位，等于骗人。
+        self._edit_keyed_actions = []
+        self.act_undo_item = Action(FluentIcon.HISTORY, "撤销",
+                                    triggered=self.act_undo)
+        self.act_redo_item = Action(FluentIcon.HISTORY, "重做",
+                                    triggered=self.act_redo)
+        em.addAction(self.act_undo_item)
+        em.addAction(self.act_redo_item)
         em.addSeparator()
         # ===== 选区操作（PS 风格）=====
         # 复制 / 剪切 / 反选 需要激活的选区（菜单打开时按选区状态启用/禁用）；
         # 粘贴只要有剪贴板图像就可用（不依赖选区）。
-        self.act_copy = Action(FluentIcon.COPY, "复制  Ctrl+C",
+        self.act_copy = Action(FluentIcon.COPY, "复制",
                                triggered=lambda: self.act_copy_selection(False))
-        self.act_cut = Action(FluentIcon.CUT, "剪切  Ctrl+X",
+        self.act_cut = Action(FluentIcon.CUT, "剪切",
                               triggered=lambda: self.act_copy_selection(True))
-        self.act_paste = Action(FluentIcon.PASTE, "粘贴  Ctrl+V",
+        self.act_paste = Action(FluentIcon.PASTE, "粘贴",
                                 triggered=self.act_paste_selection)
-        self.act_invert = Action(FluentIcon.SYNC, "反选  Ctrl+Shift+I",
+        self.act_invert = Action(FluentIcon.SYNC, "反选",
                                  triggered=self.act_invert_selection)
-        self.act_deselect = Action(FluentIcon.CANCEL, "取消选择  Ctrl+D",
+        self.act_deselect = Action(FluentIcon.CANCEL, "取消选择",
                                    triggered=self.act_deselect_selection)
         for _a in (self.act_copy, self.act_cut, self.act_invert, self.act_deselect):
             _a.setEnabled(False)          # 默认禁用，菜单打开时按选区状态刷新
         for _a in (self.act_copy, self.act_cut, self.act_paste, self.act_invert,
                    self.act_deselect):
             em.addAction(_a)
+        self._edit_keyed_actions = [
+            (self.act_undo_item, "撤销", "undo"),
+            (self.act_redo_item, "重做", "redo"),
+            (self.act_copy, "复制", "copy"),
+            (self.act_cut, "剪切", "cut"),
+            (self.act_paste, "粘贴", "paste"),
+            (self.act_invert, "反选", "invert"),
+            (self.act_deselect, "取消选择", "deselect"),
+        ]
         em.addSeparator()
         # 图层补洞（Mocha Remove 简化版）：填充当前层的透明洞
         self.act_inpaint = Action(FluentIcon.BROOM, "图层补洞",
@@ -2540,17 +2593,24 @@ class Workbench(AssetMenuMixin, QWidget):
         em.addSeparator()
         # 自由变换（PS Ctrl+T）：需要选中图层
         self.act_free_transform_item = Action(
-            FluentIcon.ROTATE, "自由变换  Ctrl+T",
+            FluentIcon.ROTATE, "自由变换",
             triggered=self.act_free_transform)
         self.act_free_transform_item.setEnabled(False)
+        self._edit_keyed_actions.append(
+            (self.act_free_transform_item, "自由变换", "free_transform"))
         em.addAction(self.act_free_transform_item)
         em.addSeparator()
         # 拆图入口（此前按钮删除后无入口；无 CUDA 时点击给 A 卡路线引导）
         em.addAction(Action(FluentIcon.ZOOM, "拆分图片（SeeThrough）",
                             triggered=self._pick_image))
+        em.addSeparator()
+        # 设置：快捷键 + 界面主题（用户要求放进「编辑」菜单）
+        em.addAction(Action(FluentIcon.SETTING, "设置…",
+                            triggered=self._open_settings_dialog))
         edit.setMenu(em)
         # 菜单每次打开都按当前选区状态刷新可用性（PS 里没选区时复制/剪切是灰的）
         edit.menu_opened.connect(self._sync_edit_menu_state)
+        edit.menu_opened.connect(self._refresh_edit_menu_keys)
         self.edit_btn = edit
         self.edit_ref = em
 
@@ -3194,6 +3254,22 @@ class Workbench(AssetMenuMixin, QWidget):
         self._selection_invert = False
         self.canvas.lasso_cancel_selection()
         self._sync_edit_menu_state()
+
+    def _refresh_edit_menu_keys(self, *_a):
+        """按登记表的当前键位重写「编辑」菜单的按键文案。
+
+        改键位只会动 QShortcut，不会自动改菜单文字；不刷新的话用户
+        在设置里把撤销改成 F5，菜单还写着 Ctrl+Z。
+        """
+        for act, label, sid in getattr(self, "_edit_keyed_actions", ()):
+            if act is None:
+                continue
+            key = SP.REGISTRY.display("rig", sid)
+            act.setText(label + ("  " + key if key else ""))
+
+    def _open_settings_dialog(self):
+        """「编辑 → 设置…」入口：快捷键 + 界面主题。"""
+        _open_settings_panel(self, "rig")
 
     def _sync_edit_menu_state(self):
         """刷新「编辑」菜单里选区相关项的可用性（PS：没选区时复制/剪切/反选是灰的）。"""
@@ -4917,42 +4993,75 @@ class MainWindow(FluentWindow):
         tbar.insertWidget(1, self.wb.menu_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
         tbar.insertWidget(2, self.wb.edit_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
         tbar.insertWidget(3, self.wb.asset_btn, 0, Qt.AlignLeft | Qt.AlignVCenter)
-        # 快捷键
-        QShortcut(QKeySequence("Ctrl+Z"), self, activated=self.wb.act_undo)
-        QShortcut(QKeySequence("Ctrl+Y"), self, activated=self.wb.act_redo)
-        # PS 风格选区操作：复制/剪切/粘贴（套索选区激活时有效）
-        QShortcut(QKeySequence("Ctrl+C"), self, activated=self.wb.act_copy_selection)
-        QShortcut(QKeySequence("Ctrl+X"), self,
-                  activated=lambda: self.wb.act_copy_selection(True))
-        QShortcut(QKeySequence("Ctrl+V"), self, activated=self.wb.act_paste_selection)
-        # 反选（PS 的选择反向）
-        QShortcut(QKeySequence("Ctrl+Shift+I"), self,
-                  activated=self.wb.act_invert_selection)
-        # 自由变换（PS Ctrl+T）
-        QShortcut(QKeySequence("Ctrl+T"), self,
-                  activated=self.wb.act_free_transform)
-        # 取消选择（PS Ctrl+D）
-        QShortcut(QKeySequence("Ctrl+D"), self,
-                  activated=self.wb.act_deselect_selection)
-        # Delete / Enter：把选区真正裁剪到图层；Esc：取消选区
-        QShortcut(QKeySequence("Del"), self,
-                  activated=lambda: self.wb.canvas.lasso_apply_selection())
-        QShortcut(QKeySequence("Backspace"), self,
-                  activated=lambda: self.wb.canvas.lasso_apply_selection())
-        QShortcut(QKeySequence("Return"), self,
-                  activated=lambda: self.wb.canvas.lasso_apply_selection())
-        QShortcut(QKeySequence("Enter"), self,
-                  activated=lambda: self.wb.canvas.lasso_apply_selection())
-        QShortcut(QKeySequence("Esc"), self,
-                  activated=lambda: self.wb.canvas.lasso_cancel_selection())
-        # Photoshop 风格画布缩放快捷键
+        # 快捷键：全部走 shortcut_prefs 登记表，用户可在「编辑 → 设置…」里改。
+        # 这里只负责声明 sid / 显示名 / 默认键 / 分组，实际绑定与持久化在
+        # SP.REGISTRY 里统一处理（改键后立即生效，重启由 json 恢复）。
         cv = self.wb.canvas
-        QShortcut(QKeySequence("Ctrl+0"), self, activated=cv.set_fit)
-        QShortcut(QKeySequence("Ctrl+1"), self, activated=cv.set_actual)
-        QShortcut(QKeySequence("Ctrl+="), self, activated=lambda: cv.zoom_step(True))
-        QShortcut(QKeySequence("Ctrl+-"), self, activated=lambda: cv.zoom_step(False))
+        wb = self.wb
+        _bind = SP.REGISTRY.bind
+        _scope = "rig"
+        # ---- 通用 ----
+        _bind(self, _scope, "undo", "撤销", "Ctrl+Z",
+              wb.act_undo, group="通用")
+        _bind(self, _scope, "redo", "重做", "Ctrl+Y",
+              wb.act_redo, group="通用")
+        # ---- 选区（PS 风格）----
+        _bind(self, _scope, "copy", "复制选区", "Ctrl+C",
+              wb.act_copy_selection, group="选区")
+        _bind(self, _scope, "cut", "剪切选区", "Ctrl+X",
+              lambda: wb.act_copy_selection(True), group="选区")
+        _bind(self, _scope, "paste", "粘贴", "Ctrl+V",
+              wb.act_paste_selection, group="选区")
+        _bind(self, _scope, "invert", "反选", "Ctrl+Shift+I",
+              wb.act_invert_selection, group="选区")
+        _bind(self, _scope, "deselect", "取消选择", "Ctrl+D",
+              wb.act_deselect_selection, group="选区")
+        _bind(self, _scope, "free_transform", "自由变换", "Ctrl+T",
+              wb.act_free_transform, group="选区")
+        # 裁剪到选区：Delete / Backspace / 回车 三个键同效（用户习惯不一）
+        for _sid, _label, _key in (
+                ("lasso_del", "裁剪到选区（Delete）", "Del"),
+                ("lasso_backspace", "裁剪到选区（Backspace）", "Backspace"),
+                ("lasso_return", "裁剪到选区（回车）", "Return"),
+                ("lasso_enter", "裁剪到选区（小键盘回车）", "Enter")):
+            _bind(self, _scope, _sid, _label, _key,
+                  lambda: cv.lasso_apply_selection(), group="套索")
+        _bind(self, _scope, "lasso_cancel", "取消套索", "Esc",
+              lambda: cv.lasso_cancel_selection(), group="套索")
+        # ---- 画布缩放（Photoshop 同款）----
+        _bind(self, _scope, "zoom_fit", "适配窗口", "Ctrl+0",
+              cv.set_fit, group="画布")
+        _bind(self, _scope, "zoom_actual", "实际大小", "Ctrl+1",
+              cv.set_actual, group="画布")
+        _bind(self, _scope, "zoom_in", "放大", "Ctrl+=",
+              lambda: cv.zoom_step(True), group="画布")
+        _bind(self, _scope, "zoom_out", "缩小", "Ctrl+-",
+              lambda: cv.zoom_step(False), group="画布")
+        # v3.6.7：标题栏压矮（与视频窗一致，见模块级 TITLEBAR_H）
+        self._apply_titlebar_height()
         _STYLED_WIDGETS.append(self)
         self._apply_theme()
+
+    def _apply_titlebar_height(self):
+        """把标题栏压到 TITLEBAR_H，并同步内容区顶部内距。
+
+        两处都要动（缺一个就留空白）：
+          · FluentTitleBar 自己 setFixedHeight(48)
+          · FluentWindow 的 widgetLayout top margin 也是 48
+        """
+        H = TITLEBAR_H
+        with contextlib.suppress(Exception):
+            tb = self.titleBar
+            tb.setFixedHeight(H)
+            tb.hBoxLayout.setContentsMargins(0, 0, 0, 0)
+            with contextlib.suppress(Exception):
+                tb.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+        with contextlib.suppress(Exception):
+            self.widgetLayout.setContentsMargins(0, H, 0, 0)
+        # 内容区顶部内距变了 -> 导航栏把手的 y 也要跟着重算
+        with contextlib.suppress(Exception):
+            self._sync_titlebar_offset()
+            self._place_nav_grip()
 
     def _apply_theme(self):
         """切主题时重刷主窗自己那几处跟随主题的样式。"""
@@ -4966,7 +5075,50 @@ class MainWindow(FluentWindow):
         with contextlib.suppress(Exception):
             self.wb.canvas.update()
             self.wb.layer_list.viewport().update()
+        with contextlib.suppress(Exception): self._apply_titlebar_skin()
         with contextlib.suppress(Exception): self.update()
+
+    def _apply_titlebar_skin(self):
+        """上部标题栏黑底（用户需求：与主体深灰界面对齐，不再是一条白带）。
+
+        FluentTitleBar 的底色在库样式表里是 transparent，实际透出的是窗口
+        Acrylic 层——Windows 浅色 DWM 下就渲染成白色，与主体 window_bg
+        (#1b1f27) 割裂。这里只给标题栏这一处刷不透明黑底，并把标题文字、
+        图标与最小化/最大化/关闭三个按钮在黑底上的配色一起对齐；
+        浅色主题直接交回库默认（白底黑字），不受污染。
+        左侧导航与中部标签页的亮青强调色不在此处，保持原样。
+        """
+        tb = getattr(self, "titleBar", None)
+        if tb is None:
+            return
+        if TH.is_light():
+            with contextlib.suppress(Exception):
+                tb.setAttribute(Qt.WA_StyledBackground, False)
+                tb.setStyleSheet("")       # 交回库默认（白底黑字）
+                tb.update()
+            return
+        bg, fg = "#0f1115", "#e9edf3"
+        with contextlib.suppress(Exception):
+            # 关键：QWidget 派生控件默认不绘制样式表里的 background，
+            # 必须打开 WA_StyledBackground，否则整窗渲染时标题栏区域仍是
+            # 透明的（透出 Acrylic 白底），QSS 等于没写。
+            tb.setAttribute(Qt.WA_StyledBackground, True)
+            tb.setStyleSheet(
+                "FluentTitleBar{background-color:%s;}"
+                "FluentTitleBar>QLabel#titleLabel{color:%s;}"
+                "TitleBarButton{qproperty-normalBackgroundColor:transparent;"
+                "qproperty-hoverBackgroundColor:rgba(255,255,255,38);"
+                "qproperty-pressedBackgroundColor:rgba(255,255,255,64);}"
+                "MinimizeButton,MaximizeButton{qproperty-normalColor:%s;"
+                "qproperty-hoverColor:#ffffff;qproperty-pressedColor:#ffffff;}"
+                "CloseButton{qproperty-normalColor:%s;"
+                "qproperty-hoverColor:#ffffff;"
+                "qproperty-hoverBackgroundColor:rgb(232,17,35);"
+                "qproperty-pressedColor:#ffffff;"
+                "qproperty-pressedBackgroundColor:rgb(241,112,122);}"
+                % (bg, fg, fg, fg))
+            tb.update()
+            tb.repaint()
 
     def _switch_theme(self, mode):
         """切换界面主题（"light" 半透明磨砂白 / "dark" 黑），并记住选择。"""
@@ -5019,14 +5171,17 @@ class MainWindow(FluentWindow):
         """导航栏展开时把标题栏左移出导航栏宽度，避免按钮被压住。"""
         try:
             tb = self.titleBar
+            # 标题栏高度以控件实际高度为准（FluentShellWindow 会把它压矮，
+            # 不能在这里写死 48 —— 否则几何算错、标题栏被拉回原高）
+            h = tb.height() or getattr(self, "TITLEBAR_H", 48)
             if self.nav_collapsed:
                 tb.setContentsMargins(0, 0, 0, 0)
-                tb.setGeometry(0, 0, self.width(), tb.height() or 48)
+                tb.setGeometry(0, 0, self.width(), h)
             else:
                 w = int(getattr(self, "nav_width", self.NAV_W_DEFAULT))
                 # 让标题栏从导航栏右缘开始，宽度相应减少
                 tb.setContentsMargins(0, 0, 0, 0)
-                tb.setGeometry(w, 0, max(0, self.width() - w), tb.height() or 48)
+                tb.setGeometry(w, 0, max(0, self.width() - w), h)
             tb.raise_()
         except Exception:
             pass
@@ -5038,7 +5193,8 @@ class MainWindow(FluentWindow):
                 self.nav_grip.setVisible(False)
                 return
             w = int(getattr(self, "nav_width", self.NAV_W_DEFAULT))
-            top = 48                      # 标题栏高度
+            # 标题栏高度取实际值（同上：不要写死 48）
+            top = self.titleBar.height() or getattr(self, "TITLEBAR_H", 48)
             h = max(1, self.height() - top)
             self.nav_grip.setGeometry(w - 2, top, 4, h)
             self.nav_grip.setVisible(True)
@@ -5133,6 +5289,10 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
     混入 AssetMenuMixin，让视频窗口顶部也有同款「资产管理」菜单。
     """
 
+    # v3.6.7：标题栏压矮（用户要求「上面窗体行可以减少高度」）。
+    # 见模块级 TITLEBAR_H 的说明。
+    TITLEBAR_H = TITLEBAR_H
+
     # v3.4.6：视频编辑页 —— 资产管理只显示视频链需要的资产
     # （Python 运行时 / WebEngine 预览包 / WebGAL 运行时），
     # 不显示拆图模型与 CUDA 加速（视频编辑不做 AI 拆图）。
@@ -5153,6 +5313,31 @@ class FluentShellWindow(AssetMenuMixin, FluentWindow):
             with contextlib.suppress(Exception):
                 self.navigationInterface.panel.returnButton.setVisible(False)
         self.navigationInterface.setVisible(False)
+        self._apply_titlebar_height()
+
+    def _apply_titlebar_height(self):
+        """把标题栏压到 TITLEBAR_H，并同步内容区顶部内距。
+
+        两处都要动，缺一个就会留空白：
+          · FluentTitleBar.__init__ 里 setFixedHeight(48) -> 控件的实际高度
+          · FluentWindow.__init__ 里 widgetLayout.setContentsMargins(0, 48, 0, 0)
+            -> 内容区给标题栏留的那 48px。只压标题栏不压内距的话，
+               标题栏下方会空出一条（用户看到的就是「还是有那么高」）。
+        """
+        H = self.TITLEBAR_H
+        with contextlib.suppress(Exception):
+            tb = self.titleBar
+            tb.setFixedHeight(H)
+            # 标题栏自身的布局上下边距收紧（库默认留了较大空白）
+            tb.hBoxLayout.setContentsMargins(0, 0, 0, 0)
+            with contextlib.suppress(Exception):
+                tb.vBoxLayout.setContentsMargins(0, 0, 0, 0)
+            with contextlib.suppress(Exception):
+                tb.setContentsMargins(0, 0, 0, 0)
+                tb.setGeometry(0, 0, self.width(), H)
+        # 内容区顶部内距跟着压矮（否则标题栏下面留 8px 空白）
+        with contextlib.suppress(Exception):
+            self.widgetLayout.setContentsMargins(0, H, 0, 0)
 
     def _apply_theme(self):
         """切主题时重刷视频窗的标题栏/内容区。
@@ -5472,6 +5657,17 @@ def _video_export_webgal(win, wb):
     threading.Thread(target=work, daemon=True).start()
 
 
+def _open_settings_panel(anchor, scope="rig"):
+    """打开设置面板（快捷键 + 界面主题）。
+
+    anchor 是触发菜单的控件（Workbench / 视频窗壳）；设置面板是模态
+    MessageBoxBase，需要**顶层窗口**当父级才会遮整窗，所以这里取 window()。
+    """
+    import settings_dialog as SD
+    win = anchor.window() if anchor is not None else None
+    SD.open_settings(win if win is not None else anchor, scope)
+
+
 def _build_video_menus(win, wb, set_proj):
     """视频窗口顶部三菜单（文件/编辑/资产管理），挂 shell 标题栏左上横排。
 
@@ -5557,19 +5753,33 @@ def _build_video_menus(win, wb, set_proj):
     mf.addAction(Action(FluentIcon.CANCEL, "退出", triggered=win.close))
     fb.setMenu(mf)
     fb.menu_opened.connect(lambda _m=None: _rebuild_recent())
-    fb.setFixedHeight(30)
+    fb.setFixedHeight(28)
 
-    # ---- 编辑：只留撤销/重做 ----
+    # ---- 编辑：撤销/重做 + 设置（快捷键 / 界面主题）----
     eb = ToggleDropDownButton("编辑", win)
     me = RoundMenu(parent=win)
-    me.addAction(Action(FluentIcon.HISTORY, "撤销  Ctrl+Z", triggered=wb.undo))
-    me.addAction(Action(FluentIcon.HISTORY, "重做  Ctrl+Y", triggered=wb.redo))
+    a_undo = Action(FluentIcon.HISTORY, "撤销", triggered=wb.undo)
+    a_redo = Action(FluentIcon.HISTORY, "重做", triggered=wb.redo)
+    me.addAction(a_undo)
+    me.addAction(a_redo)
+    me.addSeparator()
+    me.addAction(Action(FluentIcon.SETTING, "设置…",
+                        triggered=lambda: _open_settings_panel(win, "video")))
     eb.setMenu(me)
-    eb.setFixedHeight(30)
+    eb.setFixedHeight(28)
+
+    def _refresh_video_menu_keys(*_a):
+        for act, label, sid in ((a_undo, "撤销", "undo"),
+                                (a_redo, "重做", "redo")):
+            key = SP.REGISTRY.display("video", sid)
+            act.setText(label + ("  " + key if key else ""))
+
+    eb.menu_opened.connect(_refresh_video_menu_keys)
+    win._refresh_video_menu_keys = _refresh_video_menu_keys
 
     # ---- 资产管理：复用 mixin（同款首击先填后弹）----
     win._setup_asset_menu(win)
-    win.asset_btn.setFixedHeight(30)
+    win.asset_btn.setFixedHeight(28)
 
     # 挂到标题栏左上角横排（与 MainWindow 同款机制）
     tbar = win.titleBar.hBoxLayout

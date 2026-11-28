@@ -198,18 +198,39 @@ function _writeMouth(model, open) {
   return { ok: false, why: "no_api", tried };
 }
 
-// 按「片段内时刻 t（秒）」取该模型的开口度。表按 delta 秒存，直接算下标。
-// 注意 t 是**片段内相对时间**（seek 的 k 从 0 起、每步 dt），不是工程
-// 绝对时间 —— Python 侧下发的 vals 已经按片段起点对齐过了。
+// 按「**工程时间** t」取该模型的开口度。
+// 表按「片段内相对时间」烘好，所以这里要减掉 clip 起点 tb.start
+// （tb.start 由 Python 侧随 setLip 下发）。
+//
+// v3.6.5 修「做动作时嘴闭上、不对口型」：原来 _lipTick 传的是
+// `performance.now() - lipTickerStart`（墙上时钟流逝量），而表是按片段
+// 内相对时间烘的 —— 两个基准完全不同，嘴会越播越偏，看起来就是"不对口型"。
+// 现在统一用工程播放头时间（apply_state 每帧带进来的 t）。
+// 最近一次 _lipAt 返回 null 的原因："stale"（相位与本表不匹配）/ "no_val"。
+// 导出侧 _lip_rb_check 会读 lipHookStat.skipped 判「页面是不是在用旧表」。
+let lipAtMiss = null;
+
 function _lipAt(modelId, t) {
   const tb = lipTable.get(modelId);
-  if (!tb || !tb.vals || !tb.vals.length) return null;
+  if (!tb || !tb.vals || !tb.vals.length) { lipAtMiss = "no_val"; return null; }
   const fps = Number(tb.fps) || 30;
-  const rel = Number(t) || 0;
-  if (rel < 0) return 0;
+  const rel = (Number(t) || 0) - (Number(tb.start) || 0);
+  if (rel < 0) { lipAtMiss = null; return 0; }
   let i = Math.round(rel * fps);
   if (i < 0) i = 0;
-  if (i >= tb.vals.length) i = tb.vals.length - 1;
+  if (i >= tb.vals.length) {
+    // v3.7.3：表已播完 —— **不再夹到末值**。夹末值正是「嘴定死」的直接成因：
+    // 一旦相位基准错位（跨 clip 累积的 s.k、或换了台词没重发 setLip），
+    // 索引就永远越界，嘴被钉死在最后一个开口度上，看起来就是 465.7s 之后
+    // 彻底闭合、之后一直不动。
+    // 末帧 Math.round 溢出一格（i 恰为 len）属正常收尾 -> 闭嘴 0；
+    // 再往后就是**相位与本表不匹配**（stale）-> 返回 null，本次不写嘴，
+    // 并把原因暴露到 lipHookStat.skipped，供导出侧回读校验告警。
+    if (i <= tb.vals.length) { lipAtMiss = null; return 0; }
+    lipAtMiss = "stale";
+    return null;
+  }
+  lipAtMiss = null;
   const g = Number(tb.gain) || 1;
   return Math.max(0, Math.min(1, (Number(tb.vals[i]) || 0) * g));
 }
@@ -237,11 +258,17 @@ window.__muppetBox = function (modelId, margin) {
   if (!s || !s.model) return null;
   const m = s.model;
   const mg = Math.max(0, Number(margin) || 0);
-  // anchor(0.5,0.5) -> x/y 是中心；width/height 已含 scale
-  let x = m.x - m.width / 2 - mg;
-  let y = m.y - m.height / 2 - mg;
-  let w = m.width + mg * 2;
-  let h = m.height + mg * 2;
+  // **手臂截断修复**：m.width/m.height 是 PIXI DisplayObject 的宽高，
+  // 按 moc 原始画布算，**不含动作网格顶点超出的部分**（手臂前伸时顶点
+  // 会伸出 moc 范围）。预览时画布 1280×720 够大，手臂在画布内能看见；
+  // 导出时按 m.width/m.height 抓框，手臂在框外被截掉。
+  // 改用 m.getBounds()：PIXI 的实际渲染包围盒，包含所有顶点（含手臂）。
+  // 注意 getBounds() 返回的是全局坐标（含 x/y 偏移），需要转回画布坐标。
+  const b = m.getBounds();
+  let x = b.x - mg;
+  let y = b.y - mg;
+  let w = b.width + mg * 2;
+  let h = b.height + mg * 2;
   const cx = Math.max(0, Math.floor(x)), cy = Math.max(0, Math.floor(y));
   const cw = Math.min(Math.ceil(w + (x - cx)), STAGE_W - cx);
   const ch = Math.min(Math.ceil(h + (y - cy)), STAGE_H - cy);
@@ -285,6 +312,12 @@ window.__muppetGrab = function (roi) {
   } catch (e) { return ""; }
 };
 
+// 注：v3.7.5 曾试过把 PNG 编码搬到 Web Worker 后台（原始 RGBA -> deflate
+// -> 回传）。像素确实逐位一致，但**吞吐反而更差**：deflate 压缩约 20ms/帧
+// （比 PNG 的 7.9ms 慢），而导出线程必须等这一帧的像素，整片从 116s 变
+// 159s。Worker 里 convertToBlob('image/png') 也有损（3 个像素差 1）。
+// => 保持同步 toDataURL 这条最快点。
+
 // ===== 手动时钟（导出逐帧动画泵用）=====
 // 为什么必须自己驱动：bundle 里 Live2DModel 的时间推进挂在 **Ticker.shared**
 //   onTickerUpdate(){ this.update(G.shared.deltaMS) }
@@ -309,28 +342,299 @@ const clock = { manual: false, dt: 1000 / 30 };
 // 在 LOW 之前跑完，此时写参数、再 render 一次即生效。
 // 代价是自动模式下每帧多一次 render；只在真的绑了口型时才挂。
 let lipTicker = null;
-function _lipTick() {
-  if (clock.manual || !lipTable.size) return;      // 手动时钟走 seek 里那条
-  const t = (performance.now() - (lipTickerStart || performance.now())) / 1000;
+// 当前工程播放头时间（由 setTime 每帧写入）。口型按工程时间取，
+// 不能用墙上时钟 —— 见 _lipApplyAll 的注释。
+let lipProjT = 0.0;
+let lipPlaying = false;
+let lipTickerStart = 0;
+// v3.6.5：**不再用 ticker 驱动口型**（实测 LOW 优先级回调根本不执行，
+// hasLip=true 但 lipNow 恒为 null）。改为 setTime 里正向驱动，
+// 这个函数只为兼容旧调用点保留，是空操作。
+function _syncLipTicker() { /* no-op：口型由 setTime 驱动 */ }
+
+// v3.6.5：**口型改为「由 Python 每帧驱动」**，不再依赖 PIXI ticker。
+//
+// 原来挂 ticker LOW 优先级回调去补写嘴部参数，实测**根本没生效**
+// （`__muppetClock` 里 hasLip=true 但 lipNow=null，说明 _applyLip 从未跑过）：
+//   · ticker 回调可能因优先级常量缺失 / 暂停状态而不执行
+//   · 就算跑了，它和模型 `_render` 的先后顺序也不保证
+// 现在改成正向驱动：Python 侧每帧发 `setTime{t}`，这里立刻按工程时间
+// 算一次开口度并写入。时间源唯一（工程播放头），顺序确定（在 setTime 里）。
+function _lipApplyAll() {
+  if (clock.manual) return;            // 手动时钟走 seek 里面那条
+  if (!lipTable.size) return;
   slots.forEach((s, id) => {
     if (!s.model || !lipTable.has(id)) return;
-    _applyLip(id, t);
+    _applyLip(id, lipProjT);
   });
-  if (app) app.render();
 }
-let lipTickerStart = 0;
-function _syncLipTicker() {
-  if (!app || !app.ticker) return;
-  const want = lipTable.size > 0 && !clock.manual;
-  if (want && !lipTicker) {
-    lipTickerStart = performance.now();
-    lipTicker = () => _lipTick();
-    // LOW = 尽量晚，让模型的 update/render 先跑完
-    app.ticker.add(lipTicker, null, window.PIXI.UPDATE_PRIORITY.LOW);
-  } else if (!want && lipTicker) {
-    try { app.ticker.remove(lipTicker); } catch (e) {}
-    lipTicker = null;
+
+// ===== v3.6.6：**真正的修法** —— 口型写进 `beforeModelUpdate` 事件里 =====
+//
+// 用户报「动作刚开始嘴能张，约半秒后就不张了」「动作播完才开口」。根因是
+// **写入时机**，不是覆盖对象（嘴参数是独立通道，覆盖它不影响躯干/表情）。
+//
+// bundle（index.es-*.js）里 ModelInternal.update 的真实顺序：
+//     motionManager.update()      <- 动作曲线把嘴写成动作值
+//     coreModel.saveParam()/saveParameters()   <- 拍快照
+//     expression / eyeBlink / focus / physics / pose
+//     emit("beforeModelUpdate")   <-- ★ 唯一的窗口：动作已结算、尚未烘焙
+//     coreModel.update()          <- 把参数**烘进绘制数据**
+//     coreModel.loadParam()       <- 参数还原成快照值
+// 而参数结算发生在 `_render` 里：
+//     this.deltaTime && (this.internalModel.update(...), this.deltaTime = 0)
+//
+// 所以凡是在 update **之前**写嘴（setTime 驱动、ticker 回调都属于此类）——
+// 都会被 motionManager 覆盖掉，画出来是动作的嘴。fade-in（默认 500ms）
+// 期间动作权重还没到 1，覆盖不彻底，于是「刚开头能张、半秒后闭上」。
+//
+// 现在挂在 beforeModelUpdate：动作/表情/物理都结算完了，快照已拍，
+// **尚未烘焙** —— 写进去的嘴会被紧接着的 coreModel.update() 烘进这一帧的
+// 绘制数据；随后的 loadParam() 只还原参数数组，冲不掉已烘好的结果。
+// 这就是 CP 里「结算后覆盖」，也是 WebGAL 口型真正能压住动作的唯一位置。
+let lipHookRuns = 0;        // 排障：钩子实际执行次数（证明确实跑了）
+let lipHookFails = 0;       // 排障：钩子里抛异常的次数
+// 排障：钩子内「动作刚算出来的嘴值」vs「我们写进去的嘴值」。
+// 这两个数不一样，就证明钩子确实在动作结算之后、能改写它。
+// 注意：**不能用 getParamFloat 在帧后读**做验证 —— coreModel.loadParam()
+// 会在烘焙结束后把参数数组还原成快照值，帧后读到的永远是动作值。
+// （上一版就是这样"自证通过"的：读回 1.00，屏幕上却是闭着的。）
+let lipHookStat = { motionV: null, lipV: null, id: null, t: null };
+// ===== v3.7.2 方案 B：Live2D 参数空间姿态插值（换动作/换表情不硬跳） =====
+// 为什么在 beforeModelUpdate：动作/表情/物理都已结算、coreModel.update() 还没
+// 烘焙（口型钩子用的同一个窗口，见 _bindLip）。Cubism2 每帧 update 结束会
+// loadParam() 把参数数组还原成「烘焙前快照」，所以在这里写参数只影响**这一帧
+// 的绘制**，不会回灌给动作/物理，下一帧 SDK 自己重算 —— 纯输出整形。
+//
+// 语义：切换瞬间把当前可见姿态整份拍下来（snapshot），之后 n 帧把「SDK 算出的
+// 新姿态」用 smoothstep 从旧姿态拉过去（w: 0→1）。第 0 帧画的就是旧姿态，
+// 所以边界首帧差分 d0≈0；而且整段只有**一个**姿态在动，不会像图像交叉溶解
+// 那样出现两层半透明重影（那是 100ms 内两个姿态同时以低 alpha 叠加）。
+const POSE_MOUTH_PARAM = "PARAM_MOUTH_OPEN_Y";   // 口型钩子独占，这里跳过
+const poseBlend = new Map();                     // modelId -> {names,snap,i,n}
+// **跨 slot / 跨重载的「最后可见姿态」**：口径按 ref（模型 url）记，而不是按
+// slot。原因（实测）：clip 边界上 renderer 会先 loadModel 再 playMotion，
+// 此刻新 slot 的参数还是模型默认值，如果直接沿用 slot 当前值当插值起点，
+// 冻结/插值的第一帧就变成「默认姿态」，反而比硬切更跳（实测 d=4.68 一分
+// 不少）。所以起点必须是「上一帧真正画出来过的姿态」，与它来自哪个 slot 无关。
+const poseLastByRef = new Map();                 // ref -> {names, vals}
+let poseBlendArms = 0;
+let poseBlendFails = 0;
+let poseBlendStat = { state: "idle" };
+const __poseLog = window.__poseLog = [];     // 调试环（诊断姿态插值时序）
+let __poseTicks = 0;
+function __poseSeq() { return __poseTicks; }
+function _plog(o) {
+  if (__poseLog.length > 800) __poseLog.shift();
+  __poseLog.push(o);
+}
+
+function _poseSnap(s) {
+  const model = s && s.model;
+  const im = model && model.internalModel;
+  const cm = im && im.coreModel;
+  const names = s && s.poseNames;
+  if (!cm || typeof cm.getParamFloat !== "function" ||
+      typeof cm.setParamFloat !== "function") {
+    poseBlendStat = { state: "skip", why: "no_param_api" };
+    return null;
   }
+  if (!names || !names.length) {
+    poseBlendStat = { state: "skip", why: "no_param_names" };
+    return null;
+  }
+  const snap = new Array(names.length);
+  let got = 0;
+  for (let k = 0; k < names.length; k++) {
+    const nm = names[k];
+    if (nm === POSE_MOUTH_PARAM) { snap[k] = null; continue; }
+    let v = null;
+    try { v = cm.getParamFloat(nm); } catch (e) { v = null; }
+    snap[k] = (typeof v === "number" && isFinite(v)) ? v : null;
+    if (snap[k] !== null) got++;
+  }
+  return got ? { names: names, snap: snap, got: got } : null;
+}
+
+// 切换前调用：把当前姿态拍下来，并算出要插值的帧数（n≥2）。
+// 起点优先取「该 ref 最后可见的姿态」（见 poseLastByRef 注释），取不到才退回
+// 本 slot 当前值。
+function _poseBase(s) {
+  const st = _poseSnap(s);
+  const ref = s && s.ref;
+  const last = ref ? poseLastByRef.get(ref) : null;
+  if (last && st && last.names && last.names.length === st.names.length) {
+    const snap = new Array(st.names.length);
+    let got = 0;
+    for (let k = 0; k < snap.length; k++) {
+      const v = last.vals[k];
+      if (st.names[k] === POSE_MOUTH_PARAM || typeof v !== "number" ||
+          !isFinite(v)) { snap[k] = null; continue; }
+      snap[k] = v; got++;
+    }
+    if (got) return { names: st.names, snap: snap, got: got, src: "last" };
+  }
+  return st;
+}
+
+function _poseArm(modelId, s, ms) {
+  try {
+    const dur = (ms === undefined || ms === null) ? 0 : Number(ms);
+    if (!(dur > 0)) { poseBlend.delete(modelId); return; }
+    const prev = poseBlend.get(modelId);
+    if (prev && prev.i === 0) return;      // 同一帧内重复下发：保留更早的快照
+    const st = _poseBase(s);
+    if (!st) return;
+    const dt = (s && s.dt > 0) ? s.dt : (clock.dt || 1000 / 30);
+    const n = Math.max(2, Math.round(dur / dt));
+    poseBlend.set(modelId, { names: st.names, snap: st.snap, i: 0, n: n });
+    poseBlendArms++;
+    _plog({ ev: "arm", mid: modelId, n: n, dt: +dt.toFixed(2), got: st.got,
+            src: st.src || "slot", seq: __poseSeq() });
+    poseBlendStat = { state: "armed", modelId: modelId, n: n,
+                      dt: +dt.toFixed(3), got: st.got, total: st.names.length };
+  } catch (e) { poseBlendFails++; }
+}
+
+// 每帧 update 前调用：把本帧姿态从快照拉向 SDK 姿态。
+function _poseApply(im) {
+  if (!poseBlend.size || !im) return;
+  const id = im.__muppetLipId;
+  if (!id) return;
+  const st = poseBlend.get(id);
+  if (!st) return;
+  const cm = im.coreModel;
+  if (!cm || typeof cm.setParamFloat !== "function") { poseBlend.delete(id); return; }
+  const x = Math.min(1, Math.max(0, (st.i + 1) / st.n));
+  const w = x * x * (3 - 2 * x);           // smoothstep：两端速度为 0
+  // 诊断开关：window.__muppetPoseHold=true 时整段冻结在快照姿态（w 恒 0），
+  // 用来判定「钩子里的参数写入是否真的能改画面」以及跳变是否全在参数空间。
+  const wUse = window.__muppetPoseHold ? 0 : w;
+  let applied = 0, miss = 0;
+  let mx = -1, mxn = "", mxb = 0, mxc = 0;
+  for (let k = 0; k < st.names.length; k++) {
+    const base = st.snap[k];
+    if (base === null) continue;
+    const nm = st.names[k];
+    let cur;
+    try { cur = cm.getParamFloat(nm); } catch (e) { miss++; continue; }
+    if (typeof cur !== "number" || !isFinite(cur) || Math.abs(cur) > 1e4) { miss++; continue; }
+    const dd = Math.abs(cur - base);
+    if (dd > mx) { mx = dd; mxn = nm; mxb = base; mxc = cur; }
+    try { cm.setParamFloat(nm, base + (cur - base) * wUse); applied++; } catch (e) { miss++; }
+  }
+  __poseTicks++;
+  _plog({ ev: "ap", mid: id, i: st.i, n: st.n, w: +w.toFixed(3), ap: applied,
+          mn: mxn, d: +(mx < 0 ? 0 : mx).toFixed(4),
+          b: +mxb.toFixed(3), c: +mxc.toFixed(3), seq: __poseTicks });
+  poseBlendStat = { state: "blend", modelId: id, i: st.i, n: st.n,
+                    w: +w.toFixed(3), applied: applied, miss: miss };
+  st.i++;
+  if (st.i >= st.n) poseBlend.delete(id);   // 插值结束：完全交还 SDK
+}
+
+window.__muppetPoseBlend = function () {
+  return { arms: poseBlendArms, fails: poseBlendFails,
+           active: poseBlend.size, stat: poseBlendStat };
+};
+
+// **姿态记录（方案 B v3.7.3）**：每帧把「本帧真正会画出去的参数值」按 ref
+// 记进 poseLastByRef。挂载顺序必须晚于 _bindLip —— 同一 internalModel 上
+// 监听器按注册顺序执行，_poseApply 在前、记录在后，记到的才是插值后的终值。
+function _bindPoseRec(model, modelId) {
+  const im = model && model.internalModel;
+  if (!im || typeof im.on !== "function") return false;
+  if (im.__muppetPoseRec) return true;
+  im.__muppetPoseRec = true;
+  im.on("beforeModelUpdate", () => {
+    try {
+      const s = slots.get(modelId);
+      const cm = im.coreModel;
+      const names = s && s.poseNames;
+      if (!cm || !names || !names.length ||
+          typeof cm.getParamFloat !== "function") return;
+      const vals = new Array(names.length);
+      for (let k = 0; k < names.length; k++) {
+        let v = null;
+        try { v = cm.getParamFloat(names[k]); } catch (e) { v = null; }
+        vals[k] = (typeof v === "number" && isFinite(v)) ? v : null;
+      }
+      poseLastByRef.set(s.ref || "", { names: names, vals: vals });
+    } catch (e) { /* 记录失败不影响出图 */ }
+  });
+  return true;
+}
+
+function _bindLip(model, modelId) {
+  const im = model && model.internalModel;
+  if (!im || typeof im.on !== "function") return false;
+  if (im.__muppetLipId) { im.__muppetLipId = modelId; return true; }
+  im.__muppetLipId = modelId;
+  im.on("beforeModelUpdate", () => {
+    lipHookRuns++;
+    // 方案 B：姿态插值必须**无条件**先跑。原来放在钩子末尾，被上面
+    // 「没绑口型就 return」的分支挡掉了（lip 为 None 的 clip 永远不插值）。
+    try { _poseApply(im); } catch (e) { poseBlendFails++; }
+    // 渲染回调里绝不能抛：一次异常会打断整帧（画面直接卡住）
+    try {
+      const id = im.__muppetLipId;
+      if (!id || !lipTable.has(id)) {
+        // 没绑口型也要留痕：否则探针会一直显示上一次的陈旧值，
+        // 让人误判「解绑后还在写嘴」（踩过）。
+        lipHookStat = { motionV: null, lipV: null, id: id || null,
+                        t: lipProjT, skipped: "no_lip" };
+        return;
+      }
+      // 手动时钟（导出逐帧泵）：相位不能用工程播放头 lipProjT —— 它根本不
+      // 更新。用**本 clip 内的帧偏移** s.lipK 反推片段内时间。
+      //
+      // **不能用 s.k**（踩过，用户报「口型又被动作覆盖了」）：
+      //   s.k 是 lane 的**累积相位步数**，为了「clip 切换动作不断档」，
+      //   allowRestart=false 时 seek 会把 target 映射成 s.k + k + 1 ——
+      //   s.k 只增不减、跨 clip 一路累加（实测三个 10s clip 后 s.k≈45000）。
+      //   而 lip 表是**按 clip 内相对帧**烘的（长度 = clip 帧数），
+      //   用 s.k 算出的索引一越界，_lipAt 就夹到最后一个值 —— 嘴从此定死
+      //   在同一个开口度上，看起来就是「口型没了/被动作压住」。
+      //   s.lipK 由 seek 每步写入当前 clip 内偏移，跨 clip 归零，基准正确。
+      // 为什么必须在钩子里写：app.render() 内部还会再跑一次
+      // internalModel.update()，motionManager.update() 会用动作曲线把嘴
+      // 覆盖回去 —— seek 循环体里的 _applyLip 在 render 之前写，会被这次
+      // update 冲掉（fade 期间覆盖不彻底 -> 前 ~0.5s 看得见嘴动，之后没有，
+      // 与预览当年的现象完全一致）。钩子写在 coreModel.update() 烘焙之前，
+      // 才能压住动作、烘进这一帧。
+      let lipT = lipProjT;
+      if (clock.manual) {
+        const s = slots.get(id);
+        if (s) {
+          const lk = (s.lipK !== undefined && s.lipK !== null) ? s.lipK : s.k;
+          if (lk !== undefined) lipT = (lk * (s.dt || clock.dt)) / 1000;
+        }
+      }
+      const v = _lipAt(id, lipT);
+      if (v === null) {
+        // v3.7.3：把「为什么没写嘴」原样暴露出去。stale = 页面手上的表
+        // 与本帧相位对不上（换了台词没重发 setLip 的典型表现），导出侧
+        // 回读校验据此打 LIPWARN —— 这是覆盖率统计看不见的一类失败。
+        lipHookStat = { motionV: null, lipV: null, id: id,
+                        t: lipT, skipped: lipAtMiss || "no_val" };
+        return;
+      }
+      // 排障：先读「动作刚算完、我们还没写」的嘴值，再写，两个数都记下来
+      let mv = null;
+      try {
+        const cm = im.coreModel;
+        if (cm && typeof cm.getParamFloat === "function") {
+          mv = cm.getParamFloat("PARAM_MOUTH_OPEN_Y");
+        }
+      } catch (e) {}
+      const r = _writeMouth(model, v);
+      lipLastWrite = r;
+      if (r && r.ok) lipNow.set(id, v);
+      lipHookStat = { motionV: mv, lipV: v, id: id, t: lipT,
+                      manual: clock.manual, skipped: false };
+    } catch (e) { lipHookFails++; }
+  });
+  return true;
 }
 
 function applyPaused() {
@@ -439,6 +743,16 @@ const clockAPI = {
     return { manual: clock.manual, models: slots.size };
   },
 
+  // **clip 切换连续性**：只重置相位步号，不重置动作/模型。
+  // 导出 clip 切换时 t_local 从 0 开始，k 变小，seek 会误判回拖。
+  // 先把 s.k 归零，seek 就不会触发 _restartMotion。
+  resetPhase(modelId) {
+    const s = slots.get(modelId);
+    if (!s) return { err: "no_slot" };
+    s.k = 0;
+    return { ok: true, k: s.k };
+  },
+
   // 相位定义：**第 k 帧 = 从加载起走 (k+1) 步**（每步 dt ms）。
   // 为什么不是 k 步：bundle 里 `_render` 只在 `deltaTime` 非零时才调
   // internalModel.update 结算参数，k=0 若一步不走、只 render，模型参数
@@ -447,11 +761,11 @@ const clockAPI = {
   // 上限 max 是必需的：回拖到长片段开头要从头重走上千步，一次 JS 调用
   // 连跑会把主线程独占好几秒（进度条冻死），所以按 max 切片跨 tick 推进。
   // 返回 {head, steps, reached} —— reached=false 表示还要继续 seek。
-  seek(modelId, k, dt, max) {
+  seek(modelId, k, dt, max, allowRestart) {
     const s = slots.get(modelId);
     if (!s || !s.model || !app) return { err: "no_model" };
     k = Math.max(0, Math.round(Number(k) || 0));
-    const target = k + 1;
+    let target = k + 1;
     dt = Number(dt) || clock.dt;
     const cap = (max === undefined || max === null || max < 1)
       ? Infinity : Math.round(max);
@@ -460,7 +774,13 @@ const clockAPI = {
     const soloChanged = _solo(modelId);   // 别道的像素不许混进来
     if (s.dt !== dt || s.k === undefined) { s.k = 0; s.dt = dt; }   // 网格变了从头走
     let restarted = false;
-    if (target < s.k) {
+    // **clip 切换连续性**：allowRestart=false 时**不判定回拖**。导出 clip
+    // 切换时 t_local 从 0 重新开始、k 变小，原逻辑会误判回拖触发
+    // _restartMotion，把动作又重置了。这里把 target 映射到「当前相位 + k」，
+    // 让动作继续推进而不是从头走。
+    if (target < s.k && allowRestart === false) {
+      target = s.k + k + 1;   // 当前相位 + 新 clip 内偏移
+    } else if (target < s.k) {
       // 回拖：只清 deltaTime（elapsedTime 保持单调，淡入淡出按它算，
       // 倒拨会让 fade 时间窗错乱——实测过同类坑）
       m.deltaTime = 0;
@@ -468,21 +788,37 @@ const clockAPI = {
       s.k = 0; restarted = true;
     }
     let steps = 0;
+    // **口型相位基准**：s.lipK = **本 clip 内**的帧偏移，与 s.k（累积相位）
+    // 分离。s.k 为「动作不断档」跨 clip 累加，lip 表却按 clip 内相对帧烘，
+    // 两者混用会让跨 clip 后 lip 索引越界、嘴定死（见 _bindLip 注释）。
+    //
+    // 统一公式：clip 内偏移 = s.k - lipBase，其中
+    //   lipBase = target - 1 - k
+    // 推导：本次 seek 终点是 clip 偏移 k（第 k+1 步），
+    //   · allowRestart=false：target = s.kStart + k + 1
+    //       -> lipBase = s.kStart  ->  偏移 = s.k - s.kStart = 本次步序号 ✓
+    //   · 正常推进：target = k + 1
+    //       -> lipBase = 0         ->  偏移 = s.k（本就等于 clip 内偏移）✓
+    const lipBase = target - 1 - k;
     for (; s.k < target && steps < cap; s.k++) {
       // **每道一条时间轴**：v2 SDK 的取时口（UtSystem._$CS）是进程全局的，
       // 而动作相位 = 当前时间 - 该动作起始时间。只按 += dt 累加的话，多道
       // 交错推进时各道读到的绝对时刻互相踩（实测三道 k=0 像素 maxdiff 64）。
       // 直接把时钟摆成"本道第 s.k+1 步"应有的值 => 姿态只取决于 k。
       if (vclock.on) vclock.t = (s.k + 1) * dt;
+      // 这一帧的口型该取 lip 表第几格（clip 内偏移，非累积相位）
+      s.lipK = s.k - lipBase;
       m.update(dt);
-      // v3.6.4：口型必须在 update 之后、render 之前写（否则被动作覆盖）
-      _applyLip(modelId, (s.k + 1) * dt / 1000);
+      // 口型**不在这里写**：app.render() 内部会再跑 internalModel.update()
+      // -> motionManager.update() 会用动作曲线把嘴覆盖回去（fade 期间覆盖不
+      // 彻底 = 前 ~0.5s 看得见嘴动，之后没有）。正确位置是 _bindLip 挂在
+      // internalModel 的 beforeModelUpdate 事件上 —— 动作已结算、coreModel
+      // .update() 尚未烘焙，写进去的嘴会被紧接着烘进这一帧。
       app.render(); steps++;
     }
     // v3.6.4：**已经在该相位时，仍要把口型落一次**（实测挖出来的坑）。
     // 循环条件是 s.k < target，同一 k 重复 seek 时一步都不走（steps=0），
-    // 而 _applyLip 在循环体里 -> 换了 lip 表也不会被应用 -> 画面纹丝不动，
-    // 但参数读出来又是对的（因为 _writeMouth 单独生效）。
+    // 而口型钩子在 app.render() 内部才触发 -> 换了 lip 表也不会被应用。
     //
     // **确定性**：结算参数必须 update（SDK 的 _render 只在 deltaTime 非零
     // 时重算参数），但 update 会把 deltaTime 累加进 **model.elapsedTime**
@@ -492,15 +828,14 @@ const clockAPI = {
     // 顺序极其关键（试错出来的）：
     //   1) update(1)          结算参数（此时嘴会被动作曲线覆盖）
     //   2) 还原 elapsedTime   相位回到原处，画面可复现
-    //   3) _applyLip          在**还原之后**写嘴，否则被 render 重算冲掉
-    //   4) render             出帧
-    // 把 3 放到 2 之前会得到「参数对、画面不变」（maxdiff=0），踩过。
+    //   3) render             出帧；beforeModelUpdate 钩子在烘焙前把嘴写进去
     if (!steps && lipTable.has(modelId) && s.k >= target) {
+      // 同相位补落一帧：口型相位也要跟上（换 lip 表时必须生效）
+      s.lipK = k;
       const keepE = m.elapsedTime;
       const keepD = m.deltaTime;
       try { m.update(1); } catch (e) {}
       try { m.elapsedTime = keepE; m.deltaTime = keepD; } catch (e) {}
-      _applyLip(modelId, target * dt / 1000);   // 必须在还原相位之后
       app.render();
       s.k = target;                             // 幂等，防累积
     }
@@ -612,8 +947,38 @@ function enqueue(id, fn) {
   });
 }
 
+// v3.6.5：**修「切 clip 时整人消失一瞬」的第二处**。
+//
+// 场景：同一角色从 clip c1 切到 c2（不同 clip id = 不同 slot）。
+// `_do_apply` 先发 loadModel(c2)、随后发 clearModel(c1)，但两个 slot 的
+// 命令队列是**并行**的（enqueue 按 id 分队列）—— clearModel(c1) 很可能
+// 先于 loadModel(c2) 完成，于是「旧的已删、新的还没上」= 画面空白。
+// 实测 113 次采样有 5 次可见模型数为 0。
+//
+// 做法：**有模型正在加载时，把销毁推迟**到加载全部结束之后。
+// 被推迟的模型保持挂在场景里继续显示（用户看到的是"还停在上一帧"，而不是人没了）。
+let _loading = 0;
+let _zombies = [];       // 待销毁但还在显示的模型
+
+function _reapZombies() {
+  if (_loading > 0) return;            // 还有模型在加载，先留着撑场面
+  const list = _zombies;
+  _zombies = [];
+  for (const m of list) {
+    try { (figLayer || app.stage).removeChild(m); } catch (e) {}
+    try { m.destroy(); } catch (e) {}
+  }
+}
+
+function _retire(model) {
+  if (!model) return;
+  if (_loading > 0) { _zombies.push(model); return; }
+  try { (figLayer || app.stage).removeChild(model); } catch (e) {}
+  try { model.destroy(); } catch (e) {}
+}
+
 const puppetAPI = {
-  async loadModel(ref, modelId) {
+  async loadModel(ref, modelId, poseParams) {
     if (!(await boot())) return;
     const s = slot(modelId);
     const url = new URL(ref, location.href).href;
@@ -623,16 +988,44 @@ const puppetAPI = {
       showErr("Live2D SDK 未加载（lib/live2d.min.js 缺失）");
       return;
     }
-    if (s.model) { (figLayer || app.stage).removeChild(s.model); s.model.destroy(); s.model = null; }
-    const model = await es.Live2DModel.from(url, { autoInteract: false });
+    // v3.6.5 **修「人物整人消失一瞬」**（用户报的闪烁）：
+    // 原来是「先销毁旧的、再 await 新的」——
+    //     if (s.model) { removeChild; destroy(); }     <-- 旧模型此刻已经没了
+    //     const model = await Live2DModel.from(url)     <-- 网络+解析，几十~几百 ms
+    // 这中间 figLayer 里**一个立绘都没有**，画面上人就是消失了。
+    // 实测切 clip 时 113 次采样里有 5 次「可见模型数 = 0」（约 40~120ms）。
+    //
+    // 现在改成**先加载、后替换**：新模型 `from()` 成功后，才把旧的移除。
+    // 加载期间旧的照常显示（用户看到的是"还停在上一帧"，比人消失好得多）。
+    _loading++;
+    let model;
+    try {
+      model = await es.Live2DModel.from(url, { autoInteract: false });
+    } finally {
+      _loading = Math.max(0, _loading - 1);
+      // 加载失败也要收垃圾：否则 _zombies 里的模型永远挂在场景里
+      // （用户看到人物叠两张），而且 _loading 归零后再没人来触发回收。
+      if (!model) _reapZombies();
+    }
     if (model.anchor && model.anchor.set) model.anchor.set(0.5, 0.5);
     else model.pivot.set(model.width / 2, model.height / 2);
+    const old = s.model;
     s.model = model; s.ref = url; s.fit = fitOf(model);
+    // 方案 B：参数 id 名单由渲染器随 loadModel 下发（抽不到就 []，页面自动不插值）
+    s.poseNames = (poseParams && poseParams.length) ? poseParams.slice() : null;
+    poseBlend.delete(modelId);   // 换模型：旧姿态快照作废（参数集可能不同）
     if (clock.manual) _resetClock(model);   // 只在导出手动时钟里归零（见 _resetClock）
     // 换了模型 = 相位从头开始（手动时钟下 k 必须归零，否则第 k 步语义错位）
     s.k = 0; s.dt = undefined;
     if (clock.manual) _manualize(model);
+    // v3.6.6：把口型挂到 internalModel 的 beforeModelUpdate 上（见 _bindLip）。
+    // 必须在 addChild 之前挂好，否则第一帧就先按动作值画了。
+    _bindLip(model, modelId);
+    _bindPoseRec(model, modelId);   // 方案 B：每帧记录「最后可见姿态」（按 ref）
     (figLayer || app.stage).addChild(model);
+    // 新的已经挂上去了，这时才拆旧的 —— 同帧内替换，没有空窗
+    if (old && old !== model) _retire(old);
+    _reapZombies();
     sendEvt("ready", { modelId });
   },
   async setTransform(modelId, x, y, scale, rot) {
@@ -646,9 +1039,10 @@ const puppetAPI = {
     s.model.rotation = (rot || 0) * Math.PI / 180;
     last.transform[modelId] = [x, y, scale, rot];
   },
-  async playMotion(modelId, name, fadeMs) {
+  async playMotion(modelId, name, fadeMs, keepPhase) {
     const s = slot(modelId);
     if (!s.model) return;
+    _poseArm(modelId, s, fadeMs);   // 方案 B：切换前拍下当前姿态
     const groups = Object.keys(s.model.internalModel.settings.motions || {});
     const want = String(name || "").toLowerCase();
     const g = groups.find(k => k.toLowerCase() === want) ||
@@ -658,36 +1052,81 @@ const puppetAPI = {
     // fade 起点，顺序反了起点就是遗留的墙钟大数，进度算成负数 -> 动作
     // 永远淡入不进来。预览模式绝不能归零：正在淡出的旧动作会被卡住，
     // 两个动作叠着播（那是用户能直接看到的破绽）。
-    if (clock.manual) _resetClock(s.model);
-    const ok = s.model.motion(g);
+    //
+    // **导出连续性**：keepPhase=true 时**不归零**——同一模型换 motion 时
+    // elapsedTime 已经是虚拟时钟（从 0 累加），fade 起点就是当前相位，
+    // 不需要重置。只有模型刚加载（elapsedTime 是 performance.now() 的墙钟
+    // 大数）才需要归零。
+    if (clock.manual && !keepPhase) _resetClock(s.model);
+    // v3.6.8：**用 FORCE 优先级直接切**，不重置动作、不重载模型。
+    //
+    // 实测问题（用户问「动作切换是否可以不重置动作直接切换」）：
+    //   原来调 `s.model.motion(g)` —— 它走 startRandomMotion(g, undefined)，
+    //   优先级落到默认 NORMAL(2)。而 bundle 里 MotionState.reserve() 是：
+    //       if (newPriority <= currentPriority) return false;   // 静默拒绝
+    //   于是「动作还在播」时切动作，2<=2 成立 -> **新动作根本没起来**，
+    //   旧动作一直播到结束。实测队列 size 恒为 1、currentGroup 恒为旧动作。
+    //
+    // 现在传 FORCE(3)：3 > 2 可以抢占。旧动作不会硬跳 —— bundle 的
+    // InternalModel._startMotion() 会先 stopAllMotions()（Cubism2 里是
+    // 给每个旧动作设 fadeOut），新动作再进场，视觉上是平滑过渡。
+    // fadeMs 给定时按毫秒换算成秒（库的优先级参数是枚举，不是毫秒）。
+    const FORCE = 3;
+    const ok = s.model.motion(g, undefined, FORCE);
     if (!ok) { sendEvt("error", { code: "unknownMotion", name }); return; }
     last.motion[modelId] = g;
     s.k = 0;                            // 动作重播 = 相位归零（否则第 k 步不再是第 k 帧）
   },
-  async setExpression(modelId, name) {
+  // **keepPhase（v3.7.1，方案 C）**：导出侧换表情时传 keepPhase=true，
+  // 表示「只换表情，不动相位」。原来这里无条件 `s.k = 0` +
+  // `_resetClock()` —— 于是每换一次表情，动作相位/呼吸/物理全被归零，
+  // 和 loadModel 重建等价（这正是导出视频「动作切换生硬」的一半成因：
+  // hspdz_uika_mv 的 36 个边界里 33 个同时换了 expression）。
+  // 现在：keepPhase 时只设表情、保留 s.k 与时钟；缺省（预览手动切表情）
+  // 维持原语义，重走相位。
+  async setExpression(modelId, name, fadeMs, keepPhase) {
     const s = slot(modelId);
     if (!s.model) return;
+    _poseArm(modelId, s, fadeMs);   // 方案 B：换表情同样从当前姿态插过去
+    const raw = String(name || "").trim();
+    if (!raw) {
+      // 空表情 = 清空（回到模型默认脸）。Cubism2 的 expressionManager
+      // .resetExpression() 走权重淡出，不会硬切。
+      try {
+        const em = s.model.internalModel.motionManager.expressionManager;
+        if (em && em.resetExpression) em.resetExpression();
+      } catch (e) { /* 无表情定义的模型：忽略 */ }
+      last.expression[modelId] = "";
+      if (!keepPhase) {
+        s.k = 0;
+        if (clock.manual) _resetClock(s.model);
+      }
+      return;
+    }
     const list = (s.model.internalModel.settings.expressions || []).map(e => e.name);
-    const want = String(name || "").toLowerCase();
+    const want = raw.toLowerCase();
     const e = list.find(k => k.toLowerCase() === want) ||
               list.find(k => k.toLowerCase().includes(want));
     if (!e) { sendEvt("error", { code: "unknownExpression", name }); return; }
     s.model.expression(e);
     last.expression[modelId] = e;
+    if (keepPhase) return;              // 相位保持连续，动作不断档
     s.k = 0;                            // 同 playMotion：表情切换重走相位
     if (clock.manual) _resetClock(s.model);
   },
   async clear(modelId) {
     if (!modelId) {
       for (const [id, s] of slots) {
-        if (s.model) { (figLayer || app.stage).removeChild(s.model); s.model.destroy(); }
+        if (s.model) _retire(s.model);
       }
       slots.clear();
+      _reapZombies();
       return;
     }
     const s = slots.get(modelId);
-    if (s && s.model) { (figLayer || app.stage).removeChild(s.model); s.model.destroy(); }
+    if (s && s.model) _retire(s.model);
     slots.delete(modelId);
+    _reapZombies();
   },
   async setPaused(paused) {
     state.userPaused = !!paused;
@@ -695,8 +1134,13 @@ const puppetAPI = {
   },
 
   // v3.6.4：下发表情式口型表（Python 侧 lip_sync 算好的开口度序列）。
-  // vals = 每帧开口度 0..1（按片段内相对时间排列）；传空数组 = 解除绑定。
-  setLip(modelId, vals, fps, gain) {
+  // vals = 每帧开口度 0..1（**按片段内相对时间**排列）；
+  // start = 该片段在工程里的起点（秒），用来把工程时间换算成片段内时间。
+  // 传空数组 = 解除绑定。
+  // v3.7.3：tag = 本表的来源 clip 标识。只做两件事：①排障时能看出页面
+  // 手上是哪一段的表；②换来的是**显式换表语义** —— 同 ref 连续多 clip 时
+  // Python 侧即使不重发也会因 tag 变化被判定为换表（真正的重发在渲染层）。
+  setLip(modelId, vals, fps, gain, start, tag) {
     if (!modelId) return;
     if (!Array.isArray(vals) || !vals.length) {
       lipTable.delete(modelId);
@@ -711,8 +1155,12 @@ const puppetAPI = {
       vals: vals.map(v => Math.max(0, Math.min(1, Number(v) || 0))),
       fps: Number(fps) || 30,
       gain: Number(gain) || 1,
+      start: Number(start) || 0,
+      tag: String(tag == null ? "" : tag),   // v3.7.3 来源 clip 标识
     });
     _syncLipTicker();
+    // 表更新完立刻按当前工程时间落一次，不用等下一帧 setTime
+    _lipApplyAll();
   },
 
   // ================= v3.5.2：背景层 / 字幕层 / 滤镜层 =================
@@ -1317,10 +1765,10 @@ window.__muppetOnCmd = function (j) {
   try { e = JSON.parse(j); } catch (err) { return; }
   const a = e.args || {};
   switch (e.cmd) {
-    case "loadModel": enqueue(a.modelId, () => puppetAPI.loadModel(a.modelRef, a.modelId)); break;
+    case "loadModel": enqueue(a.modelId, () => puppetAPI.loadModel(a.modelRef, a.modelId, a.poseParams)); break;
     case "setTransform": enqueue(a.modelId, () => puppetAPI.setTransform(a.modelId, a.x, a.y, a.scale, a.rot)); break;
-    case "playMotion": enqueue(a.modelId, () => puppetAPI.playMotion(a.modelId, a.name, a.fadeMs)); break;
-    case "setExpression": enqueue(a.modelId, () => puppetAPI.setExpression(a.modelId, a.name, a.fadeMs)); break;
+    case "playMotion": enqueue(a.modelId, () => puppetAPI.playMotion(a.modelId, a.name, a.fadeMs, a.keepPhase)); break;
+    case "setExpression": enqueue(a.modelId, () => puppetAPI.setExpression(a.modelId, a.name, a.fadeMs, a.keepPhase)); break;
     case "clearModel": enqueue(a.modelId || "__all__", () => puppetAPI.clear(a.modelId || "")); break;
     case "setPaused": puppetAPI.setPaused(a.paused); break;
     // v3.5.2：背景 / 字幕 / 滤镜（补齐「实时预览没有背景和文字和滤镜」）
@@ -1328,13 +1776,22 @@ window.__muppetOnCmd = function (j) {
     case "setSubtitle": puppetAPI.setSubtitle(a.who || "", a.text || ""); break;
     case "setFilter": puppetAPI.setFilter(a); break;
     // v3.6.4：口型匹配（开口度表由 Python 侧离线算好）
-    case "setLip": puppetAPI.setLip(a.modelId, a.vals, a.fps, a.gain); break;
+    case "setLip": puppetAPI.setLip(a.modelId, a.vals, a.fps, a.gain, a.start,
+                                    a.tag); break;
     // v3.6.2：镜头动画（setTempAnimation）—— 用 CSS transform 模拟
     case "setCamera": puppetAPI.setCamera(a); break;
+    // v3.6.5：每帧把工程播放头时间同步进来并**立刻落一次口型**。
+    // 口型按工程时间取，不能用墙上时钟（那会和按片段内时间烘好的表错位，
+    // 表现为「做动作时嘴闭上、不对口型」）。
+    case "setTime":
+      lipProjT = Number(a.t) || 0;
+      _lipApplyAll();
+      break;
     // 手动时钟（导出动画泵）：这两条**同步**执行并回传结果，
     // 泵一次往返就要拿到「实际走了几步」，不能靠事后读快照。
     case "setManualClock": return clockAPI.setManual(a.on);
-    case "seek": return clockAPI.seek(a.modelId, a.k, a.dt, a.max);
+    case "seek": return clockAPI.seek(a.modelId, a.k, a.dt, a.max, a.allowRestart);
+    case "resetPhase": return clockAPI.resetPhase(a.modelId);
     default: sendEvt("error", { code: "cmdUnsupported", cmd: e.cmd, ref: e.id });
   }
 };
@@ -1472,6 +1929,130 @@ window.__muppetSetMouth = function (v, modelId, advance) {
   return w;
 };
 
+// v3.6.6：**确定性推帧探针**（测试专用）。
+// 离屏/无窗口环境下 rAF 不一定跑，靠 ticker 验证等于没验证 —— 直接按 dt
+// 推帧：每帧 model.update(dt) 累加 deltaTime，再 app.render() 触发
+// _render -> internalModel.update -> emit("beforeModelUpdate") -> draw。
+// 这条路和真实预览走的是**同一个** internalModel.update，所以能真实反映
+// 「嘴有没有被烘进这一帧」。reset=true 时先把 elapsedTime/deltaTime 归零，
+// 让两次运行从同一相位起跑，画面才可逐像素对比。
+window.__muppetPump = function (n, dt, modelId, reset) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const m = s.model;
+  if (reset) {
+    try { m.elapsedTime = 0; m.deltaTime = 0; } catch (e) {}
+  }
+  const N = Math.max(0, Math.round(Number(n) || 0));
+  const D = Number(dt) || (1000 / 30);
+  const runsBefore = lipHookRuns;
+  for (let i = 0; i < N; i++) {
+    try { m.update(D); } catch (e) {}
+    try { if (app) app.render(); } catch (e) {}
+  }
+  return { frames: N, hookRunsDelta: lipHookRuns - runsBefore,
+           hookRuns: lipHookRuns, stat: lipHookStat };
+};
+
+// v3.6.6：**像素级验证**（测试专用）—— 直接回答「嘴到底画出来了没有」。
+//
+// 为什么必须看像素：参数读回来是**不可信**的。
+//   · 帧后读 coreModel.getParamFloat → 被 loadParam() 还原成动作值（读到 0）
+//   · 钩子里读 → 一定是我们刚写的值（读到 1）
+// 两个都只是"参数数组"的状态，跟**这一帧画了什么**没有必然关系。
+// 上一版就是拿参数读回 1.00 交差的，而用户看到的嘴是闭的。
+//
+// 做法：同一模型、同一相位，只改口型值各渲染一遍，逐像素比。
+//   · 差异像素集中在嘴部区域、且数量可观 -> 口型真的进画面了
+//   · 两张图完全一样 -> 口型根本没上屏（不管参数读回什么）
+// resetPump 保证两边从完全相同的相位起跑，否则运动/呼吸会让全图都在动。
+window.__muppetLipPixelTest = function (modelId, n, dt, lipOpen, lipShut) {
+  // **结果必须放进全局**：Qt 的 runJavaScript 不会 await Promise，
+  // 直接 return Promise 拿到的是 {} —— 会让验证脚本以为"没结果"。
+  // 调用方轮询 window.__muppetLipPixelResult.done。
+  window.__muppetLipPixelResult = { done: false };
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) { window.__muppetLipPixelResult = { done: true, err: "no_model" }; return "no_model"; }
+  if (!app || !app.view) { window.__muppetLipPixelResult = { done: true, err: "no_app" }; return "no_app"; }
+  const m = s.model;
+  const id = modelId || Array.from(slots.keys())[0];
+  const box = window.__muppetBox(id, 0) || [0, 0, STAGE_W, STAGE_H];
+  const N = Math.max(1, Math.round(Number(n) || 10));
+  const D = Number(dt) || (1000 / 30);
+  const openV = (lipOpen === undefined || lipOpen === null) ? 1.0 : Number(lipOpen);
+  const shutV = (lipShut === undefined || lipShut === null) ? 0.0 : Number(lipShut);
+  const keepTable = lipTable.get(id);
+
+  const shotAt = (v) => {
+    lipTable.set(id, { vals: new Array(600).fill(v), fps: 30, gain: 1, start: 0 });
+    lipProjT = 0;
+    try { m.elapsedTime = 0; m.deltaTime = 0; } catch (e) {}
+    for (let i = 0; i < N; i++) {
+      try { m.update(D); } catch (e) {}
+      try { app.render(); } catch (e) {}
+    }
+    const url = window.__muppetGrab(box);
+    return { url: url, stat: lipHookStat };
+  };
+
+  const A = shotAt(openV);
+  const B = shotAt(shutV);
+  // 还原原表（测试不该改变运行状态）
+  if (keepTable) lipTable.set(id, keepTable); else lipTable.delete(id);
+
+  // ---- 逐像素比对（在页面内做，避免传两张 1280x720 的 PNG 出去）----
+  const W = box[2], H = box[3];
+  const cvA = document.createElement("canvas"); cvA.width = W; cvA.height = H;
+  const cvB = document.createElement("canvas"); cvB.width = W; cvB.height = H;
+  const cxA = cvA.getContext("2d"), cxB = cvB.getContext("2d");
+  let loaded = 0;
+  const done = () => { loaded++; };
+  const _finishAll = (obj) => {
+    window.__muppetLipPixelResult = Object.assign({ done: true }, obj || {});
+  };
+  new Promise((resolve) => {
+    const finish = () => {
+      let dA, dB;
+      try { dA = cxA.getImageData(0, 0, W, H).data; } catch (e) { resolve({ err: "getImageData:" + e }); return; }
+      try { dB = cxB.getImageData(0, 0, W, H).data; } catch (e) { resolve({ err: "getImageData:" + e }); return; }
+      let cnt = 0, maxd = 0, sx = 1e9, sy = 1e9, ex = -1, ey = -1;
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const p = (y * W + x) * 4;
+          const d = Math.max(Math.abs(dA[p] - dB[p]), Math.abs(dA[p + 1] - dB[p + 1]),
+                             Math.abs(dA[p + 2] - dB[p + 2]), Math.abs(dA[p + 3] - dB[p + 3]));
+          if (d > 8) {
+            cnt++; if (d > maxd) maxd = d;
+            if (x < sx) sx = x; if (y < sy) sy = y;
+            if (x > ex) ex = x; if (y > ey) ey = y;
+          }
+        }
+      }
+      resolve({
+        box: box, frames: N, dt: D,
+        openV: openV, shutV: shutV,
+        openStat: A.stat, shutStat: B.stat,
+        diffPixels: cnt, totalPixels: W * H,
+        diffRatio: +(cnt / (W * H)).toFixed(5),
+        maxDiff: maxd,
+        diffBox: cnt ? [sx + box[0], sy + box[1], ex - sx + 1, ey - sy + 1] : null,
+        sameImage: cnt === 0,
+      });
+    };
+    let pending = 2;
+    const tick = () => { if (--pending === 0) finish(); };
+    const imgA = new Image(), imgB = new Image();
+    imgA.onload = () => { cxA.drawImage(imgA, 0, 0); tick(); };
+    imgB.onload = () => { cxB.drawImage(imgB, 0, 0); tick(); };
+    imgA.onerror = () => { resolve({ err: "imgA_load_failed" }); };
+    imgB.onerror = () => { resolve({ err: "imgB_load_failed" }); };
+    imgA.src = A.url; imgB.src = B.url;
+  }).then(_finishAll).catch((e) => _finishAll({ err: String(e) }));
+  return "started";
+};
+
 // 读回嘴部参数的当前值（Cubism2/3 都试）
 window.__muppetReadMouth = function (modelId) {
   let s = modelId ? slots.get(modelId) : null;
@@ -1519,6 +2100,102 @@ window.__muppetLipLifecycle = function (v, modelId) {
   return { steps: log, write: w, clockManual: clock.manual };
 };
 
+// v3.6.8：动作状态探针 —— 当前在播哪个动作、优先级多少。
+// 用来回答「动作播放期间切动作，新动作到底起没起来」。
+window.__muppetMotionState = function (modelId) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const mm = s.model.internalModel && s.model.internalModel.motionManager;
+  if (!mm) return { err: "no_motionManager" };
+  const st = mm.state || {};
+  return {
+    currentGroup: st.currentGroup === undefined ? null : st.currentGroup,
+    currentIndex: st.currentIndex === undefined ? null : st.currentIndex,
+    currentPriority: st.currentPriority === undefined ? null : st.currentPriority,
+    reservedGroup: st.reservedGroup === undefined ? null : st.reservedGroup,
+    playing: !!mm.playing,
+    lastCmd: last.motion[modelId] || null,
+  };
+};
+
+// v3.6.8：确认走哪套 Core（决定动作切换是交叉淡出还是被优先级拒绝）。
+window.__muppetCoreInfo = function (modelId) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const im = s.model.internalModel || {};
+  const cm = im.coreModel || {};
+  const mm = im.motionManager || {};
+  const qm = mm.queueManager || {};
+  return {
+    // Cubism2 的 coreModel 是压缩名（getParamIndex/setParamFloat 那套）
+    hasGetParamIndex: typeof cm.getParamIndex === "function",
+    hasSetParamFloat: typeof cm.setParamFloat === "function",
+    hasSetParamById: typeof cm.setParameterValueById === "function",
+    // Cubism2 的 queueManager 有 motions 数组（新旧动作同时排队 = 交叉淡化）
+    queueHasMotionsArray: !!qm.motions,
+    queueMotionsLen: qm.motions ? qm.motions.length : null,
+    motionManagerHasState: !!mm.state,
+  };
+};
+
+// v3.6.8：动作队列快照 —— 切动作时能看到新旧动作是否**同时**在播。
+// Cubism2 的 queue 是 motions 数组：push 新动作时给旧的设淡出，
+// 两者共存一段时间 => 画面是平滑过渡，不是硬跳。
+window.__muppetQueue = function (modelId) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const mm = s.model.internalModel && s.model.internalModel.motionManager;
+  if (!mm) return { err: "no_motionManager" };
+  const qm = mm.queueManager || {};
+  const out = { size: qm.motions ? qm.motions.length : null, items: [] };
+  if (qm.motions) {
+    for (const m of qm.motions) {
+      if (!m) continue;
+      const mo = m._$w0 || m.motion || null;
+      out.items.push({
+        // fadeOut 由 startMotion 在切换时设给旧动作
+        finished: typeof m.isFinished === "function" ? m.isFinished() : null,
+        lastTime: m._$AT === undefined ? null : m._$AT,
+        fadeOut: mo && typeof mo.getFadeOut === "function"
+                 ? mo.getFadeOut() : null,
+      });
+    }
+  }
+  const st = mm.state || {};
+  out.currentGroup = st.currentGroup === undefined ? null : st.currentGroup;
+  out.currentPriority = st.currentPriority === undefined ? null : st.currentPriority;
+  return out;
+};
+
+// v3.6.8：姿态探针 —— 读一组**由动作曲线驱动**的躯干参数。
+// 用来验证「切动作后姿态真的变了」，而不是只看 state 里写了什么名字。
+// （像素比对在离屏 WebEngine 抓不到 WebGL 内容，alpha 全 0，历史已知坑。）
+window.__muppetPose = function (modelId) {
+  let s = modelId ? slots.get(modelId) : null;
+  if (!s) slots.forEach(q => { if (!s && q.model) s = q; });
+  if (!s || !s.model) return { err: "no_model" };
+  const cm = s.model.internalModel && s.model.internalModel.coreModel;
+  if (!cm) return { err: "no_core_model" };
+  const names = ["PARAM_ANGLE_X", "PARAM_ANGLE_Y", "PARAM_ANGLE_Z",
+                 "PARAM_BODY_ANGLE_X", "PARAM_BODY_ANGLE_Z",
+                 "PARAM_ARM_L", "PARAM_ARM_R",
+                 "PARAM_SHOULDER_L", "PARAM_SHOULDER_R",
+                 "PARAM_BREATH"];
+  const out = { vals: {} };
+  for (const nm of names) {
+    try {
+      if (typeof cm.getParamFloat === "function") {
+        const v = cm.getParamFloat(nm);
+        if (typeof v === "number") out.vals[nm] = +v.toFixed(5);
+      }
+    } catch (e) {}
+  }
+  return out;
+};
+
 // v3.6.4：时钟/相位探针（排障专用）。必须定义在页面源码里 ——
 // vclock / clock / slots 都是模块私有，外部注入的同名函数在全局作用域
 // 访问它们会抛 ReferenceError，而 runJavaScript 会把异常吞成**空字符串**
@@ -1532,6 +2209,9 @@ window.__muppetClock = function (modelId) {
     vclockT: vclock.t,
     manual: clock.manual,
     k: s ? s.k : null,
+    // 口型相位基准（clip 内偏移）。与 k 分开是为了能一眼看出跨 clip 后
+    // 是否回到 0 —— 混用 k 会让 lip 索引越界、嘴定死（v3.6.9 修复）。
+    lipK: s ? (s.lipK === undefined ? null : s.lipK) : null,
     dt: s ? s.dt : null,
     elapsed: s && s.model ? s.model.elapsedTime : null,
     delta: s && s.model ? s.model.deltaTime : null,
@@ -1539,7 +2219,49 @@ window.__muppetClock = function (modelId) {
     lipNow: modelId ? (lipNow.get(modelId) === undefined
                        ? null : lipNow.get(modelId)) : null,
     lastWrite: lipLastWrite,
+    // v3.6.6：钩子证据 —— runs 在涨 = 事件真的在跑；motionV/lipV 不同 =
+    // 我们确实在「动作结算之后」改写了它（这是判断修好没修好的硬指标）
+    lipHookRuns: lipHookRuns,
+    lipHookFails: lipHookFails,
+    lipHookStat: lipHookStat,
   };
+};
+
+// v3.6.5：诊断探针 —— 当前有哪些立绘 slot、各自有没有模型、是否可见。
+// 用来量「切 clip 时人物是不是整人消失一瞬」（最常见的闪烁形态）：
+// 采这个比抓像素稳（自动时钟下 canvas 有时抓不出内容，实测 alpha 全 0）。
+// v3.6.5b：**把 _zombies 也算进来** —— 「延迟销毁」的旧模型仍挂在
+// 场景里显示（用户看得见），但不在 slots 里；不算它会把"人物还在"误判成
+// "整人消失"。真空白 = slots 无模型 且 _zombies 无模型。
+window.__muppetFigures = function () {
+  const out = [];
+  slots.forEach((s, id) => {
+    out.push({
+      id: id,
+      hasModel: !!s.model,
+      visible: !!(s.model && s.model.visible),
+      alpha: s.model ? s.model.alpha : null,
+      ref: s.ref ? String(s.ref).split("/").slice(-2).join("/") : "",
+      k: s.k,
+    });
+  });
+  _zombies.forEach((m, i) => {
+    out.push({
+      id: "<zombie" + i + ">",
+      zombie: true,
+      hasModel: true,
+      visible: !!(m && m.visible),
+      alpha: m ? m.alpha : null,
+      ref: "",
+      k: -1,
+    });
+  });
+  out._meta = {
+    stageChildren: app ? app.stage.children.length : -1,
+    zombies: _zombies.length,
+    loading: _loading,
+  };
+  return out;
 };
 
 window.__muppetState = function () {

@@ -282,6 +282,9 @@ class PuppetSource(FrameSource):
     # 类级兜底，任何构造分支都安全，理由同上。
     _lip_vals = None
     _lip_gain = 1.0
+    # v3.7.3：口型表 tag（= 该表所属 clip 标识）。同 ref 连续多 clip 时，
+    # 渲染层靠它区分「换了台词」并强制重发 setLip；compose_frame 每帧灌。
+    _lip_tag = ""
 
     def __init__(self, project_dir):
         self.path = str(project_dir)
@@ -600,7 +603,8 @@ class PuppetSource(FrameSource):
                 img = LPM.pump().request(self.path, self._motion_id,
                                          self._expression_id, t,
                                          lip=self._lip_vals,
-                                         lip_gain=self._lip_gain)
+                                         lip_gain=self._lip_gain,
+                                         lip_tag=self._lip_tag)
             except Exception:
                 img = None
             if img is not None and getattr(img, "size", 0):

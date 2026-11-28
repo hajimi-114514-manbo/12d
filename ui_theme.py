@@ -54,6 +54,8 @@ PALETTES = {
         # 强调
         "accent": "#4d88ff",
         "accent_hover": "#6a9bff",
+        # 选中项淡底（左侧来源树选中行、列表高亮用）
+        "accent_soft": "rgba(77,136,255,0.20)",
         "split_handle": "#3a3f4a",
         "row_bg": "#242935",
         "row_hover": "#262c38",
@@ -131,6 +133,8 @@ PALETTES = {
         # 强调：白底上 #4d88ff 太浅，压深一档
         "accent": "#2f6fe0",
         "accent_hover": "#1f5ccb",
+        # 选中项淡底（左侧来源树选中行、列表高亮用）
+        "accent_soft": "rgba(47,111,224,0.14)",
         "split_handle": "#c6ccd8",
         "row_bg": "#ffffff",
         "row_hover": "#f0f4fa",
@@ -299,6 +303,8 @@ def apply(app=None):
     _apply_global_qss(app)
     for fn in list(_reloaders):
         with contextlib.suppress(Exception): fn()
+    # v3.8.0（S5）：统一可点击控件的手型光标
+    install_pointer_cursor(app)
 
 
 def set_mode(m, app=None, save=True):
@@ -313,6 +319,7 @@ def set_mode(m, app=None, save=True):
     _apply_global_qss(app)
     for fn in list(_reloaders):
         with contextlib.suppress(Exception): fn()
+    install_pointer_cursor(app)
     _repaint_all()
 
 
@@ -505,8 +512,43 @@ def _apply_global_qss(app=None):
         pal.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
         pal.setColor(QPalette.ToolTipText, QColor("#1b1f26"))
         # ToolTip 窗口用 Window/WindowText 画边框与文字，一并钉稳
-        pal.setColor(QPalette.Window, QColor("#ffffff"))
-        pal.setColor(QPalette.WindowText, QColor("#1b1f26"))
+        #
+        # v3.8.0（UI 审计 M1）：Window/WindowText 原来硬编码成白底黑字，
+        # 而原生控件的底色全都取自 palette —— 深色工作台里于是出现一堆
+        # 白板（审计实测：时间轴 3 个原生输入控件 + 2 个内部 lineEdit
+        # 全白，QMenu/QDialog/QMessageBox 底色全白）。改成按主题分支：
+        # 浅色保持原样（零感知），深色跟随主题令牌。
+        if _mode == "light":
+            pal.setColor(QPalette.Window, QColor("#ffffff"))
+            pal.setColor(QPalette.WindowText, QColor("#1b1f26"))
+            # 浅色也要**显式写全**：palette 是从 app.palette() 拷来的，
+            # 从深色切回浅色时若不覆盖，Base/Text 会残留深色值，
+            # 表格/文本编辑框会突然变黑底（实测踩到）。
+            pal.setColor(QPalette.Base, QColor("#ffffff"))
+            pal.setColor(QPalette.AlternateBase, QColor("#f5f7fa"))
+            pal.setColor(QPalette.Text, QColor("#000000"))
+            pal.setColor(QPalette.PlaceholderText, QColor("#8a93a2"))
+            pal.setColor(QPalette.Button, QColor("#f5f7fa"))
+            pal.setColor(QPalette.ButtonText, QColor("#1b1f26"))
+            pal.setColor(QPalette.Highlight, QColor("#2f6fe0"))
+            pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+            pal.setColor(QPalette.Link, QColor("#2f6fe0"))
+        else:
+            _p = PALETTES["dark"]
+            pal.setColor(QPalette.Window, QColor(_p["window_flat"]))
+            pal.setColor(QPalette.WindowText, QColor(_p["text"]))
+            # 输入类（QLineEdit/QSpinBox/QTextEdit/列表）底色 + 文字
+            pal.setColor(QPalette.Base, QColor(_p["card_bg"]))
+            pal.setColor(QPalette.AlternateBase, QColor(_p["row_bg"]))
+            pal.setColor(QPalette.Text, QColor(_p["text"]))
+            pal.setColor(QPalette.PlaceholderText, QColor(_p["text_dim"]))
+            # 按钮类（QPushButton/QDialog 按钮条）
+            pal.setColor(QPalette.Button, QColor(_p["row_bg"]))
+            pal.setColor(QPalette.ButtonText, QColor(_p["text"]))
+            # 选中态 / 链接
+            pal.setColor(QPalette.Highlight, QColor(_p["accent"]))
+            pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+            pal.setColor(QPalette.Link, QColor(_p["accent"]))
         app.setPalette(pal)
     except Exception:
         pass
@@ -646,6 +688,62 @@ def _repaint_all():
         return
     for w in app.allWidgets():
         with contextlib.suppress(Exception): w.update()
+
+
+# ------------------------------------------------------------ 手型光标（S5）
+# v3.8.0（UI 审计 S5）：可点击控件的手型光标散落在各模块里，漏设的很多
+# （审计实测：主工作台 13 处、视频工作台 53 处可点击控件还停在箭头光标）。
+# 与其在 66 个调用点逐个补 setCursor，不如在 UI 层统一兜住：
+#   · install_pointer_cursor() 在启动 / 切主题时遍历一遍现有控件；
+#   · 同时挂一个全局事件过滤器，控件 Show / Polish 时补设，覆盖后续新建的。
+# 只对「仍是默认箭头」的控件生效，显式设过光标（如十字、禁止符）的不动。
+
+
+def _is_clickable(w):
+    """可点击类控件判定（按钮 / 下拉 / 滑块 / 标签页）。"""
+    try:
+        from PySide6.QtWidgets import (QAbstractButton, QComboBox,
+                                       QAbstractSlider, QTabBar, QScrollBar)
+    except Exception:
+        return False
+    # 滚动条不算「可点按钮」，给手型会很别扭
+    if isinstance(w, QScrollBar):
+        return False
+    return isinstance(w, (QAbstractButton, QComboBox, QAbstractSlider, QTabBar))
+
+
+def _apply_pointer_cursor(w):
+    """给单个控件补手型光标（已设过光标的不动）。"""
+    if not _is_clickable(w):
+        return
+    with contextlib.suppress(Exception):
+        if w.cursor().shape() == Qt.ArrowCursor:
+            w.setCursor(Qt.PointingHandCursor)
+
+
+class _PointerCursorHelper(QObject):
+    """全局事件过滤器：控件显示 / 抛光时补手型光标。"""
+
+    def eventFilter(self, obj, ev):
+        if ev.type() in (QEvent.Show, QEvent.Polish):
+            _apply_pointer_cursor(obj)
+        return False
+
+
+_pointer_helper = None
+
+
+def install_pointer_cursor(app=None):
+    """统一可点击控件的手型光标（幂等，可反复调用）。"""
+    global _pointer_helper
+    app = app or QApplication.instance()
+    if app is None:
+        return
+    if _pointer_helper is None:
+        _pointer_helper = _PointerCursorHelper(app)
+        app.installEventFilter(_pointer_helper)
+    for w in app.allWidgets():
+        _apply_pointer_cursor(w)
 
 
 def toggle():

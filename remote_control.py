@@ -112,6 +112,56 @@ def _cmd_project_new(wb, args):
     return True, "已新建工程 %dx%d @%gfps" % (w, h, fps), {"width": w, "height": h, "fps": fps}
 
 
+def _cmd_project_load(wb, args):
+    """project.load{dir}：从磁盘加载视频工程（与工作台「打开工程」同口径）。
+
+    走 sanitize_project + normalize_ids，和 video_workbench.load_dir 一致；
+    不弹文件框（AI/脚本要的是确定性路径）。用于 DSH 布置完工程后接管。
+    """
+    V = _vm()
+    d = str(args.get("dir") or args.get("path") or "").strip()
+    if not d or not os.path.isdir(d):
+        return False, "工程目录不存在: %s" % (d or "(空)"), None
+    meta = os.path.join(d, "video_project.json")
+    if not os.path.isfile(meta):
+        return False, "不是视频工程（缺 video_project.json）: %s" % d, None
+    try:
+        obj = json.load(open(meta, encoding="utf8"))
+    except Exception as e:
+        return False, "工程 JSON 读取失败: %r" % e, None
+    proj = V.sanitize_project(obj)
+    if proj is None:
+        return False, "工程 JSON 不是合法视频工程", None
+    with contextlib.suppress(Exception):
+        V.normalize_ids(proj)
+    try:
+        if getattr(wb, "_playing", False):
+            with contextlib.suppress(Exception): wb.seek(0.0)
+            with contextlib.suppress(Exception): wb.stop_play()
+        with contextlib.suppress(Exception): wb._sources.close_all()
+        wb.proj = proj
+        wb.proj_dir = d
+        wb._loading = True
+        try:
+            wb._apply_project(None)
+        finally:
+            wb._loading = False
+        with contextlib.suppress(Exception): wb.push_history()
+        with contextlib.suppress(Exception): wb.seek(0.0)
+        with contextlib.suppress(Exception):
+            wb.timeline.set_proj_dir(d)
+    except Exception as e:
+        return False, "载入工程失败: %s: %s" % (type(e).__name__, e), None
+    tracks = len(proj.get("tracks", []))
+    clips = sum(len(t.get("clips") or []) for t in proj.get("tracks", []))
+    dlg = len(proj.get("dialogue") or [])
+    binds = len(V.lip_bindings(proj))
+    return True, "已加载工程 %s（%d 轨 / %d clip / %d 台词 / %d 口型绑定）" % (
+        os.path.basename(d), tracks, clips, dlg, binds), {
+        "dir": d, "tracks": tracks, "clips": clips, "dialogue": dlg,
+        "voice": len(V.voice_clips(proj)), "lip": binds}
+
+
 def _cmd_scene_set_bg(wb, args):
     V = _vm()
     path = str(args.get("path") or "")
@@ -1712,6 +1762,7 @@ def _cmd_timeline_play(wb, args):
 
 _HANDLERS = {
     "project.new": _cmd_project_new,
+    "project.load": _cmd_project_load,
     "scene.set_bg": _cmd_scene_set_bg,
     "figure.add": _cmd_figure_add,
     "figure.move": _cmd_figure_move,
@@ -1785,7 +1836,40 @@ _HANDLERS = {
     "voice.refs.pick": lambda wb, args: _voice_dispatch("voice.refs.pick", args),
     "voice.refs.sel": lambda wb, args: _voice_dispatch("voice.refs.sel", args),
     "voice.refs.unsel": lambda wb, args: _voice_dispatch("voice.refs.unsel", args),
+    # ---- v3.6.4：口型匹配（**改 wb.proj**，必须走主线程，不进 HTTP_ONLY）----
+    "lip.status": lambda wb, args: _lip_dispatch(wb, "lip.status", args),
+    "lip.list": lambda wb, args: _lip_dispatch(wb, "lip.list", args),
+    "lip.bind": lambda wb, args: _lip_dispatch_render(wb, "lip.bind", args),
+    "lip.unbind": lambda wb, args: _lip_dispatch_render(wb, "lip.unbind", args),
+    # ---- v3.7.0：口型自动匹配 / 一键重算 / 覆盖率查询 ----
+    "lip.auto": lambda wb, args: _lip_dispatch_render(wb, "lip.auto", args),
+    "lip.split": lambda wb, args: _lip_dispatch_render(wb, "lip.split", args),
+    "lip.recalc": lambda wb, args: _lip_dispatch_render(wb, "lip.recalc", args),
+    "lip.cover": lambda wb, args: _lip_dispatch(wb, "lip.cover", args),
 }
+
+
+def _lip_dispatch(wb, cmd, args):
+    """口型命令转调（lip_commands 独立模块）。
+
+    与 _voice_dispatch 的区别：口型要读写 `wb.proj`，**必须在主线程**，
+    所以不做 HTTP 直跑（HTTP_ONLY 里也没有它们）。
+    """
+    import lip_commands as LC
+    return LC.run(wb, cmd, args)
+
+
+def _lip_dispatch_render(wb, cmd, args):
+    """写类口型命令：执行成功后刷新预览，让嘴立刻跟上。
+
+    刷新失败一律静默 —— 命令本身已经成功了，不能因为重绘出错就报失败
+    （会让 AI 以为没绑上、反复重试）。
+    """
+    ok, msg, data = _lip_dispatch(wb, cmd, args)
+    if ok:
+        with contextlib.suppress(Exception):
+            wb.render_frame(float(getattr(wb, "_t", 0.0) or 0.0))
+    return ok, msg, data
 
 
 def _voice_dispatch(cmd, args):

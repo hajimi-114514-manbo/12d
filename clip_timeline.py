@@ -39,6 +39,7 @@
 外层水平滚动条；否则用面板内部 view_t0 偏移。
 """
 import os
+import copy
 
 from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QSize, Signal
 from PySide6.QtGui import (QPainter, QColor, QPen, QBrush, QPainterPath,
@@ -302,6 +303,10 @@ class ClipTimelinePanel(QWidget):
         super().__init__(parent)
         # wb：外层工作台引用（当前仅存储，数据一律走 self.proj + video_model）
         self.wb = wb
+        # 复制剪贴板：[{kind: "clip", data: <clip dict>} | {kind: "voice",
+        # index: <台词下标>}]。粘贴 clip 深拷贝 + 新 id；语音粘贴 = 把
+        # 同一段配音挂到播放头处（复制台词引用，不复制音频文件）。
+        self._clipboard = []
         # 存引用不拷贝：外层改数据后 refresh() 即可
         self.proj = proj if isinstance(proj, dict) else VM.new_project()
         self.pps = float(PPS_DEFAULT)          # pixels_per_second
@@ -342,6 +347,12 @@ class ClipTimelinePanel(QWidget):
         self.btn_split = PushButton(FluentIcon.CUT, "切分", head)
         self.btn_split.setToolTip("在播放头位置切分选中的 clip")
         self.btn_split.clicked.connect(self.split_selected_at_playhead)
+        self.btn_copy = PushButton(FluentIcon.COPY, "复制", head)
+        self.btn_copy.setToolTip("复制选中的 clip（Ctrl+C）；右键粘贴（Ctrl+V）到播放头")
+        self.btn_copy.clicked.connect(self.copy_selected)
+        self.btn_paste = PushButton(FluentIcon.PASTE, "粘贴", head)
+        self.btn_paste.setToolTip("把剪贴板里的 clip 粘贴到播放头处（Ctrl+V）")
+        self.btn_paste.clicked.connect(self.paste_at_playhead)
         self.btn_delete = PushButton(FluentIcon.DELETE, "删除", head)
         self.btn_delete.setToolTip("删除选中的 clip")
         self.btn_delete.clicked.connect(self.remove_selected)
@@ -349,8 +360,12 @@ class ClipTimelinePanel(QWidget):
         self.btn_follow.setCheckable(True)
         self.btn_follow.setToolTip("播放头移动时自动横向滚动跟随")
         self.btn_follow.toggled.connect(self._on_follow_toggled)
-        for b in (self.btn_split, self.btn_delete, self.btn_follow):
-            b.setFixedHeight(22)
+        for b in (self.btn_split, self.btn_copy, self.btn_paste,
+                  self.btn_delete, self.btn_follow):
+            # v3.8.0（UI 审计 S4）：原来 setFixedHeight(22) 把按钮钉死在 22px，
+            # 而 Fluent PushButton 的自然高度是 28px，图标+文字被竖向压扁。
+            # 改成最小高度：布局按 sizeHint 给到 28，空间不够时才回落到 22。
+            b.setMinimumHeight(22)
             b.setFont(f_btn)
             hl.addWidget(b)
 
@@ -410,6 +425,15 @@ class ClipTimelinePanel(QWidget):
             self._head.setStyleSheet(
                 "QWidget#clipTlHead{background:%s;}" % C_HEAD_BG.name())
             self.hint.setStyleSheet("color:%s;" % C_TEXT.name())
+            # v3.8.0（S3 附带）：5 个头部按钮原用 Fluent 默认文字色，
+            # 在深色主题下与深底对比仅 3.13:1（<4.5），显式下发主题正文色。
+            _fg = QColor(C_TEXT.name())
+            for _b in (self.btn_split, self.btn_copy, self.btn_paste,
+                       self.btn_delete, self.btn_follow):
+                with contextlib.suppress(Exception):
+                    _b.setTextColor(_fg)
+                with contextlib.suppress(Exception):
+                    _b.setStyleSheet("PushButton{color:%s;}" % _fg.name())
         except Exception:
             pass
         with contextlib.suppress(Exception): self.update()
@@ -448,6 +472,19 @@ class ClipTimelinePanel(QWidget):
     def selected_voice_index(self):
         """当前选中的是不是语音 clip；是就返回台词下标，否则 -1。"""
         s = str(self._sel or "")
+        if not s.startswith("vc:"):
+            return -1
+        try:
+            return int(s[3:])
+        except Exception:
+            return -1
+
+    def _voice_index_of(self, clip_id):
+        """任意 clip id -> 台词下标（语音 clip）；非语音返回 -1。
+
+        _ClipArea 上有同款（自绘事件用）；面板这侧的 copy/remove 也要用，
+        面板不该为这事反向依赖 area。"""
+        s = str(clip_id or "")
         if not s.startswith("vc:"):
             return -1
         try:
@@ -788,6 +825,8 @@ class ClipTimelinePanel(QWidget):
     def _sync_buttons(self):
         has = bool(self._sels) or self._sel is not None
         self.btn_split.setEnabled(has)
+        self.btn_copy.setEnabled(has)
+        self.btn_paste.setEnabled(bool(self._clipboard))
         self.btn_delete.setEnabled(has)
 
     # ================= 模型操作（全部走 video_model） =================
@@ -818,12 +857,127 @@ class ClipTimelinePanel(QWidget):
         """[🗑] / Delete：删除选中 clip（多选成组删），失败（锁定等）静默。"""
         ids = self._sels or ([self._sel] if self._sel else [])
         if not ids: return False
-        ok, _msg = VM.remove_clips(self.proj, ids)
+        # 语音 clip 不在 tracks 里（dialogue 投影），分流到 voice_remove
+        vids = [self._voice_index_of(i) for i in ids]
+        vidx = [v for v in vids if v >= 0]
+        rest = [i for i, v in zip(ids, vids) if v < 0]
+        ok = False
+        if rest:
+            ok2, _msg = VM.remove_clips(self.proj, rest)
+            ok = ok or ok2
+        for vi in vidx:
+            ok3, _m3 = VM.voice_remove(self.proj, vi,
+                                       aid=getattr(self, "_aid", None))
+            ok = ok or ok3
         if ok:
             self._set_sel(None)
             self.edit_committed.emit()
             self.refresh()
         return ok
+
+    # ================= 复制 / 粘贴 =================
+    def copy_selected(self):
+        """Ctrl+C / [复制]：选中 clip 进剪贴板（深拷贝快照）。
+
+        语音 clip 记台词下标（粘贴 = 引用同一段配音）；普通 clip 记
+        clip dict 深拷贝（粘贴 = 新 id 新实例）。"""
+        ids = self._sels or ([self._sel] if self._sel else [])
+        if not ids: return False
+        items = []
+        for cid in ids:
+            vi = self._voice_index_of(cid)
+            if vi >= 0:
+                items.append({"kind": "voice", "index": vi})
+                continue
+            tr, c = VM.find_clip(self.proj, cid)
+            if c is None: continue
+            items.append({"kind": "clip", "data": copy.deepcopy(c),
+                          "_src_track_id": tr.get("id") if tr else None})
+        if not items: return False
+        self._clipboard = items
+        self._sync_buttons()
+        return True
+
+    def _paste_target_track(self, kind):
+        """粘贴落轨：剪贴板片段的源轨还活着就落到源轨（保持轨道语义），
+        否则找同 kind 的第一条可用轨；都没有则自动建一条。"""
+        tracks = self._tracks()
+        # 语音轨投影不可作为落轨目标
+        real = [t for t in tracks if not t.get("voice_projection")]
+        for t in real:
+            if t.get("id") == kind.get("_src_track_id"):
+                return t
+        for t in real:
+            if t.get("kind") == kind.get("kind"): return t
+        return real[0] if real else None
+
+    def paste_at_playhead(self, delta=None):
+        """Ctrl+V / [粘贴]：把剪贴板内容放到播放头处（错位 0.15s/条）。
+
+        clip：深拷贝 -> 新 id -> 落到同 kind 轨（找不到就自动建）；
+        语音：把该段配音挂到播放头（走 voice_move 的 detach 语义，
+        不复制音频文件——同一段配音贴多份没有意义）。
+        多条依次右移，避免全部叠在同一起点互相判撞。"""
+        if not self._clipboard:
+            return False
+        t0 = max(0.0, float(self._t))
+        n_clip = 0
+        n_voice = 0
+        msgs = []
+        aid = getattr(self, "_aid", None)
+        for k, item in enumerate(self._clipboard):
+            if item.get("kind") == "voice":
+                vi = item.get("index")
+                view = VM.act_view(self.proj, aid)
+                dl = view.get("dialogue") or []
+                if not isinstance(dl, list) or not (0 <= vi < len(dl)):
+                    continue
+                it = dl[vi]
+                v = it.get("voice")
+                if not isinstance(v, dict) or not v.get("path"):
+                    continue
+                t = round(t0 + k * 0.15, 3)
+                # 已脱离 -> 直接挪 t；未脱离 -> 先脱离再落到目标时刻
+                # （未脱离时 voice_move 改的是台词本身，会把原台词拖走）
+                if v.get("detach") is not True:
+                    ok1, _m1, _d = VM.voice_set_detach(
+                        self.proj, vi, True, t=t, aid=aid)
+                    if not ok1: continue
+                ok2, m2, _d = VM.voice_move(self.proj, vi, t, aid=aid)
+                if ok2:
+                    n_voice += 1
+                    msgs.append(m2)
+                continue
+            src = item.get("data")
+            if not isinstance(src, dict): continue
+            tr = self._paste_target_track({
+                "kind": (src.get("source") or {}).get("kind"),
+                "_src_track_id": item.get("_src_track_id")})
+            if tr is None:
+                okc, mc, tid = VM.add_track(
+                    self.proj, "video" if (src.get("source") or {}).get(
+                        "kind") in ("video", "image", "puppet") else "audio",
+                    None, aid=aid)
+                if not okc:
+                    continue
+                tr = VM.find_track(self.proj, tid, aid)
+            if tr is None or tr.get("voice_projection"): continue
+            t = round(t0 + k * 0.15, 3)
+            # 粘贴落点被占 -> 顺延到该轨末尾（比静默失败友好）
+            if VM._clash(self.proj, tr, t, float(src.get("dur") or 0.0)):
+                t = VM.project_duration(self.proj, aid)
+            # add_clip 用 clip["start"] 判撞与落数据 —— 落点必须写回副本
+            data = copy.deepcopy(src)
+            data["start"] = t
+            data["src_in"] = round(max(0.0, float(data.get("src_in") or 0.0)), 3)
+            ok, msg = VM.add_clip(self.proj, tr["id"], data, aid=aid)
+            if ok:
+                n_clip += 1
+                msgs.append(msg)
+        if n_clip or n_voice:
+            self.edit_committed.emit()
+            self.refresh()
+        return True if (n_clip or n_voice) else False
 
     def select_all(self):
         """Ctrl+A：选中当前幕全部可见轨的 clip（隐藏轨排除）。"""
@@ -836,6 +990,44 @@ class ClipTimelinePanel(QWidget):
     def _on_follow_toggled(self, checked):
         self.follow_playhead = bool(checked)
         if self.follow_playhead: self.maybe_scroll_to(self._t)
+
+    # ================= 轨道级操作 =================
+    def duplicate_track(self, track_id):
+        """复制整条轨道（右键轨道头 -> 复制轨道）。"""
+        ok, msg, _tid = VM.duplicate_track(
+            self.proj, track_id, aid=getattr(self, "_aid", None))
+        if ok:
+            self.edit_committed.emit()
+            self.refresh()
+        return ok, msg
+
+    def remove_track(self, track_id):
+        """删除整条轨道（右键轨道头 -> 删除轨道）。"""
+        ok, msg = VM.remove_track(
+            self.proj, track_id, aid=getattr(self, "_aid", None))
+        if ok:
+            # 删掉的轨上若有选中 clip，清掉选择
+            tr = VM.find_track(self.proj, track_id)
+            if tr is None and self._sel:
+                tr2, _c = VM.find_clip(self.proj, self._sel)
+                if tr2 is None:
+                    self._set_sel(None)
+            self.edit_committed.emit()
+            self.refresh()
+        return ok, msg
+
+    def voice_delete_selected(self):
+        """删除选中的语音段（台词保留）。"""
+        idx = self.selected_voice_index()
+        if idx < 0:
+            return False, "先选中一段语音"
+        ok, msg = VM.voice_remove(self.proj, idx,
+                                  aid=getattr(self, "_aid", None))
+        if ok:
+            self._set_sel(None)
+            self.edit_committed.emit()
+            self.refresh()
+        return ok, msg
 
     def snap_guide_x(self):
         """当前吸附辅助线 x（area 坐标），无则 None。"""
@@ -850,6 +1042,14 @@ class ClipTimelinePanel(QWidget):
             return
         if ev.key() == Qt.Key_A and ev.modifiers() & Qt.ControlModifier:
             self.select_all()           # Ctrl+A：全选当前幕可见 clip
+            ev.accept()
+            return
+        if ev.key() == Qt.Key_C and ev.modifiers() & Qt.ControlModifier:
+            self.copy_selected()        # Ctrl+C：复制选中 clip
+            ev.accept()
+            return
+        if ev.key() == Qt.Key_V and ev.modifiers() & Qt.ControlModifier:
+            self.paste_at_playhead()    # Ctrl+V：粘贴到播放头
             ev.accept()
             return
         super().keyPressEvent(ev)
@@ -1256,6 +1456,65 @@ class _ClipArea(QWidget):
         hit = self._hit_clip(x, y)
         if hit is not None and not hit[0].get("hidden"):
             self.panel.clip_activated.emit(hit[1]["id"])
+
+    # ---------------- 右键菜单（复制/粘贴/轨道操作） ----------------
+    def contextMenuEvent(self, ev):
+        """右键菜单：clip 上 = 复制/粘贴/删除；头列 = 轨道复制/删除；
+        语音 clip 额外给「删除语音」（台词保留）。"""
+        from PySide6.QtWidgets import QMenu
+        x, y = ev.position().x(), ev.position().y() \
+            if hasattr(ev, "position") else float(ev.y())
+        p = self.panel
+        menu = QMenu(self)
+
+        # 头列：轨道菜单
+        if x < NAME_W:
+            row = self._row_at(y)
+            if row is None:
+                return
+            tr, _y0, _h = row
+            if tr.get("voice_projection"):
+                a = menu.addAction("语音轨由台词生成，无轨道操作")
+                a.setEnabled(False)
+            else:
+                a_dup = menu.addAction("复制轨道")
+                a_del = menu.addAction("删除轨道")
+                act = menu.exec(ev.globalPos())
+                if act == a_dup:
+                    p.duplicate_track(tr["id"])
+                elif act == a_del:
+                    p.remove_track(tr["id"])
+            return
+
+        # clip 区域：复制/粘贴/删除
+        hit = self._hit_clip(x, y)
+        is_voice = hit is not None and self._voice_index_of(hit[1]["id"]) >= 0
+        a_copy = menu.addAction("复制（Ctrl+C）")
+        a_copy.setEnabled(bool(p._sels) or p._sel is not None)
+        a_paste = menu.addAction("粘贴到播放头（Ctrl+V）")
+        a_paste.setEnabled(bool(p._clipboard))
+        menu.addSeparator()
+        if is_voice:
+            a_vdel = menu.addAction("删除语音（台词保留）")
+            a_del = menu.addAction("删除")
+            a_del.setEnabled(False)   # 投影 clip 走上面的专用项
+            act = menu.exec(ev.globalPos())
+            if act == a_copy:
+                p.copy_selected()
+            elif act == a_paste:
+                p.paste_at_playhead()
+            elif act == a_vdel:
+                p.voice_delete_selected()
+            return
+        a_del = menu.addAction("删除（Del）")
+        a_del.setEnabled(bool(p._sels) or p._sel is not None)
+        act = menu.exec(ev.globalPos())
+        if act == a_copy:
+            p.copy_selected()
+        elif act == a_paste:
+            p.paste_at_playhead()
+        elif act == a_del:
+            p.remove_selected()
 
     def wheelEvent(self, ev):
         """Ctrl+滚轮：以鼠标时刻为锚缩放 pps（0.5~400）。

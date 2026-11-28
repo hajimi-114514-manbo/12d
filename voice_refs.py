@@ -88,6 +88,15 @@ def _voice_base(root=None):
     """
     if root:
         return root
+    # v3.7.6：用户手工选了「语音包目录」时，参考音频也跟着走 ——
+    # 音色权重和它的参考音频是**一套素材**，用户把它们放同一个目录最自然，
+    # 分开存反而要来回搬。没选过时行为与旧版完全一致。
+    try:
+        picked = VP.remembered_pack_dir()
+        if picked:
+            return picked
+    except Exception:
+        pass
     env = os.environ.get("MUPPET_VOICE_DIR", "").strip()
     if env:
         return env

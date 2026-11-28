@@ -314,18 +314,18 @@ class VoiceRefsDialog(QDialog):
             VS = _player()
             VS.play(path)
         except Exception as e:
-            TOAST.toast(self, "播放失败：%s" % e)
+            TOAST.toast_warn(self, "播放失败：%s" % e)
 
     def _clear_selection(self):
         VR = _refs()
         ok, msg, data = VR.clear_selection("")
         if ok:
             n = len((data or {}).get("cleared") or [])
-            TOAST.toast(self, ("已清空 %d 个角色的选定" % n) if n
+            TOAST.toast_info(self, ("已清空 %d 个角色的选定" % n) if n
                         else "本来就没有选定")
             self.reload()
         else:
-            TOAST.toast(self, "清除失败：%s" % msg)
+            TOAST.toast_warn(self, "清除失败：%s" % msg)
 
     def _stop(self):
         try:
@@ -339,19 +339,19 @@ class VoiceRefsDialog(QDialog):
         VR = _refs()
         ok, msg, info = VR.select_ref(role, name)
         if ok:
-            TOAST.toast(self, "已选定：%s" % name)
+            TOAST.toast_info(self, "已选定：%s" % name)
             self.reload()
         else:
-            TOAST.toast(self, "选定失败：%s" % msg)
+            TOAST.toast_warn(self, "选定失败：%s" % msg)
 
     def _remove(self, role, name):
         VR = _refs()
         ok, msg = VR.remove_ref(role, name)
         if ok:
-            TOAST.toast(self, "已删除 %s" % name)
+            TOAST.toast_info(self, "已删除 %s" % name)
             self.reload()
         else:
-            TOAST.toast(self, "删除失败：%s" % msg)
+            TOAST.toast_warn(self, "删除失败：%s" % msg)
 
     def _do_import(self):
         VR = _refs()
@@ -361,8 +361,8 @@ class VoiceRefsDialog(QDialog):
         ok, msg, info = VR.import_ref(dlg.result_path, dlg.result_role,
                                       dlg.result_name)
         if ok:
-            TOAST.toast(self, "已导入 %s（%.2f 秒）"
+            TOAST.toast_info(self, "已导入 %s（%.2f 秒）"
                         % (info["name"], info["dur"]))
             self.reload()
         else:
-            TOAST.toast(self, "导入失败：%s" % msg)
+            TOAST.toast_warn(self, "导入失败：%s" % msg)

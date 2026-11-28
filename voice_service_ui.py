@@ -18,7 +18,8 @@ import json
 import os
 
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QWidget
+from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QWidget,
+                               QFileDialog)
 from qfluentwidgets import (CardWidget, PrimaryPushButton, PushButton,
                             StrongBodyLabel, CaptionLabel, LineEdit,
                             ProgressBar)
@@ -66,6 +67,12 @@ def _probe():
     return voice_probe
 
 
+def _paths():
+    """惰性 import：voice_paths 会读用户目录。"""
+    import voice_paths
+    return voice_paths
+
+
 class _ProbeThread(QThread):
     """后台探测（TCP 超时最长几秒，不能放主线程）。"""
 
@@ -86,6 +93,38 @@ class _ProbeThread(QThread):
         self.done.emit(r)
 
 
+class _DirRow(QWidget):
+    """一行「标签 + 路径输入 + 浏览 + 清除」。
+
+    外置引擎/语音包都用它 —— 两处交互完全一样（选目录、记住、能清空退回
+    自动探测），抽出来免得两份代码走样。
+    """
+
+    def __init__(self, label, placeholder, parent=None):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        cap = CaptionLabel(label, self)
+        cap.setFixedWidth(72)
+        lay.addWidget(cap)
+        self.ed = LineEdit(self)
+        self.ed.setPlaceholderText(placeholder)
+        lay.addWidget(self.ed, 1)
+        self.btn_browse = PushButton("浏览…", self)
+        lay.addWidget(self.btn_browse)
+        self.btn_clear = PushButton("自动", self)
+        self.btn_clear.setToolTip("清除手工选择，退回自动探测")
+        self.btn_clear.setFixedWidth(56)
+        lay.addWidget(self.btn_clear)
+
+    def text(self):
+        return (self.ed.text() or "").strip()
+
+    def set_text(self, s):
+        self.ed.setText(s or "")
+
+
 class VoiceServiceDialog(QDialog):
     """语音服务设置与连通性检测。"""
 
@@ -93,7 +132,7 @@ class VoiceServiceDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("语音服务")
         self.setObjectName("voiceService")
-        self.resize(720, 560)
+        self.resize(760, 660)
         self._thread = None
 
         vl = QVBoxLayout(self)
@@ -120,6 +159,40 @@ class VoiceServiceDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color:%s;" % TH.t("text_dim"))
         vl.addWidget(hint)
+
+        # ---- 外置目录（v3.7.6）：引擎与语音包都可自选 ----
+        self.dir_card = CardWidget(self)
+        dl = QVBoxLayout(self.dir_card)
+        dl.setContentsMargins(14, 10, 14, 10)
+        dl.setSpacing(6)
+        dl.addWidget(StrongBodyLabel("外置目录", self))
+        cap2 = CaptionLabel(
+            "引擎（约 4GB）与语音包（音色 ckpt+pth）通常放在别的盘上，"
+            "不必塞进程序目录。选一次会记住，下次自动用它。", self.dir_card)
+        cap2.setWordWrap(True)
+        cap2.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        dl.addWidget(cap2)
+
+        self.row_engine = _DirRow(
+            "引擎目录", "含 GPT_SoVITS\\ 与 runtime\\ 的目录", self.dir_card)
+        self.row_engine.btn_browse.clicked.connect(self._pick_engine)
+        self.row_engine.btn_clear.clicked.connect(self._clear_engine)
+        self.row_engine.ed.editingFinished.connect(self._apply_engine_typed)
+        dl.addWidget(self.row_engine)
+
+        self.row_pack = _DirRow(
+            "语音包目录", "放 *.ckpt 与 *.pth 的目录（留空=引擎内置 voices）",
+            self.dir_card)
+        self.row_pack.btn_browse.clicked.connect(self._pick_pack)
+        self.row_pack.btn_clear.clicked.connect(self._clear_pack)
+        self.row_pack.ed.editingFinished.connect(self._apply_pack_typed)
+        dl.addWidget(self.row_pack)
+
+        self.lbl_dir_tip = CaptionLabel("", self.dir_card)
+        self.lbl_dir_tip.setWordWrap(True)
+        self.lbl_dir_tip.setStyleSheet("color:%s;" % TH.t("text_dim"))
+        dl.addWidget(self.lbl_dir_tip)
+        vl.addWidget(self.dir_card)
 
         # ---- 本机引擎状态 ----
         self.engine_card = CardWidget(self)
@@ -173,6 +246,120 @@ class VoiceServiceDialog(QDialog):
         vl.addLayout(foot)
 
         self._refresh_engine()
+        self._load_dirs()
+
+    # ------------------------------------------------------- 外置目录（v3.7.6）
+    def _load_dirs(self):
+        """把已记住的目录填进输入框，并刷新提示。"""
+        try:
+            VP = _paths()
+            self.row_engine.set_text(VP.remembered_engine_dir() or "")
+            self.row_pack.set_text(VP.remembered_pack_dir() or "")
+        except Exception:
+            pass
+        self._refresh_dir_tip()
+
+    def _refresh_dir_tip(self):
+        """目录卡片下方的状态行：当前解析到哪、语音包目录在哪。"""
+        try:
+            VP = _paths()
+            eng = VP.remembered_engine_dir() or ""
+            pack = VP.remembered_pack_dir() or ""
+            vdir = VP.voices_dir() or ""
+            parts = []
+            if eng:
+                parts.append("引擎已指定：%s" % eng)
+            else:
+                parts.append("引擎：自动探测（%s）" % (VP.voice_dir() or "未找到"))
+            parts.append("语音包：%s" % (vdir or "未找到"))
+            if pack:
+                parts.append("（手工指定）")
+            self.lbl_dir_tip.setText("\n".join(parts))
+        except Exception as e:
+            self.lbl_dir_tip.setText("目录状态读取失败：%s" % e)
+
+    def _pick_engine(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "选择语音引擎根目录（含 GPT_SoVITS\\ 与 runtime\\）",
+            self.row_engine.text() or os.path.expanduser("~"))
+        if not d:
+            return
+        self._set_engine(d)
+
+    def _apply_engine_typed(self):
+        """用户手打/粘贴路径后回车也要生效。"""
+        t = self.row_engine.text()
+        if t:
+            self._set_engine(t)
+
+    def _set_engine(self, d):
+        VP = _paths()
+        if not VP.engine_dir_ok(d):
+            TOAST.toast_warn(
+                self, "目录不像语音引擎",
+                "该目录下没找到 GPT_SoVITS\\ 或 runtime\\。\n"
+                "请选引擎的根目录（里面应有 GPT_SoVITS 与 runtime 两个子目录）。",
+                duration=5000)
+            self.row_engine.set_text(VP.remembered_engine_dir() or "")
+            return
+        VP.remember_engine_dir(d)
+        self.row_engine.set_text(d)
+        self._refresh_dir_tip()
+        self._refresh_engine()
+        TOAST.toast_ok(self, "引擎目录已设", d, duration=2500)
+
+    def _clear_engine(self):
+        VP = _paths()
+        VP.remember_engine_dir(None)
+        self.row_engine.set_text("")
+        self._refresh_dir_tip()
+        self._refresh_engine()
+        self.status.setText("引擎目录已清除，恢复自动探测")
+
+    def _pick_pack(self):
+        d = QFileDialog.getExistingDirectory(
+            self, "选择语音包目录（放 *.ckpt 与 *.pth）",
+            self.row_pack.text() or os.path.expanduser("~"))
+        if not d:
+            return
+        self._set_pack(d)
+
+    def _apply_pack_typed(self):
+        t = self.row_pack.text()
+        if t:
+            self._set_pack(t)
+
+    def _set_pack(self, d):
+        VP = _paths()
+        if not VP.pack_dir_ok(d):
+            TOAST.toast_warn(self, "目录不存在", d, duration=4000)
+            self.row_pack.set_text(VP.remembered_pack_dir() or "")
+            return
+        VP.remember_pack_dir(d)
+        self.row_pack.set_text(d)
+        self._refresh_dir_tip()
+        # 立刻报一下这个包里认到几个音色，用户能马上判断选对没
+        n_ok = n_all = 0
+        try:
+            import voice_library as VL
+            rows = VL.voices()
+            n_all = len(rows)
+            n_ok = sum(1 for r in rows if r.get("ok"))
+        except Exception:
+            pass
+        if n_all:
+            TOAST.toast_ok(self, "语音包目录已设",
+                           "%d 个音色（完整 %d）" % (n_all, n_ok), duration=3000)
+        else:
+            TOAST.toast_warn(self, "语音包目录已设",
+                             "目录里暂未发现 .ckpt/.pth 音色", duration=3500)
+
+    def _clear_pack(self):
+        VP = _paths()
+        VP.remember_pack_dir(None)
+        self.row_pack.set_text("")
+        self._refresh_dir_tip()
+        self.status.setText("语音包目录已清除，用引擎内置 voices")
 
     # ---------------------------------------------------------------- 内部
     def _refresh_engine(self):

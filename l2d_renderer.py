@@ -31,6 +31,7 @@ import os
 import sys
 import time
 import json
+import re
 import threading
 
 import numpy as np
@@ -46,6 +47,59 @@ _RENDERER = None
 _RENDERER_LOCK = threading.Lock()
 
 
+# ---------------- 方案 B：姿态插值（Live2D 参数空间） ----------------
+# 切 clip / 换表情时，页面在 beforeModelUpdate 里用「切换瞬间的姿态快照」把新
+# 姿态按 smoothstep 拉过去 n 帧，从根上消除图像交叉溶解的双层半透明重影。
+# 时长可用环境变量 MUPPET_POSE_MS 覆盖（0 = 关掉，退回硬切/纯图像淡入）。
+POSE_MS = float(os.environ.get("MUPPET_POSE_MS", "400") or 0.0)
+
+_POSE_PARAMS_BY_REF = {}
+_MOC_PARAM_CACHE = {}
+_MOC_PARAM_RE = re.compile(rb"PARAM_[A-Za-z0-9_]+")
+
+
+def _moc_pose_params(model_dir):
+    """从 Cubism2 模型目录的 model.json -> *.moc 里抽参数 id 名单。
+
+    只读模型文件；异常或非 Cubism2 模型一律返回 []（页面侧就不做参数插值，
+    自动退回原行为）。结果按 model.json 的 mtime 缓存。
+    """
+    try:
+        p = str(model_dir or "").strip()
+        if not p: return []
+        if p.lower().startswith("file:"):
+            from urllib.parse import urlparse, unquote
+            from urllib.request import url2pathname
+            p = url2pathname(unquote(urlparse(p).path))
+            if len(p) > 2 and p[0] == "\\" and p[2] == ":":
+                p = p[1:]
+        p = p.replace("/", os.sep)
+        if os.path.isdir(p): mj = os.path.join(p, "model.json")
+        elif p.lower().endswith(".json"): mj = p
+        else: return []
+        if not os.path.isfile(mj): return []
+        key = (os.path.normcase(os.path.abspath(mj)), os.path.getmtime(mj))
+        if key in _MOC_PARAM_CACHE: return _MOC_PARAM_CACHE[key]
+        with open(mj, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        rel = str((d or {}).get("model") or (d or {}).get("file") or "")
+        if not rel.lower().endswith(".moc"):
+            _MOC_PARAM_CACHE[key] = []
+            return []
+        moc = os.path.join(os.path.dirname(mj), rel.replace("/", os.sep))
+        if not os.path.isfile(moc):
+            _MOC_PARAM_CACHE[key] = []
+            return []
+        with open(moc, "rb") as f: raw = f.read()
+        names = sorted({m.decode("ascii", "ignore")
+                        for m in _MOC_PARAM_RE.findall(raw)})
+        _MOC_PARAM_CACHE[key] = names
+        return names
+    except Exception:
+        return []
+
+
+
 def _qt_imports():
     from PySide6.QtCore import Qt, QTimer, QEventLoop, QBuffer, QByteArray, \
         QIODevice
@@ -53,6 +107,43 @@ def _qt_imports():
     from PySide6.QtWidgets import QApplication, QWidget
     return Qt, QTimer, QEventLoop, QBuffer, QByteArray, QIODevice, QImage, \
         QApplication, QWidget
+
+
+# v3.7.3 渲染侧口型回读台账：mid -> {tag,has,now,skipped,expect,k}
+# 只在下发/切换口型表后的那一帧采一次（一次 JS 往返），供导出侧
+# video_export._lip_check_warn 做「页面到底有没有按我们的表画嘴」的校验。
+_LIP_READBACK = {}
+_LIP_READBACK_LOCK = threading.Lock()
+
+
+def lip_readback():
+    """返回回读台账快照（导出侧只读，加锁复制）。"""
+    with _LIP_READBACK_LOCK:
+        return {k: dict(v) for k, v in _LIP_READBACK.items()}
+
+
+def clear_lip_readback():
+    with _LIP_READBACK_LOCK:
+        _LIP_READBACK.clear()
+
+
+# ---------------- v3.7.5 取像素通道的实测记录（**结论：保持同步 PNG**）----
+# 导出逐帧动画时渲染泵是唯一瓶颈（实测 239s 工程：导出 123.7 s，其中
+# 泵服务 6212 帧 × 18.7 ms = 116 s，占 94%）。泵每帧 18.7 ms =
+#   seek 3.55 ms（WebGL 渲染，必须主线程，无法挪走）
+# + grab_rgba 13.56 ms（取像素，其中页面侧 toDataURL('image/png') 编码 7.9 ms）
+# + 泵/队列开销 ~1.6 ms
+#
+# 试过把「取像素」整块搬到 Web Worker 后台（页面复用 2D canvas 取原始
+# RGBA 字节 -> Worker 压缩 -> 回传），结论是**反而更慢，已回退**：
+#   · Worker + deflate（无损，像素 maxdiff=0）：Worker 内压缩约 20 ms/帧
+#     （deflate 比 PNG 慢），主线程虽只占 2 ms，但导出线程必须**等这一帧
+#     的像素**才能继续合成 -> 整片 116 s 变成 159 s（泵 53.5 -> 39.0 fps）。
+#   · Worker + convertToBlob('image/png')：约 15 ms/帧，且 OffscreenCanvas
+#     颜色空间转换有损（3 个像素差 1），破坏「导出逐位可复现」。
+#   · WebP 21-33 ms、JPEG 11.9 ms（且有损）、原始 RGBA 字符串直传 20.6 ms。
+#   => PNG 编码放主线程反而是最快的，**保留原路径**。
+# 真正的提速点在别处：编码档可选（avc1 快 42%）与合成侧缓存。
 
 
 class L2DRenderer(object):
@@ -75,6 +166,15 @@ class L2DRenderer(object):
         # 手动时钟下每个 slot 已推到的状态签名（render_animated 用，
         # 同签名不再重发 loadModel/playMotion，省 3-4 次 JS 往返）
         self._sig_by_mid = {}
+        # v3.7.3 口型表签名：mid -> (lip_tag, 表长)。
+        # 为什么必须单独记：同一 model_path 在**整条时间线上共用一个 slot**，
+        # 相邻 clip 换台词但 ref/motion/expression 一模一样时，原来只有
+        # fresh 分支才下发 setLip —— 新 clip 会继续用上一个 clip 的表，
+        # 按 clip 内偏移去取就整体错位/越界（projects.mp4 465.7s 起嘴定死）。
+        self._lip_sig_by_mid = {}
+        # mid -> {"tag","vals","k","gain"}：刚下发过表，下一帧顺手回读页面
+        # 的 lipNow / lipHookStat，供导出侧做「渲染侧回读校验」。
+        self._lip_pend = {}
 
     # ---------------- 初始化 ----------------
     def ready(self):
@@ -181,7 +281,13 @@ class L2DRenderer(object):
         """注册模型目录 -> scheme 引用（如 model/ab12cd34/relative/dir）。"""
         if self._preview is None and not self._ensure_view(): return None
         try:
-            return self._preview.register_model_dir(model_dir)
+            ref = self._preview.register_model_dir(model_dir)
+            if ref:
+                # 方案 B：顺手把该模型的参数 id 名单备好（Cubism2 的 moc 里是
+                # 明文 PARAM_*，抽一次缓存住），loadModel 时下发页面做姿态插值。
+                # 抽不到就下发 []，页面自动降级为不插值（等价旧行为）。
+                _POSE_PARAMS_BY_REF[ref] = _moc_pose_params(model_dir)
+            return ref
         except Exception as e:
             self._last_err = "register: %r" % (e,)
             return None
@@ -211,7 +317,7 @@ class L2DRenderer(object):
             return {"err": "bad_json"}
 
     def _apply_state(self, ref, mo, ex, mid, timeout=25.0, lip=None,
-                     lip_fps=30.0, lip_gain=1.0):
+                     lip_fps=30.0, lip_gain=1.0, lip_tag=""):
         """把 (模型, 动作, 表情[, 口型]) 推到页面 slot `mid` 并等模型真正进场。
 
         render() 与 render_animated() 共用（原先内联在 render 里）。
@@ -225,22 +331,32 @@ class L2DRenderer(object):
         IPC（每帧一次 JSON 往返）。
         """
         cmds = [
-            {"cmd": "loadModel", "args": {"modelId": mid, "modelRef": ref}},
+            {"cmd": "loadModel", "args": {"modelId": mid, "modelRef": ref,
+                                     "poseParams": _POSE_PARAMS_BY_REF.get(ref) or []}},
             {"cmd": "setTransform", "args": {"modelId": mid, "x": 0.5,
                                              "y": 0.5, "scale": 1.0,
                                              "rot": 0.0}},
         ]
         if mo:
             cmds.append({"cmd": "playMotion",
-                         "args": {"modelId": mid, "name": mo, "fadeMs": 200}})
+                         "args": {"modelId": mid, "name": mo, "fadeMs": POSE_MS}})
         if ex:
             cmds.append({"cmd": "setExpression",
-                         "args": {"modelId": mid, "name": ex, "fadeMs": 200}})
+                         "args": {"modelId": mid, "name": ex, "fadeMs": POSE_MS}})
         if lip:
             cmds.append({"cmd": "setLip",
                          "args": {"modelId": mid, "vals": list(lip),
                                   "fps": float(lip_fps),
-                                  "gain": float(lip_gain)}})
+                                  "gain": float(lip_gain),
+                                  "tag": str(lip_tag or "")}})
+        elif lip_tag and self._lip_sig_by_mid.get(mid):
+            # 换了 clip 且新 clip 没有台词（lip=None）：必须**显式解除**，
+            # 否则页面还挂着上一个 clip 的表，按新 clip 内偏移去取就是错位的嘴。
+            cmds.append({"cmd": "setLip",
+                         "args": {"modelId": mid, "vals": [],
+                                  "fps": float(lip_fps),
+                                  "gain": float(lip_gain),
+                                  "tag": str(lip_tag or "")}})
         js = (
             "(function(){\n"
             " try{\n"
@@ -261,6 +377,83 @@ class L2DRenderer(object):
             self._wait(lambda: False, 0.15)
         self._last_err = "model wait timeout (%s)" % mid
         return False
+
+    def _set_expression(self, mid, ex, keep_phase=True, timeout=8.0):
+        """只换表情：补发一条 setExpression，**不重载模型、不清 roi**。
+
+        方案 C 的落点。页面侧 setExpression 收到 keepPhase=True 时只改表情
+        权重，不写 s.k、不 _resetClock —— 相位（elapsedTime）保持连续，
+        动作/呼吸/物理因此不会「归零再起步」。
+
+        ex 为空串 = 清空表情（回到模型默认脸），走页面侧 resetExpression。
+        """
+        r = self._cmd({"cmd": "setExpression", "args": {
+            "modelId": mid, "name": str(ex or ""), "fadeMs": POSE_MS,
+            "keepPhase": bool(keep_phase)}}, timeout=timeout)
+        if r.get("err"):
+            self._last_err = "setExpression: %s" % r["err"]
+            return False
+        return True
+
+    def _lip_mark_pending(self, mid, tag, k, n):
+        """登记「口型表已下发、等高值帧回读」的待验记录。
+
+        v3.7.4：没有这条记录，导出侧没法区分「表压根没到页面」（真故障）
+        与「表在手上、只是在等第一个有开口度的帧」（静音前奏长的 clip，
+        如 c21 前 21s 全 0）。两者混为一谈就会误报 LIPWARN。
+        """
+        with _LIP_READBACK_LOCK:
+            _LIP_READBACK[mid] = {"tag": str(tag or ""),
+                                  "has": None, "now": None, "skipped": None,
+                                  "expect": None, "expect1": None,
+                                  "k": (int(k) if k is not None else 0),
+                                  "len": int(n or 0), "pending": True}
+
+    def _set_lip(self, mid, lip, lip_fps, lip_gain, tag="", timeout=10.0,
+                 k=None):
+        """只重下发口型表（不动模型/动作/表情），并登记回读探针。
+
+        v3.7.3 新增：同一 ref 连续多个 clip 共用 slot 时，动作与表情都可能
+        不变，只有台词变了 —— 这时既不走 loadModel 也不走 playMotion，
+        旧代码里 setLip 只在 fresh 分支发，页面就一直用上一个 clip 的表。
+        """
+        vals = list(lip) if lip else []
+        r = self._cmd({"cmd": "setLip",
+                       "args": {"modelId": mid, "vals": vals,
+                                "fps": float(lip_fps),
+                                "gain": float(lip_gain),
+                                "tag": str(tag or "")}}, timeout=timeout)
+        if r.get("err"):
+            self._last_err = "setLip: %s" % r["err"]
+            return False
+        self._lip_sig_by_mid[mid] = (str(tag or ""), len(vals))
+        # v3.7.4：表一下发就登记一条「已落地待验」记录（见 _lip_mark_pending）。
+        self._lip_mark_pending(mid, tag, k, len(vals))
+        if vals and k is not None:
+            self._lip_pend[mid] = {"tag": str(tag or ""), "vals": vals,
+                                   "k": int(k), "gain": float(lip_gain)}
+        else:
+            self._lip_pend.pop(mid, None)
+        return True
+
+    def _lip_probe(self, mid, timeout=6.0):
+        """回读页面口型证据（hasLip / lipNow / lipHookStat），供回读校验。
+
+        只读，不写任何参数；失败返回 None，绝不影响出图。
+        """
+        try:
+            r = self._js("(function(){ try{ var f=window.__muppetClock;"
+                         " if(!f) return ''; return JSON.stringify("
+                         "f(%s)); }catch(e){ return ''; } })()"
+                         % json.dumps(mid), timeout=timeout)
+        except Exception:
+            return None
+        if not r:
+            return None
+        try:
+            return json.loads(r) if isinstance(r, str) else r
+        except Exception:
+            return None
 
     def render(self, state, timeout=25.0):
         """渲染一帧 -> (H,W,4) RGBA uint8；失败 None。
@@ -314,20 +507,12 @@ class L2DRenderer(object):
             if r.get("err"):
                 self._last_err = "render seek: %s" % r["err"]
                 return None
-            # v3.6.4：seek 之后**显式落一次口型**。
-            # 为什么要单独落（实测挖出来的坑）：
-            #   · seek 的循环条件是 `s.k < target`，同一 k 重复请求时
-            #     一步都不走（steps=0），而 _applyLip 在循环体里 -> 换 lip
-            #     表也不会被应用 -> 画面纹丝不动、但参数读出来又是对的
-            #   · 走页面里的 __muppetSetMouth（已实测 maxdiff=255 有效），
-            #     它在写参数后自己 app.render()，不再依赖 seek 的相位
-            if lip:
-                try:
-                    idx = k if 0 <= k < len(lip) else len(lip) - 1
-                    v = float(lip[idx]) * float(state.get("lip_gain") or 1.0)
-                except (TypeError, ValueError, IndexError):
-                    v = 0.0
-                self._write_mouth(mid, max(0.0, min(1.0, v)), advance=True)
+            # 口型已由宿主页 _bindLip 挂在 internalModel 的 beforeModelUpdate
+            # 事件上写入（动作结算后、coreModel.update() 烘焙前），seek 内部的
+            # render 会触发钩子。这里**不再**显式写嘴——seek 之后再写会在
+            # 帧尾留下脏参数（下一帧 loadParam 才还原），且旧的
+            # __muppetSetMouth 顺序是为「无钩子」架构设计的，与钩子叠加会
+            # 互相干扰。
             t0 = time.time()
             img = self._grab_ready(None)
             self._renders += 1
@@ -393,17 +578,28 @@ class L2DRenderer(object):
                 self._last_err = "set_manual: %s" % r["err"]
                 return False
             self._manual_on = bool(on)
-            if not on: self._sig_by_mid.clear()     # 退出手动：slot 状态作废，防脏签名
+            if not on:
+                self._sig_by_mid.clear()        # 退出手动：slot 状态作废，防脏签名
+                # v3.7.3：口型表签名同步作废 —— 页面 lipTable 还在，但相位
+                # 基准已换（不再是导出逐帧泵），留着签名会挡掉重下发
+                self._lip_sig_by_mid.clear()
+                self._lip_pend.clear()
             return True
 
-    def seek(self, mid, k, dt_ms, max_steps=64, timeout=30.0):
+    def seek(self, mid, k, dt_ms, max_steps=64, timeout=30.0, allow_restart=True):
         """把 slot `mid` 推进到第 k 步（每步 dt_ms），返回页面回执。
 
         `max_steps` 是单次调用的推进上限：长片段回拖时要从头重走上千步，
-        一次 JS 调用连跑会把主线程独占好几秒，所以切片跑。"""
+        一次 JS 调用连跑会把主线程独占好几秒，所以切片跑。
+
+        `allow_restart=False` 时**禁用回拖重启**——clip 切换时 t_local 从 0
+        重新开始，k 变小，页面侧会误判「回拖」而 _restartMotion。导出动作
+        连续性要求新 clip 从当前相位继续走（由 FORCE playMotion 接管），
+        不需要重启。此时调用方应保证已先把 s.k 归零（见 resetPhase）。"""
         return self._cmd({"cmd": "seek", "args": {
             "modelId": mid, "k": int(k), "dt": float(dt_ms),
-            "max": int(max_steps)}}, timeout=timeout)
+            "max": int(max_steps), "allowRestart": bool(allow_restart)}},
+            timeout=timeout)
 
     def model_box(self, mid, margin=24):
         """问页面要该 slot 的立绘包围盒（画布坐标 [x,y,w,h]）。
@@ -432,7 +628,18 @@ class L2DRenderer(object):
         为什么必须重试而不是放过：放过就会 fallback 到松散的几何框，
         于是「这一道用紧框还是松框」取决于预热快慢，导出立刻不可复现
         （实测同一模型两个 slot 一个 640×349、一个 720×624，整段全帧
-        对不上）。"""
+        对不上）。
+
+        v3.7.5 实测记录（**为什么这里仍是同步 PNG 抓图**）：
+        试过把像素编码搬到 Web Worker 后台（原始 RGBA -> deflate ->
+        回传），像素确实逐位一致（maxdiff=0），但**吞吐反而更差**：
+          同步 toDataURL('image/png')：页面 7.94ms/帧 -> 泵 18.7ms/帧
+          Worker deflate 无损压缩：Worker 内约 20ms/帧（deflate 比 PNG
+            慢），主线程虽然只占 2ms，但**导出线程要等这一帧的像素**，
+            整片实测从 116s 变成 159s（泵 53.5 -> 39.0 帧/秒）。
+        Worker 里 convertToBlob('image/png') 也更慢（~15ms），且
+        OffscreenCanvas 颜色空间转换有损（3 个像素差 1，破坏逐位复现）。
+        结论：PNG 编码放主线程反而是最快的，保留原路径。"""
         img = None
         for i in range(tries):
             img = self.grab_rgba(roi)
@@ -469,20 +676,91 @@ class L2DRenderer(object):
             mid = model_id or ("m%d" % (abs(hash(ref)) % 997))
             mo = str(state.get("motion") or "")
             ex = str(state.get("expression") or "")
-            sig = (ref, mo, ex)
-            fresh = self._sig_by_mid.get(mid) != sig
+            # **动作连续性修复**（pump 配合）：
+            # state_key 现在只按 model_path，同一模型在整条导出时间线上共用
+            # 一个 slot。这里把「ref/expression 变了」（必须重载）和「只有
+            # motion 变了」（用 FORCE 切换、保留相位）分开判断，避免每个
+            # 新 clip 都把动作从头再播一遍。
+            #
+            # **方案 C（v3.7.1，动作切换生硬修复）**：再把「换模型」与
+            # 「换表情」拆开。原来 sig=(ref, ex) 一体判断，expression 一变
+            # 就 fresh -> loadModel 重建模型：姿态/物理/呼吸/眨眼全部归零、
+            # 单次 ~0.7s。实测 hspdz_uika_mv 的 36 个 clip 边界里 33 个走了
+            # 这条路 —— 切点后第 1~2 帧速度只剩片内中位的 29%（先顿），
+            # 第 6~9 帧冲到 214%（再冲），就是用户看到的「生硬切换」。
+            # 现在：只有 **ref 变了**才 need_load；只有 ex 变了就补发一条
+            # setExpression（页面侧 keepPhase=True：不重置相位、不动时钟、
+            # 不清 roi），模型不重建、动作不断档。
+            sig = (ref, ex)
+            prev_sig = self._sig_by_mid.get(mid)
+            need_load = prev_sig is None or prev_sig[0] != ref
+            ex_changed = (prev_sig is not None) and (not need_load) \
+                and prev_sig[1] != ex
+            fresh = need_load       # 语义收窄：fresh 现在只表示「必须重载」
             lip = state.get("lip")
             lip_gain = float(state.get("lip_gain") or 1.0)
+            motion_switch = state.get("motion_switch") or False
+            # ===== v3.7.3 口型表「按签名下发」=====
+            # 原来只有 fresh 分支才发 setLip。但同一 model_path 在整条时间线
+            # 上共用一个 slot：相邻 clip 换台词时 ref/motion/expression 往往
+            # 一字不变（projects.mp4 的 c21/c39/c41 就是同 ref 同动作同表情），
+            # 于是新 clip 的表**从来没下发过**，页面继续用上一个 clip 的表，
+            # 按 clip 内偏移去取 —— 表长不匹配就越界、夹到末值，嘴从此定死
+            # （465.7s 之后一条横线）。现在改成：表签名（lip_tag + 表长）一变
+            # 就下发，与是否 fresh 无关。
+            lip_tag = str(state.get("lip_tag") or "")
+            lip_fps = 1000.0 / max(1.0, float(dt_ms))
+            lip_sig = (lip_tag, len(lip) if lip else 0)
+            lip_changed = self._lip_sig_by_mid.get(mid) != lip_sig
             if fresh:
+                # 重载 = 页面模型重建：旧表签名一律作废（防脏签名挡住重发）
+                had_tbl = bool(self._lip_sig_by_mid.pop(mid, None))
                 if not self._apply_state(ref, mo, ex, mid, timeout,
-                                         lip=lip, lip_fps=1000.0 / max(1.0, float(dt_ms)),
-                                         lip_gain=lip_gain):
+                                         lip=lip, lip_fps=lip_fps,
+                                         lip_gain=lip_gain, lip_tag=lip_tag):
                     return None, None
                 self._sig_by_mid[mid] = sig
+                self._lip_sig_by_mid[mid] = lip_sig
+                if lip:
+                    self._lip_mark_pending(mid, lip_tag, k, len(lip))
+                    self._lip_pend[mid] = {"tag": lip_tag, "vals": list(lip),
+                                           "k": int(k), "gain": lip_gain}
+                elif had_tbl:
+                    # 新 clip 没台词但旧表还挂着：显式解除，别让旧表继续画嘴
+                    self._set_lip(mid, None, lip_fps, lip_gain,
+                                  tag=lip_tag, k=None)
                 roi = None                       # 换模型/动作：旧框作废
                 # 首帧宽限：loadModel 后纹理上传是异步的，立刻 render 会
                 # 拿到空画布（实测 "empty alpha (no model drawn)"）。
                 self._wait(lambda: False, 0.05)
+            elif motion_switch and mo:
+                # 同模型、同表达式，只换 motion：FORCE 切换（优先级 3 > NORMAL 2），
+                # 让新动作立刻接管而**不重置 elapsedTime/相位**。与预览
+                # stage_preview.html 的 playMotion FORCE 路径一致。
+                self._cmd({"cmd": "playMotion", "args": {
+                    "modelId": mid, "name": mo, "fadeMs": POSE_MS, "keepPhase": True}})
+                # **clip 切换连续性**：新 clip 的 t_local 从 0 开始，k 会比
+                # 上一 clip 的 k 小。seek 默认会判定「回拖」触发 _restartMotion，
+                # 把动作又重置了。这里**不重置 s.k**，而是把 k 映射到「当前相位
+                # + 新 clip 内偏移」——动作继续推进，不从头走。
+                # 具体映射在 seek 里做（allowRestart=False 时 target < s.k
+                # 不重启，而是继续推进到 s.k + target）。
+                if ex_changed:
+                    # 动作与表情同时换：表情单独补一条，**不重载模型**
+                    self._set_expression(mid, ex)
+                self._sig_by_mid[mid] = sig
+            elif ex_changed:
+                # **方案 C**：只换表情 -> 不重载、不清 roi、不重置相位。
+                # 表情按页面 expressionFadingDuration 自行淡入，动作/物理/
+                # 呼吸沿着同一条 lane 继续走（这正是「生硬」的另一半）。
+                self._set_expression(mid, ex)
+                self._sig_by_mid[mid] = sig
+            # v3.7.3：非重载路径下的口型换表（**与上面对动作/表情的分支并列，
+            # 不是 else**）—— 同一 ref 连续多个 clip 就是靠这一条把新台词表
+            # 送进页面。放到最后是因为它只动嘴参数，与动作/表情互不影响。
+            if (not fresh) and lip_changed:
+                self._set_lip(mid, lip, lip_fps, lip_gain,
+                              tag=lip_tag, k=k)
             first = False
             if roi is None:
                 # 两道框：几何框（与时序无关，用来抓 k=0）→ 从 k=0 的
@@ -503,7 +781,8 @@ class L2DRenderer(object):
             reloaded = False
             r = {}
             while time.time() < deadline:
-                r = self.seek(mid, k, dt_ms, max_steps)
+                r = self.seek(mid, k, dt_ms, max_steps,
+                              allow_restart=not motion_switch)
                 if r.get("err"):
                     self._last_err = "seek: %s" % r["err"]
                     return None, None
@@ -520,12 +799,23 @@ class L2DRenderer(object):
                     # 完全一致）。代价 ~0.7s，只在 ring 盖不住时发生。
                     self._cmd({"cmd": "clearModel", "args": {"modelId": mid}})
                     self._sig_by_mid.pop(mid, None)
+                    # 模型已 clear：口型表签名同样作废，重发一遍当前表
+                    had_tbl2 = bool(self._lip_sig_by_mid.pop(mid, None))
                     if not self._apply_state(ref, mo, ex, mid, timeout,
-                                             lip=lip,
-                                             lip_fps=1000.0 / max(1.0, float(dt_ms)),
-                                             lip_gain=lip_gain):
+                                             lip=lip, lip_fps=lip_fps,
+                                             lip_gain=lip_gain,
+                                             lip_tag=lip_tag):
                         return None, None
                     self._sig_by_mid[mid] = sig
+                    self._lip_sig_by_mid[mid] = lip_sig
+                    if lip:
+                        self._lip_mark_pending(mid, lip_tag, k, len(lip))
+                        self._lip_pend[mid] = {"tag": lip_tag,
+                                               "vals": list(lip), "k": int(k),
+                                               "gain": lip_gain}
+                    elif had_tbl2:
+                        self._set_lip(mid, None, lip_fps, lip_gain,
+                                      tag=lip_tag)
                     reloaded = True
                     self._reloads += 1
                     continue
@@ -535,15 +825,55 @@ class L2DRenderer(object):
             if not reached:
                 self._last_err = "seek timeout (k=%d head=%s)" % (k, r.get("head"))
                 return None, None
-            # v3.6.4：seek 之后显式落一次口型。同 render() 的理由：
-            # 同一 k 重复 seek 时 step 数为 0，循环体里的 _applyLip 不执行。
-            if lip:
-                try:
-                    idx = k if 0 <= k < len(lip) else len(lip) - 1
-                    lv = float(lip[idx]) * lip_gain
-                except (TypeError, ValueError, IndexError):
-                    lv = 0.0
-                self._write_mouth(mid, max(0.0, min(1.0, lv)), advance=True)
+            # 口型由宿主页 _bindLip 的 beforeModelUpdate 钩子在烘焙前写入，
+            # seek 内部的 render 已经触发过了。这里**不再**显式写嘴——旧写法
+            # 会在帧尾留下脏参数、且与钩子叠加会互相干扰。
+            # ===== v3.7.3 渲染侧回读 =====
+            # 刚下发/切换过口型表的这一帧，顺手问页面一次：手上是哪张表、
+            # 钩子写进去多少、有没有因为越界被跳过。每张表只采一次
+            # （一次 JS 往返），不影响逐帧耗时；失败只丢证据，不丢画面。
+            # v3.7.4：回读必须落在**有开口度的那一帧**才有判伪能力。
+            # 换表帧通常是 clip 首帧（k=0），而口型表首值普遍是 0 —— 那时
+            # 回读只能证明「表在手上」，证明不了「值真写进了模型」。所以
+            # 现在把 pend 留在 lane 上，等到本表第一个高值帧（期望 ≥0.2）
+            # 再采一次；此时 expect 非零，now 与 expect 不一致才是真问题。
+            # 一直等不到高值帧的（整段静音）就不采，只留 has 层面的证据。
+            pend = self._lip_pend.get(mid)
+            if pend is not None:
+                vals = pend.get("vals") or []
+                gn = float(pend.get("gain") or 1.0)
+                k0 = max(0, int(pend.get("k") or 0))
+                kk = max(k0, int(k or 0))
+                # 当前帧在本表网格里的期望开口度（probe 读的是当前帧的
+                # lipNow，必须同帧对齐，不能用换表帧的 k）
+                exp = None
+                if vals and kk < len(vals):
+                    exp = float(vals[kk]) * gn
+                elif vals:
+                    exp = float(vals[-1]) * gn
+                if exp is None or exp >= 0.2:
+                    self._lip_pend.pop(mid, None)
+                    try:
+                        pr = self._lip_probe(mid, timeout=6.0) or {}
+                        with _LIP_READBACK_LOCK:
+                            _LIP_READBACK[mid] = {
+                                "tag": pend.get("tag") or "",
+                                "has": bool(pr.get("hasLip")),
+                                "now": pr.get("lipNow"),
+                                "skipped": (pr.get("lipHookStat") or {}).get(
+                                    "skipped"),
+                                "expect": exp,
+                                # 相邻帧期望值：钩子在 beforeModelUpdate 里
+                                # 按 lipK 写，与抓帧用的 k 可能差 1 帧，
+                                # 校验时两个都算通过，避免 ±1 帧误报
+                                "expect1": (
+                                    float(vals[kk - 1]) * gn
+                                    if (vals and 0 < kk <= len(vals)) else None),
+                                "k": kk,
+                                "len": len(vals),
+                            }
+                    except Exception:
+                        pass
             self._renders += 1
             img = self._grab_ready(roi)
             self._last_ms = (time.time() - t0) * 1000.0
@@ -714,6 +1044,9 @@ class L2DRenderer(object):
             self._view = None
             self._booted = False
             self._sig_by_mid.clear()
+            self._lip_sig_by_mid.clear()
+            self._lip_pend.clear()
+            clear_lip_readback()        # v3.7.3：回读台账一并清（防跨工程脏证据）
             self._manual_on = None      # 页面没了，幂等镜像必须一起作废
             if p is not None:
                 with contextlib.suppress(Exception): p.clear_all()

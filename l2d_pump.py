@@ -40,6 +40,12 @@ if _V_DIR not in sys.path:
     sys.path.insert(0, _V_DIR)
 
 # 每 tick 最多占用主线程多少毫秒（超出留到下个 tick）
+#
+# v3.7.5 实测：孤立泵测试显示 12 -> 24ms 能让吞吐 +39%（46.5 -> 64.7 帧/秒），
+# 但**真实导出里没有收益**（20s 切片交替 A/B 4 轮：中位 11.61s vs 11.79s，
+# 在噪声内）。原因：孤立测试没有导出线程抢 GIL，真实导出会。
+# 结论：保持原值 12ms —— 它的本意是「别让 GUI 长时间失去响应」，
+# 而实测加大预算换不来速度，只会让导出期间界面更卡。
 TICK_BUDGET_MS = 12.0
 # 单次请求的等待上限（秒）：超时 -> None -> 调用方回落定格
 REQUEST_TIMEOUT = 45.0
@@ -79,7 +85,7 @@ class Lane(object):
     """
 
     def __init__(self, key, path, ref, motion, expression, mid,
-                 lip=None, lip_gain=1.0):
+                 lip=None, lip_gain=1.0, lip_tag=""):
         self.key = key                    # (normpath(model).lower(), motion, expression)
         self.path = path                  # **原始**路径（注册要用大小写原样，别用键里的小写）
         self.ref = ref
@@ -97,11 +103,19 @@ class Lane(object):
         self.lip = lip                    # list[float] | None
         self.lip_gain = float(lip_gain or 1.0)
         self.lip_sent = None              # 已下发过的 lip 表指纹（省重复下传）
+        # v3.7.3：表标签 = 该表所属 clip 的标识。同一条 lane 会被**同一立绘
+        # 的多个 clip** 复用，而相邻台词的表可能等长同值（纯静音段就是全 0），
+        # 只比序列判断不出"换台词了"。tag 变即视为换表，由渲染层强制重发。
+        self.lip_tag = str(lip_tag or "")
+        self.lip_ver = 0                  # 表版本：每换一次 +1（ring 据此作废）
         self.ring = {}                    # k -> ndarray
         self.order = []                   # ring 的插入序（做 FIFO 淘汰）
         self.last_err = ""
         self.renders = 0
         self.restarts = 0
+        # **动作连续性**：request 检测到 motion 变化时置 True，
+        # render_animated 读到后用 FORCE 切换（不重置相位、不重新加载模型）。
+        self.motion_changed = False
 
 
 class L2DAnimPump(object):
@@ -254,9 +268,15 @@ class L2DAnimPump(object):
     # ---------------- 请求方（导出线程） ----------------
     @staticmethod
     def state_key(model_path, motion, expression):
-        """与 l2d_prefetch 同口径的状态键（归一化小写路径，防重复渲染）。"""
+        """与 l2d_prefetch 同口径的状态键（归一化小写路径，防重复渲染）。
+
+        **动作连续性修复**：key 只按 model_path，不再包含 motion/expression。
+        原来 motion 变了就换 lane、从 k=0 重走，导致导出时动作切换永远从头
+        播放（预览已修，导出漏了）。现在同一模型只保留一条 lane，motion
+        变化在 lane 内通过 FORCE 切换（见 request / render_animated）。
+        """
         p = os.path.normpath(str(model_path or "")).lower()
-        return (p, str(motion or ""), str(expression or ""))
+        return (p,)
 
     def _bump(self, name, n=1):
         """计数器（多线程自增，走同一把锁；纯诊断用，丢了几个不影响正确性）。"""
@@ -271,7 +291,7 @@ class L2DAnimPump(object):
             return 0
 
     def request(self, model_path, motion, expression, t_local, timeout=None,
-                lip=None, lip_gain=1.0):
+                lip=None, lip_gain=1.0, lip_tag=""):
         """取该立绘在素材内时间 t_local 处的动画帧。
 
         返回 (H,W,4) RGBA uint8；不可用/关闭/超时 -> **None**（调用方回落
@@ -304,12 +324,56 @@ class L2DAnimPump(object):
                     key, str(model_path or ""), None,
                     str(motion or ""), str(expression or ""),
                     "anim%d" % self._next_mid)
+            else:
+                # **动作连续性**：同一模型只保留一条 lane。motion/expression
+                # 变化时更新 lane 字段，**不创建新 lane**（原来会换 lane、
+                # 从 k=0 重走，导致导出时动作切换永远从头播放）。
+                # render_animated 里会检测变化并用 FORCE 切换。
+                if str(motion or "") != ln.motion:
+                    ln.motion = str(motion or "")
+                    ln.motion_changed = True
+                if str(expression or "") != ln.expression:
+                    ln.expression = str(expression or "")
             # 口型表随请求带进来（同一 lane 不同台词的 lip 不同，要更新）
+            tag = str(lip_tag or "")
+            new_tbl = False
             if lip is not None:
+                # ===== v3.7.3 换表检测 =====
+                # 判据用「tag 变 / 长度变 / 首末值变」，任一成立即视为换台词：
+                # 同一条 lane 上 c21->c39->c41 的表长分别是 912/420/1680，
+                # tag 也各不相同，双保险。**换表必须让 ring 作废**，否则命中
+                # 的旧帧是旧表渲出来的（嘴型对不上，还会掩盖真正的下发失败）。
+                if (tag != ln.lip_tag) or (ln.lip is None) \
+                        or (len(lip) != len(ln.lip)) \
+                        or (lip and ln.lip and (lip[0] != ln.lip[0]
+                                                or lip[-1] != ln.lip[-1])):
+                    new_tbl = True
+                    ln.lip_ver += 1
+                    self._bump("lip_tbl")
                 ln.lip = lip
                 ln.lip_gain = float(lip_gain or 1.0)
+                ln.lip_tag = tag
+                if new_tbl:
+                    ln.ring.clear()
+                    ln.order = []
+            elif tag != ln.lip_tag or ln.lip is not None:
+                # ===== v3.7.3 换到「无台词」clip =====
+                # lip=None 也要参与换表判定：c21->c22（无对白）时若不处理，
+                # ln.lip 会一直挂着 c21 的表、ln.lip_tag 也不更新，页面继续
+                # 按新 clip 内偏移去抽旧表 —— 越界后嘴定死，且 ring 还会
+                # 一直命中旧帧（grid 未变、new_tbl=False）。
+                # 这里把表显式置空并让 ring 作废，renderer 侧据 tag 变化重发
+                # 一条空表（stage_preview.setLip 收到空 vals = 解除绑定）。
+                new_tbl = True
+                ln.lip_ver += 1
+                self._bump("lip_none")
+                ln.lip = None
+                ln.lip_gain = 1.0
+                ln.lip_tag = tag
+                ln.ring.clear()
+                ln.order = []
             # ring 命中：同 k 同网格就是同一张（下游只读，可安全共享）
-            if ln.grid == dt_ms:
+            if ln.grid == dt_ms and not new_tbl:
                 img = ln.ring.get(k)
                 if img is not None:
                     self._bump("ring_hit")
@@ -397,9 +461,16 @@ class L2DAnimPump(object):
         img, new_roi = rd.render_animated({"ref": ref, "motion": ln.motion,
                                            "expression": ln.expression,
                                            "lip": ln.lip,
-                                           "lip_gain": ln.lip_gain},
+                                           "lip_gain": ln.lip_gain,
+                                           # v3.7.3：把「这张表属于哪个 clip」
+                                           # 一起带下去，渲染层按 tag 变化
+                                           # 强制重发 setLip（同 ref 连续
+                                           # 多 clip 全靠这个字段换表）
+                                           "lip_tag": ln.lip_tag,
+                                           "motion_switch": ln.motion_changed},
                                           model_id=ln.mid, k=k, dt_ms=dt,
                                           roi=ln.roi)
+        ln.motion_changed = False      # 消费掉，下一帧不再重复发 FORCE
         if new_roi:
             ln.roi = tuple(int(v) for v in new_roi)
         ln.renders += 1
